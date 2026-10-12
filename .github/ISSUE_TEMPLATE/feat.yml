@@ -1,0 +1,19 @@
+name: "🚀 FEAT"
+description: 새로운 기능을 개발합니다.
+title: "[FEAT]: "
+labels: ["FEAT"]
+body:
+  - type: textarea
+    id: background
+    attributes:
+      label: 배경 및 목적
+      description: 이 기능이 왜 필요한지 설명해주세요.
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: 상세 내용
+      description: 구현하고자 하는 기능을 구체적으로 설명해주세요.
+    validations:
+      required: false
