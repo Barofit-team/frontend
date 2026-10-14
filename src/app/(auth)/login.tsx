@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   StyleSheet,
   Text,
@@ -12,87 +12,87 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { router } from 'expo-router';
 import { WebView, WebViewNavigation } from 'react-native-webview';
+import type { ShouldStartLoadRequest } from 'react-native-webview/lib/WebViewTypes';
 
-const KAKAO_REST_API_KEY = process.env.EXPO_PUBLIC_KAKAO_REST_API_KEY || '';
-const GOOGLE_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID || '';
-const REDIRECT_URI = 'http://localhost:8081';
+import { ApiError } from '@/services/api';
+import {
+  OAUTH_REDIRECT_URI,
+  createSocialLoginRequest,
+  isOAuthRedirect,
+  missingClientKey,
+  parseOAuthRedirect,
+  type SocialLoginRequest,
+} from '@/services/socialAuth';
+import { useAuthStore } from '@/stores/useAuthStore';
+import type { SocialProvider } from '@/types/auth';
+
+const PROVIDER_NAME: Record<SocialProvider, string> = { KAKAO: '카카오', GOOGLE: 'Google' };
 
 export default function LoginScreen() {
-  const [authModal, setAuthModal] = useState<{
-    visible: boolean;
-    provider: 'KAKAO' | 'GOOGLE';
-    url: string;
-  }>({
-    visible: false,
-    provider: 'KAKAO',
-    url: '',
-  });
+  const loginWithCode = useAuthStore((state) => state.loginWithCode);
+  // 진행 중인 로그인 시도(state, nonce 포함). null이면 모달이 닫혀 있습니다
+  const [authRequest, setAuthRequest] = useState<SocialLoginRequest | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  // 같은 redirect를 두 번 처리하지 않도록 막습니다(onShouldStartLoadWithRequest와 onNavigationStateChange 양쪽에서 감지될 수 있음)
+  const handledRef = useRef(false);
 
-  // 카카오 로그인
-  const handleKakaoLogin = () => {
-    if (!KAKAO_REST_API_KEY) {
-      Alert.alert('알림', '.env 파일에 EXPO_PUBLIC_KAKAO_REST_API_KEY가 설정되지 않았습니다.');
+  const openLogin = (provider: SocialProvider) => {
+    const missing = missingClientKey(provider);
+    if (missing) {
+      Alert.alert('알림', `.env 파일에 ${missing}가 설정되지 않았습니다.`);
       return;
     }
-
-    const kakaoAuthUrl = `https://kauth.kakao.com/oauth/authorize?client_id=${KAKAO_REST_API_KEY}&redirect_uri=${encodeURIComponent(
-      REDIRECT_URI
-    )}&response_type=code`;
-
-    setAuthModal({
-      visible: true,
-      provider: 'KAKAO',
-      url: kakaoAuthUrl,
-    });
+    handledRef.current = false;
+    setAuthRequest(createSocialLoginRequest(provider));
   };
 
-  // 구글 로그인
-  const handleGoogleLogin = () => {
-    if (!GOOGLE_CLIENT_ID) {
-      Alert.alert('알림', '.env 파일에 EXPO_PUBLIC_GOOGLE_CLIENT_ID가 설정되지 않았습니다.');
-      return;
-    }
+  const closeModal = () => setAuthRequest(null);
 
-    const googleAuthUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${GOOGLE_CLIENT_ID}&redirect_uri=${encodeURIComponent(
-      REDIRECT_URI
-    )}&response_type=code&scope=${encodeURIComponent('openid profile email')}`;
+  // 웹뷰가 redirect_uri로 이동하려는 순간 인가 코드를 가로채 백엔드로 보냅니다
+  const handleRedirect = async (url: string) => {
+    if (!authRequest || handledRef.current) return;
+    handledRef.current = true;
+    const request = authRequest;
+    closeModal();
 
-    setAuthModal({
-      visible: true,
-      provider: 'GOOGLE',
-      url: googleAuthUrl,
-    });
-  };
-
-  // 웹뷰에서 리다이렉트 URL 가로채기 (인가 코드 획득)
-  const handleNavigationStateChange = (navState: WebViewNavigation) => {
-    const { url } = navState;
-
-    if (url.includes('code=')) {
-      try {
-        const urlObj = new URL(url);
-        const code = urlObj.searchParams.get('code');
-
-        setAuthModal({ visible: false, provider: 'KAKAO', url: '' });
-
-        if (code) {
-          Alert.alert(
-            `${authModal.provider === 'KAKAO' ? '카카오' : 'Google'} 로그인 성공!`,
-            `인가 코드(code) 획득 완료:\n${code.substring(0, 22)}...\n\n온보딩 화면으로 이동합니다.`,
-            [
-              {
-                text: '확인',
-                onPress: () => router.replace('/onboarding'),
-              },
-            ]
-          );
-        }
-      } catch (err) {
-        console.error('URL 파싱 실패:', err);
-      }
-    } else if (url.includes('error=')) {
-      setAuthModal({ visible: false, provider: 'KAKAO', url: '' });
+    const result = parseOAuthRedirect(url, request.state);
+    if (result.type === 'cancelled') {
       Alert.alert('로그인 취소', '로그인이 취소되었습니다.');
+      return;
+    }
+    if (result.type === 'error') {
+      Alert.alert('로그인 실패', result.message);
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const response = await loginWithCode({
+        provider: request.provider,
+        code: result.code,
+        redirectUri: OAUTH_REDIRECT_URI,
+        nonce: request.nonce,
+      });
+      // 신규 회원이거나 온보딩을 마치지 않았으면 온보딩, 아니면 홈
+      router.replace(response.isOnboarded ? '/home' : '/onboarding');
+    } catch (error) {
+      Alert.alert(`${PROVIDER_NAME[request.provider]} 로그인 실패`, toMessage(error));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleShouldStartLoad = (request: ShouldStartLoadRequest) => {
+    if (isOAuthRedirect(request.url)) {
+      handleRedirect(request.url);
+      return false;
+    }
+    return true;
+  };
+
+  const handleNavigationStateChange = (navState: WebViewNavigation) => {
+    if (isOAuthRedirect(navState.url)) {
+      handleRedirect(navState.url);
     }
   };
 
@@ -116,7 +116,7 @@ export default function LoginScreen() {
           <TouchableOpacity
             style={styles.kakaoButton}
             activeOpacity={0.85}
-            onPress={handleKakaoLogin}
+            onPress={() => openLogin('KAKAO')}
           >
             <Text style={styles.kakaoButtonText}>카카오로 시작하기</Text>
           </TouchableOpacity>
@@ -125,7 +125,7 @@ export default function LoginScreen() {
           <TouchableOpacity
             style={styles.googleButton}
             activeOpacity={0.85}
-            onPress={handleGoogleLogin}
+            onPress={() => openLogin('GOOGLE')}
           >
             <Text style={styles.googleButtonText}>Google로 계속하기</Text>
           </TouchableOpacity>
@@ -143,27 +143,25 @@ export default function LoginScreen() {
 
       {/* 인앱 웹뷰 로그인 모달 */}
       <Modal
-        visible={authModal.visible}
+        visible={authRequest !== null}
         animationType="slide"
         presentationStyle="pageSheet"
-        onRequestClose={() => setAuthModal({ visible: false, provider: 'KAKAO', url: '' })}
+        onRequestClose={closeModal}
       >
         <SafeAreaView style={styles.modalContainer}>
           <View style={styles.modalHeader}>
             <Text style={styles.modalTitle}>
-              {authModal.provider === 'KAKAO' ? '카카오 로그인' : 'Google 로그인'}
+              {authRequest ? `${PROVIDER_NAME[authRequest.provider]} 로그인` : ''}
             </Text>
-            <TouchableOpacity
-              onPress={() => setAuthModal({ visible: false, provider: 'KAKAO', url: '' })}
-              style={styles.closeButton}
-            >
+            <TouchableOpacity onPress={closeModal} style={styles.closeButton}>
               <Text style={styles.closeButtonText}>닫기</Text>
             </TouchableOpacity>
           </View>
 
-          {authModal.url ? (
+          {authRequest ? (
             <WebView
-              source={{ uri: authModal.url }}
+              source={{ uri: authRequest.url }}
+              onShouldStartLoadWithRequest={handleShouldStartLoad}
               onNavigationStateChange={handleNavigationStateChange}
               startInLoadingState
               renderLoading={() => (
@@ -175,6 +173,14 @@ export default function LoginScreen() {
           ) : null}
         </SafeAreaView>
       </Modal>
+
+      {/* 백엔드 로그인 처리 중 */}
+      {submitting ? (
+        <View style={styles.submittingOverlay}>
+          <ActivityIndicator size="large" color="#3B82F6" />
+          <Text style={styles.submittingText}>로그인 중...</Text>
+        </View>
+      ) : null}
     </SafeAreaView>
   );
 }
@@ -284,4 +290,36 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: '#FFFFFF',
   },
+  submittingOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.85)',
+  },
+  submittingText: {
+    marginTop: 12,
+    fontSize: 14,
+    color: '#6B7280',
+  },
 });
+
+function toMessage(error: unknown): string {
+  if (!(error instanceof ApiError)) {
+    return '알 수 없는 오류가 발생했습니다.';
+  }
+  switch (error.code) {
+    case 'NETWORK_ERROR':
+      return error.message;
+    case 'AUTH_INVALID_AUTHORIZATION_CODE':
+    case 'AUTH_INVALID_ID_TOKEN':
+      return '로그인 정보를 확인하지 못했습니다. 다시 시도해 주세요.';
+    case 'AUTH_SOCIAL_PROVIDER_UNAVAILABLE':
+      return '소셜 로그인 서비스에 연결할 수 없습니다. 잠시 후 다시 시도해 주세요.';
+    default:
+      return error.message;
+  }
+}
