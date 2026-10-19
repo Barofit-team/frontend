@@ -30,6 +30,11 @@ import {
   type PreparationStep,
 } from '@/components/workout-preparation/steps';
 import { useDevicePitch } from '@/components/workout-preparation/useDevicePitch';
+import { playLocalMp3 } from '@/services/ttsService';
+import { useTtsStore } from '@/stores/useTtsStore';
+
+const USER_POSITION_AUDIO = require('../../assets/audio/전신이_보이게_영역안에_서주세요.mp3');
+const USER_POSITION_TTS_TEXT = '전신이 보이게 영역 안에 서주세요';
 
 function initialMode(modeParam: string | undefined, step: PreparationStep): PreparationMode {
   if (!__DEV__) return 'sensor';
@@ -54,7 +59,24 @@ export default function WorkoutPreparationScreen() {
     onStableAligned: goToUserPosition,
   });
 
+  const playUserPositionVoice = useCallback(() => {
+    void playLocalMp3(USER_POSITION_AUDIO, USER_POSITION_TTS_TEXT);
+  }, []);
+
+  // '전신이 보이게 영역 안에 서주세요' (user-position) 단계 진입 시 TTS 자동 재생
+  useEffect(() => {
+    if (step === 'user-position') {
+      playUserPositionVoice();
+    } else {
+      useTtsStore.getState().stop();
+    }
+    return () => {
+      useTtsStore.getState().stop();
+    };
+  }, [step, playUserPositionVoice]);
+
   const close = useCallback(() => {
+    useTtsStore.getState().stop();
     if (router.canGoBack()) router.back();
     else router.replace('/home');
   }, []);
@@ -90,6 +112,7 @@ export default function WorkoutPreparationScreen() {
         step={step}
         onPressDone={() => move(1)}
         onPressClose={close}
+        onPressVoice={step === 'user-position' ? playUserPositionVoice : undefined}
         liveAngle={
           sensorAdjust
             ? { status: pitch.status, sensor: pitch.sensor, indicator: pitch.indicator, onRetry: pitch.retry }
