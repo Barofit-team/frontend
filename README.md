@@ -111,3 +111,18 @@ EXPO_PUBLIC_API_URL=
 - Expo 관련 라이브러리는 가능하면 `npx expo install`로 설치합니다.
 - SDK 버전은 팀 협의 없이 임의로 변경하지 않습니다.
 - `main` 브랜치에 직접 기능 개발하지 않습니다.
+
+## 루틴 화면 연동
+
+루틴 탭에서 전신·하체·코어와 초급·중급·고급을 선택한 뒤 세트 수·횟수·시간만 조절합니다. 저장·조회·수정·삭제는 로그인한 사용자 JWT로 요청합니다. 생성 시 `templateExerciseId`, 수정 시 저장된 루틴의 `routineExerciseId`를 사용합니다.
+
+- 백엔드 실행 후 `.env`의 `EXPO_PUBLIC_API_URL` 설정. 로컬 웹 예: `http://localhost:3003`.
+- 휴대폰 테스트에서는 localhost 대신 개발 PC의 LAN IP를 입력하고 같은 Wi-Fi에 연결합니다.
+- 웹에서는 백엔드 `CORS_ALLOWED_ORIGINS=http://localhost:8081` 설정이 필요합니다.
+- 공개 OAuth client ID와 redirect URI만 Expo 환경변수에 넣습니다. Client secret은 백엔드에만 둡니다.
+- 기존 로그인은 네이티브 WebView 방식이므로 실제 소셜 로그인은 기기에서 확인합니다. 웹에서는 둘러보기로 공개 템플릿을 확인할 수 있습니다.
+- `npm run typecheck`, `npm run lint`, `npm run test:routine`, `npx expo export --platform web`로 검사합니다. Node는 Expo SDK 의존성 요구사항에 맞게 22.13 이상인 22.x 버전을 사용하세요.
+
+실기기 확인: 로그인 → 루틴 탭 → 전신/초급 → 푸시업 3세트·12회/플랭크 2세트·40초 → 저장 → 내 루틴 수정에서 재조회 → 45초로 수정 → 재조회 → 안내 미리 듣기/중지 → 삭제 확인. 다른 계정에서 이전 계정의 루틴이 보이지 않는지도 확인하세요.
+
+안내 미리 듣기는 서버 `introTtsText`를 Expo Speech로 읽습니다. 실제 운동 시작·세트 종료·다음 종목 이벤트에 따른 자동 안내 및 이어하기는 운동 실행 화면의 후속 작업입니다.

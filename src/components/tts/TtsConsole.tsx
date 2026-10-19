@@ -73,7 +73,7 @@ export function TtsConsole() {
           {isSpeaking ? '스마트폰 스피커 출력 중' : '스피커 대기 중'}
         </Text>
         {isSpeaking && currentText.trim().length > 0 && (
-          <Text style={styles.speakingText}>"{currentText}"</Text>
+          <Text style={styles.speakingText}>&quot;{currentText}&quot;</Text>
         )}
         {isSpeaking && (
           <Button
@@ -90,7 +90,7 @@ export function TtsConsole() {
         <Text style={styles.sectionLabel}>최근 수신된 백엔드 메시지</Text>
         <Card style={styles.messageBox}>
           {lastReceivedMessage ? (
-            <Text style={styles.messageText}>"{lastReceivedMessage.text}"</Text>
+            <Text style={styles.messageText}>&quot;{lastReceivedMessage.text}&quot;</Text>
           ) : (
             <Text style={styles.emptyText}>아직 수신된 메시지가 없습니다.</Text>
           )}
