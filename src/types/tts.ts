@@ -1,9 +1,26 @@
+export type CoachingEventType =
+  | 'WORKOUT_START'
+  | 'REP_FEEDBACK'
+  | 'SET_FEEDBACK'
+  | 'WORKOUT_FINISH';
+
 /**
- * 백엔드 웹소켓 코칭 메시지 규격
+ * 백엔드 -> 프런트엔드 WebSocket 전송 JSON 명세
+ * 백엔드에서 TTS API를 호출해 생성한 MP3 오디오(URL 또는 Base64)와 자막 텍스트를 전달합니다.
  */
-export interface CoachMessage {
-  text: string;        // 발화할 텍스트 (예: "1세트 완료, 무릎 살짝 벌려주세요.")
-  eventType?: string;  // 이벤트 구분 (예: 'SET_FEEDBACK', 'EXERCISE_FINISH')
+export interface BackendCoachingPayload {
+  type?: CoachingEventType | string;
+  text: string;
+  audioUrl?: string;
+  audioBase64?: string;
+  timestamp?: string;
 }
 
-export type WebSocketStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
+export interface CoachMessage {
+  id: string;
+  text: string;
+  type?: string;
+  timestamp: string;
+}
+
+export type SocketConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error';

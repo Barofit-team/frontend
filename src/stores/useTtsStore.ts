@@ -1,142 +1,185 @@
-import * as Speech from 'expo-speech';
+import {
+  AudioPlayer,
+  AudioSource,
+  createAudioPlayer,
+  setAudioModeAsync,
+} from 'expo-audio';
 import { create } from 'zustand';
 
-import { CoachMessage, WebSocketStatus } from '@/types/tts';
+import {
+  BackendCoachingPayload,
+  CoachMessage,
+  SocketConnectionStatus,
+} from '@/types/tts';
 
-interface TtsState {
-  isSpeaking: boolean;
-  currentText: string;
-  socketStatus: WebSocketStatus;
-  lastReceivedMessage: CoachMessage | null;
-  socket: WebSocket | null;
+let wsInstance: WebSocket | null = null;
+let activePlayer: AudioPlayer | null = null;
+let audioModeReady = false;
 
-  speak: (text: string) => Promise<void>;
-  stop: () => Promise<void>;
-  connectWebSocket: (customUrl?: string) => void;
-  disconnectWebSocket: () => void;
-  simulateIncomingMessage: (message: CoachMessage) => Promise<void>;
+async function ensureAudioMode(): Promise<void> {
+  if (audioModeReady) return;
+  try {
+    await setAudioModeAsync({
+      playsInSilentMode: true,
+      interruptionMode: 'duckOthers',
+      allowsRecording: false,
+      shouldPlayInBackground: false,
+    });
+    audioModeReady = true;
+  } catch {
+    // 오디오 모드 설정 실패 시 기본 모드로 동작
+  }
 }
 
-let activeUtteranceId = 0;
+function releaseActivePlayer(): void {
+  if (!activePlayer) return;
+  const player = activePlayer;
+  activePlayer = null;
+  try {
+    player.pause();
+    player.remove();
+  } catch {
+    // 이미 해제된 경우 무시
+  }
+}
+
+const getDefaultWsUrl = () => {
+  const apiUrl = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:3002';
+  const wsBase = apiUrl.replace(/^http/, 'ws');
+  return `${wsBase}/ws/coaching`;
+};
+
+interface TtsState {
+  socketStatus: SocketConnectionStatus;
+  wsUrl: string;
+  isPlaying: boolean;
+  currentText: string;
+  lastMessage: CoachMessage | null;
+
+  connectWebSocket: (customUrl?: string) => void;
+  disconnectWebSocket: () => void;
+  playAudio: (source: AudioSource, text?: string, type?: string) => Promise<void>;
+  stop: () => void;
+}
 
 export const useTtsStore = create<TtsState>((set, get) => ({
-  isSpeaking: false,
-  currentText: '',
   socketStatus: 'disconnected',
-  lastReceivedMessage: null,
-  socket: null,
+  wsUrl: getDefaultWsUrl(),
+  isPlaying: false,
+  currentText: '',
+  lastMessage: null,
 
-  stop: async () => {
-    activeUtteranceId++;
-    try {
-      await Speech.stop();
-    } catch {
-      // 무시
-    } finally {
-      set({ isSpeaking: false, currentText: '' });
-    }
-  },
-
-  // 텍스트를 단순 음성 출력
-  speak: async (text: string) => {
-    const trimmed = text.trim();
-    if (!trimmed) return;
-
-    const myUtteranceId = ++activeUtteranceId;
-    set({ isSpeaking: true, currentText: trimmed });
-
-    return new Promise<void>((resolve) => {
-      Speech.speak(trimmed, {
-        language: 'ko-KR',
-        rate: 1.0,
-        pitch: 1.0,
-        onStart: () => {
-          if (activeUtteranceId === myUtteranceId) {
-            set({ isSpeaking: true, currentText: trimmed });
-          }
-        },
-        onDone: () => {
-          if (activeUtteranceId === myUtteranceId) {
-            set({ isSpeaking: false, currentText: '' });
-          }
-          resolve();
-        },
-        onStopped: () => {
-          if (activeUtteranceId === myUtteranceId) {
-            set({ isSpeaking: false, currentText: '' });
-          }
-          resolve();
-        },
-        onError: () => {
-          if (activeUtteranceId === myUtteranceId) {
-            set({ isSpeaking: false, currentText: '' });
-          }
-          resolve();
-        },
-      });
-    });
-  },
-
-  // 백엔드 웹소켓 연결
+  // 1. 운동 시작 시 웹소켓 연결 및 백엔드 오디오 수신 리스닝
   connectWebSocket: (customUrl?: string) => {
-    const { socket, disconnectWebSocket, speak } = get();
-    if (socket) {
-      disconnectWebSocket();
+    const targetUrl = customUrl || get().wsUrl;
+
+    if (wsInstance) {
+      wsInstance.onclose = null;
+      wsInstance.close();
+      wsInstance = null;
     }
 
-    const wsUrl =
-      customUrl ||
-      process.env.EXPO_PUBLIC_WS_URL ||
-      'wss://api.barofit.com/ws/coach';
-
-    set({ socketStatus: 'connecting' });
+    set({ socketStatus: 'connecting', wsUrl: targetUrl });
 
     try {
-      const ws = new WebSocket(wsUrl);
+      const ws = new WebSocket(targetUrl);
+      wsInstance = ws;
 
       ws.onopen = () => {
-        set({ socketStatus: 'connected', socket: ws });
+        set({ socketStatus: 'connected' });
       };
 
-      // 백엔드가 보낸 텍스트를 수신하여 음성 출력
       ws.onmessage = (event) => {
+        const raw = String(event.data ?? '').trim();
+        if (!raw) return;
+
         try {
-          const message: CoachMessage = JSON.parse(event.data);
-          set({ lastReceivedMessage: message });
-          speak(message.text);
-        } catch {
-          if (typeof event.data === 'string') {
-            const message: CoachMessage = { text: event.data };
-            set({ lastReceivedMessage: message });
-            speak(message.text);
+          const payload = JSON.parse(raw) as BackendCoachingPayload;
+          const label = payload.text || '백엔드 코칭 음성';
+          const type = payload.type || 'BACKEND_PUSH';
+
+          if (payload.audioUrl) {
+            get().playAudio({ uri: payload.audioUrl }, label, type);
+          } else if (payload.audioBase64) {
+            const cleanBase64 = payload.audioBase64.replace(/^data:audio\/\w+;base64,/, '');
+            get().playAudio({ uri: `data:audio/mp3;base64,${cleanBase64}` }, label, type);
           }
+        } catch {
+          // 유효하지 않은 JSON 형식 무시
         }
       };
 
-      ws.onclose = () => {
-        set({ socketStatus: 'disconnected', socket: null });
-      };
-
       ws.onerror = () => {
-        set({ socketStatus: 'error', socket: null });
+        set({ socketStatus: 'error' });
       };
 
-      set({ socket: ws });
+      ws.onclose = () => {
+        set({ socketStatus: 'disconnected' });
+        wsInstance = null;
+      };
     } catch {
-      set({ socketStatus: 'error', socket: null });
+      set({ socketStatus: 'error' });
     }
   },
 
   disconnectWebSocket: () => {
-    const { socket } = get();
-    if (socket) {
-      socket.close();
+    if (wsInstance) {
+      wsInstance.onclose = null;
+      wsInstance.close();
+      wsInstance = null;
     }
-    set({ socketStatus: 'disconnected', socket: null });
+    set({ socketStatus: 'disconnected' });
   },
 
-  simulateIncomingMessage: async (message: CoachMessage) => {
-    set({ lastReceivedMessage: message });
-    await get().speak(message.text);
+  // 2. MP3 오디오 출력 (백엔드 수신 오디오 및 로컬 assets/audio/*.mp3 공용)
+  playAudio: async (source: AudioSource, text = '코칭 음성 출력', type = 'AUDIO') => {
+    get().stop();
+    await ensureAudioMode();
+
+    const msg: CoachMessage = {
+      id: `${Date.now()}`,
+      text,
+      type,
+      timestamp: new Date().toLocaleTimeString('ko-KR', {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+      }),
+    };
+
+    set({
+      isPlaying: true,
+      currentText: text,
+      lastMessage: msg,
+    });
+
+    try {
+      const player = createAudioPlayer(source);
+      activePlayer = player;
+
+      player.addListener('playbackStatusUpdate', (status) => {
+        if (status.didJustFinish) {
+          set({ isPlaying: false, currentText: '' });
+          if (activePlayer === player) {
+            releaseActivePlayer();
+          } else {
+            try {
+              player.remove();
+            } catch {
+              // 무시
+            }
+          }
+        }
+      });
+
+      player.play();
+    } catch {
+      set({ isPlaying: false, currentText: '' });
+    }
+  },
+
+  stop: () => {
+    releaseActivePlayer();
+    set({ isPlaying: false, currentText: '' });
   },
 }));
