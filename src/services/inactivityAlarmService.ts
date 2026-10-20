@@ -9,8 +9,10 @@ const INACTIVITY_ALARM_CONTENT = {
   body: '오늘 몸 컨디션은 어떠신가요? 가벼운 10분 운동으로 상쾌하게 하루를 시작해 봐요!',
 };
 
-// iOS & Android 공통: 앱 포그라운드 상태에서도 상단 배너 + 사운드 표시
-if (Platform.OS !== 'web') {
+let isHandlerInitialized = false;
+
+function ensureNotificationHandler(): void {
+  if (isHandlerInitialized || Platform.OS === 'web') return;
   Notifications.setNotificationHandler({
     handleNotification: async () => ({
       shouldShowBanner: true,
@@ -19,6 +21,7 @@ if (Platform.OS !== 'web') {
       shouldSetBadge: false,
     }),
   });
+  isHandlerInitialized = true;
 }
 
 /**
@@ -28,6 +31,7 @@ export async function initCrossPlatformAlarm(): Promise<boolean> {
   if (Platform.OS === 'web') return false;
 
   try {
+    ensureNotificationHandler();
     if (Platform.OS === 'android') {
       await Notifications.setNotificationChannelAsync(ANDROID_CHANNEL_ID, {
         name: '운동 미접속 리마인드 알림',
