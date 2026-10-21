@@ -5,6 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PlaceholderScreen } from '@/components/PlaceholderScreen';
 import { Button } from '@/components/ui/Button';
 import { Spacing } from '@/constants/theme';
+import { triggerManualInactivityAlarm } from '@/services/inactivityAlarmService';
 
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
@@ -14,7 +15,9 @@ export default function HomeScreen() {
 
   return (
     <View style={styles.container}>
-      <PlaceholderScreen title="홈" description="홈 화면 (구현 예정)" />
+      <PlaceholderScreen title="홈" description="홈 화면 (구현 예정)">
+        <Button title="알람 수동 발송" onPress={triggerManualInactivityAlarm} />
+      </PlaceholderScreen>
       {/* 상단 Workout 진입 버튼 (기존 PlaceholderScreen은 변경하지 않고 위에 배치) */}
       <View pointerEvents="box-none" style={[styles.topBar, { top: insets.top + Spacing.sm }]}>
         <Button title="Workout" onPress={openWorkout} style={styles.workoutButton} />
