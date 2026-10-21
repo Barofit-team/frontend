@@ -8,9 +8,9 @@
 export const ANGLE_CONFIG = {
   /**
    * 목표 설치 각도(°). 0 = 바닥에 화면이 위로 눕힌 상태, 90 = 세로로 똑바로 세운 상태.
-   * null = 미확정. 개발 모드에서 "현재 각도를 목표로"로 임시 지정합니다.
+   * 70 = 임시 기준. 개발 모드에서 "현재 각도를 목표로"로 바꾸거나 "목표 해제"로 null(미설정)로 둘 수 있습니다.
    */
-  defaultTargetDeg: null as number | null,
+  defaultTargetDeg: 70 as number | null,
   /** 완료로 판정하는 허용 오차(±°) — 임시 */
   toleranceDeg: 2,
   /** 완료 상태 해제 시 추가 여유(°). 경계에서 깜빡임 방지 (해제 기준 = tolerance + hysteresis) */

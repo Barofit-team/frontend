@@ -13,10 +13,13 @@ type PreparationBottomPanelProps = {
   bottomInset: number;
 };
 
+/** 대기·완료 상태와 관계없이 고정. 높이가 바뀌면 위 카메라 영역 크기와 프리뷰 촬영 범위가 달라짐 */
+const PANEL_HEIGHT = 168;
+
 /** User Position 화면의 하단 흰색 안내 패널 */
 export function PreparationBottomPanel({ title, icon, bottomInset }: PreparationBottomPanelProps) {
   return (
-    <View style={[styles.panel, { paddingBottom: Spacing.xl + bottomInset }]}>
+    <View style={[styles.panel, { height: PANEL_HEIGHT + bottomInset, paddingBottom: Spacing.xl + bottomInset }]}>
       {icon}
       <Text style={styles.title} accessibilityRole="header">
         {title}
@@ -33,7 +36,6 @@ const styles = StyleSheet.create({
     gap: Spacing.md,
     paddingTop: Spacing.xl,
     paddingHorizontal: Spacing.lg,
-    minHeight: 168,
   },
   title: {
     fontSize: FontSize.lg,
