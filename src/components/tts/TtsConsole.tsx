@@ -53,7 +53,7 @@ export function TtsConsole() {
         </View>
 
         {isPlaying && currentText.trim().length > 0 && (
-          <Text style={styles.playingText}>"{currentText}"</Text>
+          <Text style={styles.playingText}>{currentText}</Text>
         )}
 
         <View style={styles.wsDivider} />
@@ -85,7 +85,7 @@ export function TtsConsole() {
                 <Text style={styles.typeBadge}>{lastMessage.type || 'AUDIO'}</Text>
                 <Text style={styles.timeText}>{lastMessage.timestamp}</Text>
               </View>
-              <Text style={styles.messageText}>"{lastMessage.text}"</Text>
+              <Text style={styles.messageText}>{lastMessage.text}</Text>
             </View>
           ) : (
             <Text style={styles.emptyText}>아직 출력된 코칭 음성이 없습니다.</Text>
@@ -101,7 +101,7 @@ export function TtsConsole() {
             1. 브라우저에서 다운로드한 .mp3 파일을 frontend/assets/audio/ 폴더에 넣습니다.
           </Text>
           <Text style={styles.helperTip}>
-            2. playLocalMp3(require('../../assets/audio/파일명.mp3'), '설명') 함수를 호출하면 즉시 출력됩니다.
+            {`2. playLocalMp3(require('../../assets/audio/파일명.mp3'), '설명') 함수를 호출하면 즉시 출력됩니다.`}
           </Text>
         </Card>
       </View>
