@@ -24,6 +24,7 @@ import {
   type SocialLoginRequest,
 } from '@/services/socialAuth';
 import { useAuthStore } from '@/stores/useAuthStore';
+import { useOnboardingStore } from '@/stores/useOnboardingStore';
 import type { SocialProvider } from '@/types/auth';
 
 const PROVIDER_NAME: Record<SocialProvider, string> = { KAKAO: '카카오', GOOGLE: 'Google' };
@@ -100,6 +101,11 @@ export default function LoginScreen() {
     router.replace('/home');
   };
 
+  const handleDevOnboarding = () => {
+    useOnboardingStore.getState().resetOnboarding();
+    router.push('/onboarding');
+  };
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar style="dark" />
@@ -138,6 +144,17 @@ export default function LoginScreen() {
           >
             <Text style={styles.guestButtonText}>둘러보기</Text>
           </TouchableOpacity>
+
+          {/* DEV: 온보딩 바로가기 */}
+          {__DEV__ && (
+            <TouchableOpacity
+              style={styles.devOnboardingButton}
+              activeOpacity={0.7}
+              onPress={handleDevOnboarding}
+            >
+              <Text style={styles.devOnboardingButtonText}>[DEV] 온보딩 화면 테스트</Text>
+            </TouchableOpacity>
+          )}
         </View>
       </View>
 
@@ -250,6 +267,19 @@ const styles = StyleSheet.create({
     color: '#9CA3AF',
     fontSize: 14,
     fontWeight: '500',
+  },
+  devOnboardingButton: {
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: '#D1D5DB',
+    alignItems: 'center',
+  },
+  devOnboardingButtonText: {
+    color: '#4B5563',
+    fontSize: 13,
+    fontWeight: '600',
   },
   // 모달 스타일
   modalContainer: {
