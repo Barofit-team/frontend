@@ -44,12 +44,19 @@ function Notice({ title, body, action }: { title: string; body?: string; action?
   );
 }
 
+const DEFAULT_PERMISSION_DESCRIPTION = '운동 준비 화면에서 사용자 위치를\n확인할 수 있도록 카메라 접근을\n허용해 주세요.';
+
 type UserPositionCameraProps = {
   /** 카메라 영상 위에 겹칠 UI(헤더·점선 가이드). 권한/오류 안내는 이보다 위에 표시 */
   children?: ReactNode;
+  /** 권한 요청 안내 문구. 다른 화면(예: 운동 진행)에서 재사용할 때 화면에 맞는 문구로 교체 */
+  permissionDescription?: string;
 };
 
-export function UserPositionCamera({ children }: UserPositionCameraProps) {
+export function UserPositionCamera({
+  children,
+  permissionDescription = DEFAULT_PERMISSION_DESCRIPTION,
+}: UserPositionCameraProps) {
   const [permission, requestPermission, getPermission] = useCameraPermissions();
   const isFocused = useIsFocused();
   const [appActive, setAppActive] = useState(AppState.currentState === 'active');
@@ -138,7 +145,7 @@ export function UserPositionCamera({ children }: UserPositionCameraProps) {
         {permissionState === 'requestable' && (
           <Notice
             title="카메라 권한이 필요합니다"
-            body={'운동 준비 화면에서 사용자 위치를\n확인할 수 있도록 카메라 접근을\n허용해 주세요.'}
+            body={permissionDescription}
             action={
               <Button
                 title="카메라 허용하기"
@@ -152,7 +159,7 @@ export function UserPositionCamera({ children }: UserPositionCameraProps) {
         {permissionState === 'denied' && (
           <Notice
             title="카메라 권한이 필요합니다"
-            body={'운동 준비 화면에서 사용자 위치를\n확인할 수 있도록 카메라 접근을\n허용해 주세요.'}
+            body={permissionDescription}
             action={
               <Button
                 title="다시 요청하기"
