@@ -16,6 +16,7 @@ interface AuthState {
     redirectUri: string;
     nonce: string;
   }) => Promise<SocialLoginResponse>;
+  completeOnboarding: (nickname?: string) => void;
   logout: () => Promise<void>;
   reset: () => void;
 }
@@ -33,6 +34,14 @@ export const useAuthStore = create<AuthState>((set) => ({
     set({ user: response.user, isOnboarded: response.isOnboarded });
     return response;
   },
+
+  completeOnboarding: (nickname) =>
+    set((state) => ({
+      isOnboarded: true,
+      user: state.user
+        ? { ...state.user, nickname: nickname?.trim() || state.user.nickname }
+        : null,
+    })),
 
   logout: async () => {
     const refreshToken = await tokenStorage.getRefreshToken();
