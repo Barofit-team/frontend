@@ -17,6 +17,7 @@ interface AuthState {
     nonce: string;
   }) => Promise<SocialLoginResponse>;
   completeOnboarding: (nickname?: string) => void;
+  devLogin: (nickname?: string) => void;
   logout: () => Promise<void>;
   reset: () => void;
 }
@@ -36,11 +37,30 @@ export const useAuthStore = create<AuthState>((set) => ({
   },
 
   completeOnboarding: (nickname) =>
+    set((state) => {
+      const resolvedNickname = nickname?.trim() || state.user?.nickname || '사용자';
+      return {
+        isOnboarded: true,
+        user: state.user
+          ? { ...state.user, nickname: resolvedNickname }
+          : {
+              id: 'dev-user',
+              nickname: resolvedNickname,
+              profileImageUrl: null,
+              role: 'USER',
+            },
+      };
+    }),
+
+  devLogin: (nickname) =>
     set((state) => ({
       isOnboarded: true,
-      user: state.user
-        ? { ...state.user, nickname: nickname?.trim() || state.user.nickname }
-        : null,
+      user: {
+        id: state.user?.id ?? 'dev-user',
+        nickname: nickname?.trim() || state.user?.nickname || '사용자',
+        profileImageUrl: state.user?.profileImageUrl ?? null,
+        role: state.user?.role ?? 'USER',
+      },
     })),
 
   logout: async () => {
