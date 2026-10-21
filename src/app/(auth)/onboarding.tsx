@@ -144,7 +144,7 @@ export default function OnboardingScreen() {
   const heightInputRef = useRef<TextInput>(null);
   const weightInputRef = useRef<TextInput>(null);
 
-  const displayNickname = nickname.trim() || '회원';
+  const displayNickname = nickname.trim() || '사용자';
 
   const isStepValid = (() => {
     switch (step) {

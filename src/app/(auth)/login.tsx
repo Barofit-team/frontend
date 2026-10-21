@@ -31,6 +31,7 @@ const PROVIDER_NAME: Record<SocialProvider, string> = { KAKAO: '카카오', GOOG
 
 export default function LoginScreen() {
   const loginWithCode = useAuthStore((state) => state.loginWithCode);
+  const devLogin = useAuthStore((state) => state.devLogin);
   // 진행 중인 로그인 시도(state, nonce 포함). null이면 모달이 닫혀 있습니다
   const [authRequest, setAuthRequest] = useState<SocialLoginRequest | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -98,6 +99,12 @@ export default function LoginScreen() {
   };
 
   const handleGuestMode = () => {
+    router.push('/trial');
+  };
+
+  const handleDevLogin = () => {
+    const onboardingNickname = useOnboardingStore.getState().nickname.trim();
+    devLogin(onboardingNickname || '사용자');
     router.replace('/home');
   };
 
@@ -118,6 +125,27 @@ export default function LoginScreen() {
 
         {/* 소셜 로그인 버튼 영역 */}
         <View style={styles.buttonContainer}>
+          {/* DEV: 소셜 로그인 상단 작은 dev 로그인 / dev 온보딩 버튼 */}
+          {__DEV__ && (
+            <View style={styles.devButtonRow}>
+              <TouchableOpacity
+                style={styles.devSmallButton}
+                activeOpacity={0.7}
+                onPress={handleDevLogin}
+              >
+                <Text style={styles.devSmallButtonText}>dev 로그인</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.devSmallButton}
+                activeOpacity={0.7}
+                onPress={handleDevOnboarding}
+              >
+                <Text style={styles.devSmallButtonText}>dev 온보딩</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
           {/* 카카오 로그인 */}
           <TouchableOpacity
             style={styles.kakaoButton}
@@ -136,7 +164,7 @@ export default function LoginScreen() {
             <Text style={styles.googleButtonText}>Google로 계속하기</Text>
           </TouchableOpacity>
 
-          {/* 둘러보기 */}
+          {/* 둘러보기 (체험 페이지 [미구현]) */}
           <TouchableOpacity
             style={styles.guestButton}
             activeOpacity={0.7}
@@ -144,17 +172,6 @@ export default function LoginScreen() {
           >
             <Text style={styles.guestButtonText}>둘러보기</Text>
           </TouchableOpacity>
-
-          {/* DEV: 온보딩 바로가기 */}
-          {__DEV__ && (
-            <TouchableOpacity
-              style={styles.devOnboardingButton}
-              activeOpacity={0.7}
-              onPress={handleDevOnboarding}
-            >
-              <Text style={styles.devOnboardingButtonText}>[DEV] 온보딩 화면 테스트</Text>
-            </TouchableOpacity>
-          )}
         </View>
       </View>
 
@@ -268,17 +285,26 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '500',
   },
-  devOnboardingButton: {
-    paddingVertical: 10,
-    borderRadius: 8,
+  devButtonRow: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 8,
+    marginBottom: 2,
+  },
+  devSmallButton: {
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 6,
     borderWidth: 1,
     borderStyle: 'dashed',
     borderColor: '#D1D5DB',
+    backgroundColor: '#F9FAFB',
     alignItems: 'center',
+    justifyContent: 'center',
   },
-  devOnboardingButtonText: {
+  devSmallButtonText: {
     color: '#4B5563',
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '600',
   },
   // 모달 스타일
