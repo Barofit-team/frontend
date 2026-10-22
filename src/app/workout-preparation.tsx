@@ -36,6 +36,9 @@ import { useTtsStore } from '@/stores/useTtsStore';
 const USER_POSITION_AUDIO = require('../../assets/audio/전신이_보이게_영역안에_서주세요.mp3');
 const USER_POSITION_TTS_TEXT = '전신이 보이게 영역 안에 서주세요';
 
+/** '자세 인식 완료!' 화면을 보여준 뒤 운동 진행 화면으로 넘어가기까지의 시간 */
+const SESSION_ENTRY_DELAY_MS = 1500;
+
 function initialMode(modeParam: string | undefined, step: PreparationStep): PreparationMode {
   if (!__DEV__) return 'sensor';
   if (modeParam === 'manual' || modeParam === 'sensor') return modeParam;
@@ -80,6 +83,18 @@ export default function WorkoutPreparationScreen() {
     if (router.canGoBack()) router.back();
     else router.replace('/home');
   }, []);
+
+  // 자세 인식 완료(현재는 DEV Mock 상태) → 완료 화면을 잠시 보여준 뒤 운동 진행 화면으로 교체.
+  // replace라서 준비 화면은 언마운트되고 카메라도 정리되며, 뒤로가기 시 준비 화면으로 돌아오지 않습니다.
+  // 수동 UI 확인 모드에서는 화면 검토를 위해 이동하지 않습니다.
+  useEffect(() => {
+    if (mode !== 'sensor' || step !== 'user-position-complete') return;
+    const timer = setTimeout(() => {
+      useTtsStore.getState().stop();
+      router.replace('/workout-session');
+    }, SESSION_ENTRY_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [step, mode]);
 
   const move = useCallback(
     (offset: 1 | -1) => setStep(current => getAdjacentStep(current, offset, mode) ?? current),
