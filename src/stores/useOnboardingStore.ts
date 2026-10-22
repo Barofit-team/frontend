@@ -4,12 +4,14 @@ import {
   COACHING_STYLE_TO_PERSONA,
   type CoachingStyle,
   type DiscomfortArea,
+  type DiscomfortSelection,
+  type ExerciseGoal,
+  type ExperienceLevel,
   type Gender,
   type OnboardingProfile,
+  type OnboardingRequest,
   type PersonaTone,
-  type WeeklyFrequency,
-  type WorkoutExperience,
-  type WorkoutGoal,
+  type WeeklyWorkoutDays,
 } from '@/types/onboarding';
 
 export const TOTAL_ONBOARDING_STEPS = 7;
@@ -30,11 +32,12 @@ interface OnboardingState extends OnboardingProfile {
   setAgeInput: (value: string) => void;
   setHeightInput: (value: string) => void;
   setWeightInput: (value: string) => void;
-  setGoal: (goal: WorkoutGoal) => void;
-  setWeeklyFrequency: (frequency: WeeklyFrequency) => void;
-  setExperience: (experience: WorkoutExperience) => void;
-  toggleDiscomfortArea: (area: DiscomfortArea) => void;
+  setGoal: (goal: ExerciseGoal) => void;
+  setWeeklyWorkoutDays: (days: WeeklyWorkoutDays) => void;
+  setExperienceLevel: (level: ExperienceLevel) => void;
+  toggleDiscomfortSelection: (selection: DiscomfortSelection) => void;
   setCoachingStyle: (style: CoachingStyle) => void;
+  toOnboardingRequest: () => OnboardingRequest | null;
   resetOnboarding: () => void;
 }
 
@@ -48,22 +51,25 @@ const initialProfileState = {
   ageInput: '',
   heightInput: '',
   weightInput: '',
-  goal: null as WorkoutGoal | null,
-  weeklyFrequency: null as WeeklyFrequency | null,
-  experience: null as WorkoutExperience | null,
-  discomfortAreas: [] as DiscomfortArea[],
+  goal: null as ExerciseGoal | null,
+  weeklyWorkoutDays: null as WeeklyWorkoutDays | null,
+  experienceLevel: null as ExperienceLevel | null,
+  discomfortSelections: [] as DiscomfortSelection[],
   coachingStyle: null as CoachingStyle | null,
   persona: 'gentle' as PersonaTone,
 };
 
-function parsePositiveNumber(raw: string): number | null {
-  const cleaned = raw.replace(/[^0-9.]/g, '');
-  if (!cleaned) return null;
-  const num = Number(cleaned);
-  return Number.isFinite(num) && num > 0 ? num : null;
+function parsePositiveInt(raw: string): { text: string; value: number | null } {
+  const text = raw.replace(/[^0-9]/g, '').slice(0, 3);
+  if (!text) return { text: '', value: null };
+  const num = Number(text);
+  return {
+    text,
+    value: Number.isInteger(num) && num > 0 ? num : null,
+  };
 }
 
-export const useOnboardingStore = create<OnboardingState>((set) => ({
+export const useOnboardingStore = create<OnboardingState>((set, get) => ({
   ...initialProfileState,
 
   setStep: (step) =>
@@ -91,50 +97,42 @@ export const useOnboardingStore = create<OnboardingState>((set) => ({
     })),
 
   setAgeInput: (value) => {
-    const digitsOnly = value.replace(/[^0-9]/g, '');
-    set({
-      ageInput: digitsOnly,
-      age: parsePositiveNumber(digitsOnly),
-    });
+    const parsed = parsePositiveInt(value);
+    set({ ageInput: parsed.text, age: parsed.value });
   },
 
   setHeightInput: (value) => {
-    const cleaned = value.replace(/[^0-9.]/g, '');
-    set({
-      heightInput: cleaned,
-      heightCm: parsePositiveNumber(cleaned),
-    });
+    const parsed = parsePositiveInt(value);
+    set({ heightInput: parsed.text, heightCm: parsed.value });
   },
 
   setWeightInput: (value) => {
-    const cleaned = value.replace(/[^0-9.]/g, '');
-    set({
-      weightInput: cleaned,
-      weightKg: parsePositiveNumber(cleaned),
-    });
+    const parsed = parsePositiveInt(value);
+    set({ weightInput: parsed.text, weightKg: parsed.value });
   },
 
   setGoal: (goal) => set({ goal }),
 
-  setWeeklyFrequency: (weeklyFrequency) => set({ weeklyFrequency }),
+  setWeeklyWorkoutDays: (weeklyWorkoutDays) => set({ weeklyWorkoutDays }),
 
-  setExperience: (experience) => set({ experience }),
+  setExperienceLevel: (experienceLevel) => set({ experienceLevel }),
 
-  toggleDiscomfortArea: (area) =>
+  toggleDiscomfortSelection: (selection) =>
     set((state) => {
-      if (area === 'NONE') {
+      if (selection === 'NONE') {
         const isAlreadyNone =
-          state.discomfortAreas.length === 1 && state.discomfortAreas[0] === 'NONE';
-        return { discomfortAreas: isAlreadyNone ? [] : ['NONE'] };
+          state.discomfortSelections.length === 1 &&
+          state.discomfortSelections[0] === 'NONE';
+        return { discomfortSelections: isAlreadyNone ? [] : ['NONE'] };
       }
 
-      const withoutNone = state.discomfortAreas.filter((item) => item !== 'NONE');
-      const exists = withoutNone.includes(area);
-      const nextAreas = exists
-        ? withoutNone.filter((item) => item !== area)
-        : [...withoutNone, area];
+      const withoutNone = state.discomfortSelections.filter((item) => item !== 'NONE');
+      const exists = withoutNone.includes(selection);
+      const nextSelections = exists
+        ? withoutNone.filter((item) => item !== selection)
+        : [...withoutNone, selection];
 
-      return { discomfortAreas: nextAreas };
+      return { discomfortSelections: nextSelections };
     }),
 
   setCoachingStyle: (coachingStyle) =>
@@ -142,6 +140,42 @@ export const useOnboardingStore = create<OnboardingState>((set) => ({
       coachingStyle,
       persona: COACHING_STYLE_TO_PERSONA[coachingStyle],
     }),
+
+  toOnboardingRequest: () => {
+    const state = get();
+    const trimmedNickname = state.nickname.trim();
+    if (
+      !trimmedNickname ||
+      !state.gender ||
+      state.age === null ||
+      state.heightCm === null ||
+      state.weightKg === null ||
+      !state.goal ||
+      !state.experienceLevel ||
+      !state.weeklyWorkoutDays ||
+      state.discomfortSelections.length === 0 ||
+      !state.coachingStyle
+    ) {
+      return null;
+    }
+
+    const discomfortAreas: DiscomfortArea[] = state.discomfortSelections.filter(
+      (item): item is DiscomfortArea => item !== 'NONE',
+    );
+
+    return {
+      nickname: trimmedNickname,
+      gender: state.gender,
+      age: state.age,
+      heightCm: state.heightCm,
+      weightKg: state.weightKg,
+      goal: state.goal,
+      experienceLevel: state.experienceLevel,
+      weeklyWorkoutDays: state.weeklyWorkoutDays,
+      discomfortAreas,
+      coachingStyle: state.coachingStyle,
+    };
+  },
 
   resetOnboarding: () => set({ ...initialProfileState }),
 }));

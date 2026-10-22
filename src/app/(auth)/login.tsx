@@ -75,8 +75,14 @@ export default function LoginScreen() {
         redirectUri: OAUTH_REDIRECT_URI,
         nonce: request.nonce,
       });
-      // 신규 회원이거나 온보딩을 마치지 않았으면 온보딩, 아니면 홈
-      router.replace(response.isOnboarded ? '/home' : '/onboarding');
+      // 신규 회원이거나 온보딩을 마치지 않았으면 온보딩 스토어를 초기화하고 온보딩 화면으로, 완료된 회원이면 내 프로필 조회 후 홈으로 이동
+      if (response.isOnboarded) {
+        void useAuthStore.getState().loadMyAccount().catch(() => {});
+        router.replace('/home');
+      } else {
+        useOnboardingStore.getState().resetOnboarding();
+        router.replace('/onboarding');
+      }
     } catch (error) {
       Alert.alert(`${PROVIDER_NAME[request.provider]} 로그인 실패`, toMessage(error));
     } finally {
