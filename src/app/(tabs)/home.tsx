@@ -20,13 +20,13 @@ import {
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useOnboardingStore } from '@/stores/useOnboardingStore';
 import { useWeeklyPlanStore } from '@/stores/useWeeklyPlanStore';
-import type { WorkoutGoal } from '@/types/onboarding';
+import type { ExerciseGoal } from '@/types/onboarding';
 
-const GOAL_LABEL_MAP: Record<WorkoutGoal, string> = {
+const GOAL_LABEL_MAP: Record<ExerciseGoal, string> = {
   WEIGHT_LOSS: '체중 감량',
-  MUSCLE_GAIN: '근력 향상',
+  STRENGTH: '근력 향상',
   ENDURANCE: '체력 증진',
-  POSTURE_CORRECTION: '자세 교정',
+  POSTURE: '자세 교정',
 };
 
 /** 한글 마지막 글자의 받침(종성) 유무에 따라 조사 '을' 또는 '를'을 붙여 반환합니다. */
@@ -44,6 +44,7 @@ function withObjectParticle(word: string): string {
 
 export default function HomeScreen() {
   const authUser = useAuthStore((state) => state.user);
+  const authProfile = useAuthStore((state) => state.profile);
   const onboardingNickname = useOnboardingStore((state) => state.nickname);
   const onboardingGoal = useOnboardingStore((state) => state.goal);
 
@@ -68,8 +69,9 @@ export default function HomeScreen() {
     onboardingNickname.trim() ||
     '사용자';
 
-  const goalLabel = onboardingGoal
-    ? GOAL_LABEL_MAP[onboardingGoal]
+  const effectiveGoal = authProfile?.goal ?? onboardingGoal;
+  const goalLabel = effectiveGoal
+    ? GOAL_LABEL_MAP[effectiveGoal]
     : '체중 감량';
   const goalPhrase = withObjectParticle(goalLabel);
 
