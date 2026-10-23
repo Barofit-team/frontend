@@ -61,8 +61,10 @@ export default function HomeScreen() {
   const loadWeeklyPlan = useWeeklyPlanStore((state) => state.loadWeeklyPlan);
 
   useEffect(() => {
-    void loadWeeklyPlan();
-  }, [loadWeeklyPlan]);
+    if (!hasLoaded) {
+      void loadWeeklyPlan();
+    }
+  }, [hasLoaded, loadWeeklyPlan]);
 
   const displayName =
     authUser?.nickname?.trim() ||

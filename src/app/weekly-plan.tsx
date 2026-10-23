@@ -27,8 +27,10 @@ export default function WeeklyPlanScreen() {
   const loadWeeklyPlan = useWeeklyPlanStore((state) => state.loadWeeklyPlan);
 
   useEffect(() => {
-    void loadWeeklyPlan();
-  }, [loadWeeklyPlan]);
+    if (!hasLoaded) {
+      void loadWeeklyPlan();
+    }
+  }, [hasLoaded, loadWeeklyPlan]);
 
   const handleBack = () => {
     if (router.canGoBack()) {
@@ -36,6 +38,10 @@ export default function WeeklyPlanScreen() {
       return;
     }
     router.replace('/(tabs)/home');
+  };
+
+  const openEditScreen = () => {
+    router.push('/weekly-plan-edit', { dangerouslySingular: true });
   };
 
   return (
@@ -60,6 +66,7 @@ export default function WeeklyPlanScreen() {
           accessibilityRole="button"
           accessibilityLabel="주간 계획 수정"
           hitSlop={8}
+          onPress={openEditScreen}
           style={({ pressed }) => [
             styles.circleButton,
             pressed && styles.pressed,
