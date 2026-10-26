@@ -158,9 +158,9 @@ export default function OnboardingScreen() {
   const [nicknameReason, setNicknameReason] = useState<NicknameAvailabilityReason>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  const ageInputRef = useRef<TextInput>(null);
-  const heightInputRef = useRef<TextInput>(null);
-  const weightInputRef = useRef<TextInput>(null);
+  const ageInputRef = useRef<React.ComponentRef<typeof TextInput>>(null);
+  const heightInputRef = useRef<React.ComponentRef<typeof TextInput>>(null);
+  const weightInputRef = useRef<React.ComponentRef<typeof TextInput>>(null);
 
   const trimmedNickname = nickname.trim();
   const displayNickname = trimmedNickname || '사용자';

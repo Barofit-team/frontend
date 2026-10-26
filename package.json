@@ -5,6 +5,7 @@
   "dependencies": {
     "@expo/ui": "~58.0.23",
     "expo": "^58.0.0",
+    "expo-asset": "~58.0.18",
     "expo-audio": "~58.0.10",
     "expo-auth-session": "~58.0.14",
     "expo-camera": "~58.0.12",
@@ -37,7 +38,7 @@
     "zustand": "^5.0.15"
   },
   "devDependencies": {
-    "@types/react": "~19.2.2",
+    "@types/react": "~19.3.0",
     "typescript": "~6.0.3"
   },
   "scripts": {
@@ -46,7 +47,7 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "lint": "expo lint",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "expo customize tsconfig.json && tsc --noEmit"
   },
   "private": true
 }
