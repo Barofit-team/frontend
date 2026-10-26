@@ -19,7 +19,13 @@
  *    · 계속 운동하기 → 일시 정지 화면으로 복귀
  *    · 저장하고 나가기 → 진행 상태를 Mock 저장소(useWorkoutDraftStore)에 보관하고 이전 화면(홈)으로 이동
  *
- * 이번 단계 범위 밖: AI 자세 분석, 스켈레톤 Overlay, 횟수 계산, 서버 연동, 결과 화면
+ * 운동 완료 (completed 상태)
+ *  - "오늘의 루틴 / 운동 완료!" 화면을 약 1.2초 보여준 뒤 결과 화면(F01, workout-result)으로 replace.
+ *    replace라서 뒤로가기 시 운동 진행 화면으로 돌아오지 않습니다. 이동은 한 번만 실행되고,
+ *    화면을 벗어나면 타이머가 정리됩니다.
+ *  - 결과 데이터는 [Mock] 예시 결과를 useWorkoutResultStore에 넣습니다 (AI 분석·기록 API 연동 전).
+ *
+ * 이번 단계 범위 밖: AI 자세 분석, 스켈레톤 Overlay, 횟수 계산, 서버 연동
  *
  * 개발용 진입: barofit://workout-session
  */
@@ -50,8 +56,11 @@ import {
   type SessionPhase,
 } from '@/components/workout-session/sessionFlow';
 import { StopConfirmSheet } from '@/components/workout-session/StopConfirmSheet';
+import { WorkoutCompleteView } from '@/components/workout-session/WorkoutCompleteView';
+import { createMockWorkoutResult } from '@/mocks/workoutResult';
 import { useTodayRoutineStore } from '@/stores/useTodayRoutineStore';
 import { useWorkoutDraftStore } from '@/stores/useWorkoutDraftStore';
+import { useWorkoutResultStore } from '@/stores/useWorkoutResultStore';
 
 /** 횟수 계산 방식이 정해지기 전까지 고정값으로 표시합니다 */
 const PLACEHOLDER_REPS = 0;
@@ -67,6 +76,9 @@ type PauseState = 'none' | 'paused' | 'stop-confirm' | 'resuming';
  * (예: X를 빠르게 두 번 탭 → 일시 정지 직후 같은 위치의 X가 다시 눌려 중단 시트가 열리는 것 방지)
  */
 const TAP_LOCK_MS = 400;
+
+/** 운동 완료 화면을 보여준 뒤 결과 화면(F01)으로 넘어가기까지의 시간 */
+const RESULT_ENTRY_DELAY_MS = 1200;
 
 /** 일시 정지 화면·중단 시트에 표시할 진행 상태 문구 */
 function describePause(phase: ActivePhase, exerciseName: string) {
@@ -178,7 +190,11 @@ export default function WorkoutSessionScreen() {
   /** 상단 X · Android 뒤로가기 */
   const handleClose = useCallback(() => {
     if (exitingRef.current || isTapLocked()) return;
-    if (phase.kind === 'completed') close();
+    if (phase.kind === 'completed') {
+      // 결과 화면 자동 이동과 겹치지 않도록 잠금
+      exitingRef.current = true;
+      close();
+    }
     else if (pause === 'paused') openStopConfirm();
     else if (pause !== 'stop-confirm') requestPause(); // 시트가 열려 있으면 Modal이 뒤로가기를 처리
   }, [phase.kind, pause, close, openStopConfirm, requestPause, isTapLocked]);
@@ -208,6 +224,19 @@ export default function WorkoutSessionScreen() {
     },
     [phase, close, isTapLocked, resolveExercise, activeRoutine]
   );
+
+  // 운동 완료 → 결과 저장 후 잠시 완료 화면을 보여주고 결과 화면으로 교체 (한 번만)
+  useEffect(() => {
+    if (phase.kind !== 'completed') return;
+    // [Mock] 실제 횟수·자세 분석 결과가 아직 없어 예시 결과를 넣습니다
+    useWorkoutResultStore.getState().setResult(createMockWorkoutResult());
+    const timer = setTimeout(() => {
+      if (exitingRef.current) return;
+      exitingRef.current = true;
+      router.replace('/workout-result');
+    }, RESULT_ENTRY_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [phase.kind]);
 
   // 앱이 백그라운드로 가면 일시 정지 (복귀 후에는 사용자가 '운동 이어하기'로 재개)
   useEffect(() => {
@@ -313,8 +342,8 @@ export default function WorkoutSessionScreen() {
     <>
       <StatusBar style="dark" />
       {phase.kind === 'completed' || duration === null ? (
-        // TODO: 결과 화면 (이후 단계). 카메라를 끄고 종료 상태만 표시합니다.
-        <CountdownView subtitle="모든 세트 완료" title="운동 완료" onPressClose={handleClose} />
+        // 카메라를 끄고 완료 화면만 표시 → RESULT_ENTRY_DELAY_MS 뒤 결과 화면으로 이동
+        <WorkoutCompleteView onPressClose={handleClose} />
       ) : (
         <PhaseTimer
           key={phase.id}
