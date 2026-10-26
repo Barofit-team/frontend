@@ -25,7 +25,7 @@
  */
 import { router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState, BackHandler, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -35,7 +35,13 @@ import { ExerciseCameraArea } from '@/components/workout-session/ExerciseCameraA
 import { ExerciseStatusPanel } from '@/components/workout-session/ExerciseStatusPanel';
 import { PauseView } from '@/components/workout-session/PauseView';
 import { PhaseTimer } from '@/components/workout-session/PhaseTimer';
-import { EXERCISES, MOCK_ROUTINE, RESUME_COUNTDOWN_SECONDS } from '@/components/workout-session/sessionConfig';
+import {
+  EXERCISES,
+  MOCK_ROUTINE,
+  RESUME_COUNTDOWN_SECONDS,
+  type ExerciseConfig,
+  type RoutineItem,
+} from '@/components/workout-session/sessionConfig';
 import {
   INITIAL_PHASE,
   nextPhase,
@@ -44,6 +50,7 @@ import {
   type SessionPhase,
 } from '@/components/workout-session/sessionFlow';
 import { StopConfirmSheet } from '@/components/workout-session/StopConfirmSheet';
+import { useTodayRoutineStore } from '@/stores/useTodayRoutineStore';
 import { useWorkoutDraftStore } from '@/stores/useWorkoutDraftStore';
 
 /** 횟수 계산 방식이 정해지기 전까지 고정값으로 표시합니다 */
@@ -60,11 +67,6 @@ type PauseState = 'none' | 'paused' | 'stop-confirm' | 'resuming';
  * (예: X를 빠르게 두 번 탭 → 일시 정지 직후 같은 위치의 X가 다시 눌려 중단 시트가 열리는 것 방지)
  */
 const TAP_LOCK_MS = 400;
-
-/** 현재 Phase의 종목 데이터 (Mock 루틴 기준) */
-function exerciseOf(phase: ActivePhase) {
-  return EXERCISES[MOCK_ROUTINE[phase.exerciseIndex].exerciseId];
-}
 
 /** 일시 정지 화면·중단 시트에 표시할 진행 상태 문구 */
 function describePause(phase: ActivePhase, exerciseName: string) {
@@ -92,6 +94,31 @@ function describePause(phase: ActivePhase, exerciseName: string) {
 
 export default function WorkoutSessionScreen() {
   const insets = useSafeAreaInsets();
+  const sessions = useTodayRoutineStore((state) => state.sessions);
+
+  const activeRoutine = useMemo<readonly RoutineItem[]>(
+    () =>
+      sessions.length > 0
+        ? sessions.map((s) => ({ exerciseId: s.exerciseId, sets: s.sets }))
+        : MOCK_ROUTINE,
+    [sessions],
+  );
+
+  /** 현재 Phase의 종목 데이터 (오늘의 운동 루틴에서 설정한 세트/횟수 반영) */
+  const resolveExercise = useCallback(
+    (current: ActivePhase): ExerciseConfig => {
+      const session = sessions[current.exerciseIndex];
+      const item = activeRoutine[current.exerciseIndex] ?? MOCK_ROUTINE[0];
+      const base = EXERCISES[session?.exerciseId ?? item.exerciseId];
+      return {
+        ...base,
+        name: session?.name ?? base.name,
+        targetReps: session?.reps ?? base.targetReps,
+      };
+    },
+    [sessions, activeRoutine],
+  );
+
   const [phase, setPhase] = useState<SessionPhase>(INITIAL_PHASE);
   const [pause, setPause] = useState<PauseState>('none');
   const [exiting, setExiting] = useState(false);
@@ -106,9 +133,14 @@ export default function WorkoutSessionScreen() {
   const isTapLocked = useCallback(() => Date.now() - pauseChangedAtRef.current < TAP_LOCK_MS, []);
 
   // 타이머가 끝난 Phase의 id를 받아 다음 Phase로 전환. 이미 지나간 Phase면 무시(중복 완료 방지)
-  const completePhase = useCallback((finishedId: number) => {
-    setPhase(current => (current.id === finishedId ? nextPhase(current, MOCK_ROUTINE) : current));
-  }, []);
+  const completePhase = useCallback(
+    (finishedId: number) => {
+      setPhase((current) =>
+        current.id === finishedId ? nextPhase(current, activeRoutine) : current,
+      );
+    },
+    [activeRoutine],
+  );
 
   if (__DEV__) console.log('[WorkoutSession]', phase, pause);
 
@@ -157,15 +189,15 @@ export default function WorkoutSessionScreen() {
       exitingRef.current = true;
       setExiting(true);
       // [Mock] 백엔드 저장 대신 메모리에 보관
-      const exercise = exerciseOf(phase);
+      const exercise = resolveExercise(phase);
       useWorkoutDraftStore.getState().saveDraft({
         exerciseIndex: phase.exerciseIndex,
-        totalExercises: MOCK_ROUTINE.length,
+        totalExercises: activeRoutine.length,
         exerciseId: exercise.id,
         exerciseName: exercise.name,
         phase: phase.kind,
         set: describePause(phase, exercise.name).set,
-        totalSets: MOCK_ROUTINE[phase.exerciseIndex].sets,
+        totalSets: activeRoutine[phase.exerciseIndex]?.sets ?? 1,
         reps: PLACEHOLDER_REPS,
         targetReps: exercise.targetReps,
         remainingSeconds,
@@ -174,7 +206,7 @@ export default function WorkoutSessionScreen() {
       // 화면이 언마운트되며 타이머·카메라가 정리됩니다
       close();
     },
-    [phase, close, isTapLocked]
+    [phase, close, isTapLocked, resolveExercise, activeRoutine]
   );
 
   // 앱이 백그라운드로 가면 일시 정지 (복귀 후에는 사용자가 '운동 이어하기'로 재개)
@@ -208,7 +240,7 @@ export default function WorkoutSessionScreen() {
   );
 
   const renderPhase = (current: ActivePhase, remainingSeconds: number) => {
-    const exercise = exerciseOf(current);
+    const exercise = resolveExercise(current);
     switch (current.kind) {
       case 'countdown':
         return (
@@ -235,7 +267,7 @@ export default function WorkoutSessionScreen() {
   };
 
   const renderPaused = (current: ActivePhase, remainingSeconds: number) => {
-    const exercise = exerciseOf(current);
+    const exercise = resolveExercise(current);
     const info = describePause(current, exercise.name);
     if (pause === 'resuming') {
       return (

@@ -40,7 +40,12 @@ const TAB_CONFIG: Record<
   },
 };
 
-function FloatingTabBar({ state, descriptors, navigation }: TabBarProps) {
+function FloatingTabBar({
+  state,
+  descriptors,
+  emitter,
+  navigateToTab,
+}: TabBarProps) {
   const insets = useSafeAreaInsets();
 
   return (
@@ -62,19 +67,19 @@ function FloatingTabBar({ state, descriptors, navigation }: TabBarProps) {
             config.accentColor ?? (isFocused ? '#111111' : '#A1A1AA');
 
           const onPress = () => {
-            const event = navigation.emit({
+            const event = emitter.emit({
               type: 'tabPress',
               target: route.key,
               canPreventDefault: true,
             });
 
             if (!isFocused && !event.defaultPrevented) {
-              navigation.navigate(route.name, route.params);
+              navigateToTab(route.key);
             }
           };
 
           const onLongPress = () => {
-            navigation.emit({
+            emitter.emit({
               type: 'tabLongPress',
               target: route.key,
             });

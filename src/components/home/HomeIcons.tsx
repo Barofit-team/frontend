@@ -275,7 +275,7 @@ export function PencilIcon({ color = '#111111', size = 18 }: IconProps) {
 }
 
 /**
- * 플러스(+) 아이콘 — 주간 계획 편집 화면 빈 요일 슬롯용
+ * 플러스(+) 아이콘 — 주간 계획 편집 화면 빈 요일 슬롯 및 스테퍼용
  */
 export function PlusIcon({ color = '#9CA3AF', size = 20 }: IconProps) {
   const stroke = Math.max(1.6, size * 0.085);
@@ -295,6 +295,25 @@ export function PlusIcon({ color = '#9CA3AF', size = 20 }: IconProps) {
           position: 'absolute',
           width: stroke,
           height: size * 0.85,
+          backgroundColor: color,
+          borderRadius: stroke / 2,
+        }}
+      />
+    </View>
+  );
+}
+
+/**
+ * 마이너스(−) 아이콘 — 세트·횟수 조절 스테퍼용
+ */
+export function MinusIcon({ color = '#111111', size = 20 }: IconProps) {
+  const stroke = Math.max(1.6, size * 0.085);
+  return (
+    <View style={[styles.center, { width: size, height: size }]}>
+      <View
+        style={{
+          width: size * 0.85,
+          height: stroke,
           backgroundColor: color,
           borderRadius: stroke / 2,
         }}

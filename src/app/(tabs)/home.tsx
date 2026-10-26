@@ -19,6 +19,7 @@ import {
 } from '@/components/home/HomeIcons';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useOnboardingStore } from '@/stores/useOnboardingStore';
+import { useTodayRoutineStore } from '@/stores/useTodayRoutineStore';
 import { useWeeklyPlanStore } from '@/stores/useWeeklyPlanStore';
 import type { ExerciseGoal } from '@/types/onboarding';
 
@@ -78,10 +79,17 @@ export default function HomeScreen() {
   const goalPhrase = withObjectParticle(goalLabel);
 
   const selectedDayPlan = planItems.find((item) => item.date === selectedDate);
+  const setRoutineTitle = useTodayRoutineStore(
+    (state) => state.setRoutineTitle,
+  );
 
-  // dangerouslySingular: 버튼을 연달아 눌러도 운동 준비 화면이 스택에 중복으로 쌓이지 않게 함
-  const openWorkout = () =>
-    router.push('/workout-preparation', { dangerouslySingular: true });
+  // dangerouslySingular: 버튼을 연달아 눌러도 오늘의 운동 루틴 화면이 스택에 중복으로 쌓이지 않게 함
+  const openTodayRoutine = (title?: string) => {
+    setRoutineTitle(
+      title || selectedDayPlan?.title || '가볍게 시작할 수 있는 기초 루틴',
+    );
+    router.push('/today-routine', { dangerouslySingular: true });
+  };
 
   const openWeeklyPlan = () =>
     router.push('/weekly-plan', { dangerouslySingular: true });
@@ -226,7 +234,7 @@ export default function HomeScreen() {
               {/* 오늘의 운동 확인 CTA 버튼 */}
               <Pressable
                 accessibilityRole="button"
-                onPress={openWorkout}
+                onPress={() => openTodayRoutine(selectedDayPlan.title)}
                 style={({ pressed }) => [
                   styles.startWorkoutButton,
                   pressed && styles.pressed,
@@ -246,7 +254,7 @@ export default function HomeScreen() {
               </Text>
               <Pressable
                 accessibilityRole="button"
-                onPress={openWorkout}
+                onPress={() => openTodayRoutine()}
                 style={({ pressed }) => [
                   styles.startWorkoutButton,
                   styles.fullWidthButton,
@@ -272,7 +280,7 @@ export default function HomeScreen() {
                 <Pressable
                   key={item.id}
                   accessibilityRole="button"
-                  onPress={openWorkout}
+                  onPress={() => openTodayRoutine(item.title)}
                   style={({ pressed }) => [
                     styles.recommendCard,
                     pressed && styles.pressed,
