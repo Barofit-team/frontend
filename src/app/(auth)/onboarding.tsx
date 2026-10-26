@@ -17,7 +17,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { router } from 'expo-router';
 
-import { ApiError } from '@/services/api';
+import { ApiError, type ApiFieldError } from '@/services/api';
 import {
   checkNicknameAvailability,
   fetchRandomNickname,
@@ -33,6 +33,7 @@ import {
   type ExerciseGoal,
   type ExperienceLevel,
   type NicknameAvailabilityReason,
+  type OnboardingRequest,
   type WeeklyWorkoutDays,
 } from '@/types/onboarding';
 
@@ -113,6 +114,28 @@ const COACHING_STYLE_OPTIONS: {
   },
 ];
 
+/** 서버 요청 필드 → 해당 입력 단계 (400 INVALID_INPUT의 errors[].field 기준) */
+const FIELD_TO_STEP: Record<keyof OnboardingRequest, number> = {
+  nickname: 1,
+  gender: 2,
+  age: 2,
+  heightCm: 2,
+  weightKg: 2,
+  goal: 3,
+  weeklyWorkoutDays: 4,
+  experienceLevel: 5,
+  discomfortAreas: 6,
+  coachingStyle: 7,
+};
+
+/** 오류가 난 필드 중 가장 앞 단계. 알 수 없는 필드뿐이면 null */
+function findInvalidStep(errors: ApiFieldError[]): number | null {
+  const steps = errors
+    .map((error) => FIELD_TO_STEP[error.field.split(/[.[]/)[0] as keyof OnboardingRequest])
+    .filter((step): step is number => step !== undefined);
+  return steps.length > 0 ? Math.min(...steps) : null;
+}
+
 export default function OnboardingScreen() {
   const {
     step,
@@ -147,6 +170,7 @@ export default function OnboardingScreen() {
 
   const applyMeResponse = useAuthStore((state) => state.applyMeResponse);
   const completeOnboarding = useAuthStore((state) => state.completeOnboarding);
+  const loadMyAccount = useAuthStore((state) => state.loadMyAccount);
 
   const [nicknameFocused, setNicknameFocused] = useState(false);
   const [focusedBodyField, setFocusedBodyField] = useState<'age' | 'height' | 'weight' | null>(
@@ -337,9 +361,22 @@ export default function OnboardingScreen() {
     } catch (error) {
       if (error instanceof ApiError) {
         if (error.code === 'PROFILE_ALREADY_ONBOARDED') {
-          completeOnboarding(payload.nickname);
+          // 이미 저장됨(중복 탭·응답 유실 후 재시도). 서버에 저장된 값으로 다시 맞춘 뒤 홈으로 이동
+          try {
+            await loadMyAccount();
+          } catch {
+            completeOnboarding(payload.nickname);
+          }
           router.replace('/home');
           return;
+        }
+        if (error.code === 'INVALID_INPUT') {
+          const invalidStep = findInvalidStep(error.errors);
+          if (invalidStep !== null) {
+            setStep(invalidStep);
+            Alert.alert('입력 확인', '입력한 정보를 다시 확인해주세요.');
+            return;
+          }
         }
         if (error.code === 'PROFILE_NICKNAME_INVALID') {
           setNicknameReason('INVALID_FORMAT');
