@@ -28,6 +28,11 @@ export default function ProfileScreen() {
     router.push('/workout-result', { dangerouslySingular: true });
   };
 
+  /** [DEV] 마이페이지 확정 전 월간 운동기록 진입용 */
+  const handleOpenMonthlyRecords = () => {
+    router.push('/monthly-workout-records', { dangerouslySingular: true });
+  };
+
   return (
     <PlaceholderScreen
       title="프로필"
@@ -45,6 +50,13 @@ export default function ProfileScreen() {
           title="[DEV] 오늘의 결과 바로가기"
           variant="outline"
           onPress={handleOpenWorkoutResult}
+        />
+      )}
+      {__DEV__ && (
+        <Button
+          title="[DEV] 월간 운동기록"
+          variant="outline"
+          onPress={handleOpenMonthlyRecords}
         />
       )}
       {user ? <Button title="로그아웃" variant="outline" onPress={handleLogout} /> : null}
