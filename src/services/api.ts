@@ -7,6 +7,12 @@ import type { TokenResponse } from '@/types/auth';
  */
 const BASE_URL = process.env.EXPO_PUBLIC_API_URL ?? '';
 
+/** 400 INVALID_INPUT 응답의 필드별 오류 */
+export interface ApiFieldError {
+  field: string;
+  message: string;
+}
+
 /**
  * 백엔드 에러 응답(RFC 9457 Problem Details + code).
  * 화면 분기는 detail(문구)이 아니라 code로 합니다.
@@ -16,6 +22,7 @@ export class ApiError extends Error {
     readonly status: number,
     readonly code: string,
     detail: string,
+    readonly errors: ApiFieldError[] = [],
   ) {
     super(detail);
     this.name = 'ApiError';
@@ -119,8 +126,13 @@ async function send(path: string, init: RequestInit, accessToken: string | null)
 
 async function toApiError(response: Response): Promise<ApiError> {
   try {
-    const body = (await response.json()) as { code?: string; detail?: string };
-    return new ApiError(response.status, body.code ?? 'UNKNOWN', body.detail ?? `API 요청 실패: ${response.status}`);
+    const body = (await response.json()) as { code?: string; detail?: string; errors?: ApiFieldError[] };
+    return new ApiError(
+      response.status,
+      body.code ?? 'UNKNOWN',
+      body.detail ?? `API 요청 실패: ${response.status}`,
+      Array.isArray(body.errors) ? body.errors : [],
+    );
   } catch {
     return new ApiError(response.status, 'UNKNOWN', `API 요청 실패: ${response.status}`);
   }
