@@ -56,3 +56,14 @@ export function submitOnboarding(payload: OnboardingRequest): Promise<MeResponse
     body: JSON.stringify(payload),
   });
 }
+
+/**
+ * 회원 탈퇴 (멱등 — 이미 탈퇴한 상태여도 204 응답)
+ * DELETE /api/v1/users/me
+ */
+export function withdrawMyAccount(): Promise<void> {
+  return apiFetch<void>('/api/v1/users/me', {
+    method: 'DELETE',
+    auth: true,
+  });
+}

@@ -2,6 +2,7 @@ import { router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import React, { useEffect, useState } from 'react';
 import {
+  ActivityIndicator,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -25,6 +26,7 @@ import {
   SolidPencilIcon,
 } from '@/components/home/HomeIcons';
 import { createMockWorkoutResult } from '@/mocks/workoutResult';
+import { ApiError } from '@/services/api';
 import { triggerManualInactivityAlarm } from '@/services/inactivityAlarmService';
 import { tokenStorage } from '@/services/tokenStorage';
 import { useAuthStore } from '@/stores/useAuthStore';
@@ -48,6 +50,7 @@ type EditFieldType =
   | 'weeklyWorkoutDays'
   | 'discomfort'
   | 'settings'
+  | 'withdrawConfirm'
   | null;
 
 const GENDER_OPTIONS: { value: Gender; label: string }[] = [
@@ -117,6 +120,7 @@ export default function ProfileScreen() {
   const updateUserNickname = useAuthStore((state) => state.updateUserNickname);
   const updateProfile = useAuthStore((state) => state.updateProfile);
   const logout = useAuthStore((state) => state.logout);
+  const withdraw = useAuthStore((state) => state.withdraw);
 
   const onboardingNickname = useOnboardingStore((state) => state.nickname);
   const onboardingGender = useOnboardingStore((state) => state.gender);
@@ -197,6 +201,8 @@ export default function ProfileScreen() {
   const [draftDiscomforts, setDraftDiscomforts] = useState<
     DiscomfortSelection[]
   >(['NONE']);
+  const [isWithdrawing, setIsWithdrawing] = useState<boolean>(false);
+  const [withdrawError, setWithdrawError] = useState<string | null>(null);
 
   const openEditModal = (field: Exclude<EditFieldType, null>) => {
     switch (field) {
@@ -233,11 +239,18 @@ export default function ProfileScreen() {
       }
       case 'settings':
         break;
+      case 'withdrawConfirm':
+        setWithdrawError(null);
+        break;
     }
     setActiveField(field);
   };
 
-  const closeModal = () => setActiveField(null);
+  const closeModal = () => {
+    if (isWithdrawing) return;
+    setWithdrawError(null);
+    setActiveField(null);
+  };
 
   const toggleDraftDiscomfort = (selection: DiscomfortSelection) => {
     setDraftDiscomforts((prev) => {
@@ -313,6 +326,7 @@ export default function ProfileScreen() {
         break;
       }
       case 'settings':
+      case 'withdrawConfirm':
         break;
     }
 
@@ -323,6 +337,26 @@ export default function ProfileScreen() {
     closeModal();
     await logout();
     router.replace('/login');
+  };
+
+  const handleConfirmWithdraw = async () => {
+    if (isWithdrawing) return;
+    setIsWithdrawing(true);
+    setWithdrawError(null);
+
+    try {
+      await withdraw();
+      setActiveField(null);
+      router.replace('/login');
+    } catch (error) {
+      const message =
+        error instanceof ApiError && error.message
+          ? error.message
+          : '회원 탈퇴 처리 중 문제가 발생했어요. 네트워크 연결을 확인한 뒤 다시 시도해 주세요.';
+      setWithdrawError(message);
+    } finally {
+      setIsWithdrawing(false);
+    }
   };
 
   const handleOpenOnboarding = () => {
@@ -338,7 +372,10 @@ export default function ProfileScreen() {
   };
 
   const infoRows: {
-    key: Exclude<EditFieldType, 'nickname' | 'settings' | null>;
+    key: Exclude<
+      EditFieldType,
+      'nickname' | 'settings' | 'withdrawConfirm' | null
+    >;
     label: string;
     value: string;
   }[] = [
@@ -749,10 +786,76 @@ export default function ProfileScreen() {
                       onPress={() => void handleLogout()}
                       style={({ pressed }) => [
                         styles.optionCard,
+                        pressed && styles.pressed,
+                      ]}>
+                      <Text style={styles.optionCardText}>로그아웃</Text>
+                    </Pressable>
+
+                    <Pressable
+                      accessibilityRole="button"
+                      onPress={() => openEditModal('withdrawConfirm')}
+                      style={({ pressed }) => [
+                        styles.optionCard,
                         styles.logoutOptionCard,
                         pressed && styles.pressed,
                       ]}>
-                      <Text style={styles.logoutOptionText}>로그아웃</Text>
+                      <Text style={styles.logoutOptionText}>회원 탈퇴</Text>
+                    </Pressable>
+                  </View>
+                </>
+              )}
+
+              {/* 회원 탈퇴 확인 모달 */}
+              {activeField === 'withdrawConfirm' && (
+                <>
+                  <Text style={styles.sheetTitle}>정말 탈퇴하시겠어요?</Text>
+
+                  <View style={styles.withdrawNoticeBox}>
+                    <Text style={styles.withdrawNoticeTitle}>
+                      탈퇴 전 꼭 확인해 주세요
+                    </Text>
+                    <Text style={styles.withdrawNoticeItem}>
+                      • 신체 프로필, 운동 목표, 불편 부위 등 개인 맞춤 설정이 즉시 삭제되며 복구할 수 없어요.
+                    </Text>
+                    <Text style={styles.withdrawNoticeItem}>
+                      • 소셜 계정 연동이 해제되어 같은 계정으로 다시 로그인하면 신규 회원으로 시작하게 돼요.
+                    </Text>
+                  </View>
+
+                  {withdrawError ? (
+                    <Text style={styles.withdrawErrorText}>{withdrawError}</Text>
+                  ) : null}
+
+                  <View style={styles.withdrawButtonRow}>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="탈퇴 취소"
+                      disabled={isWithdrawing}
+                      onPress={closeModal}
+                      style={({ pressed }) => [
+                        styles.withdrawCancelButton,
+                        pressed && !isWithdrawing && styles.pressed,
+                      ]}>
+                      <Text style={styles.withdrawCancelButtonText}>취소</Text>
+                    </Pressable>
+
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="회원 탈퇴 확정"
+                      disabled={isWithdrawing}
+                      onPress={() => void handleConfirmWithdraw()}
+                      style={({ pressed }) => [
+                        styles.withdrawConfirmButton,
+                        isWithdrawing && styles.withdrawButtonDisabled,
+                        pressed && !isWithdrawing && styles.pressed,
+                      ]}>
+                      {isWithdrawing ? (
+                        <ActivityIndicator size="small" color="#FFFFFF" />
+                      ) : (
+                        <Text style={styles.withdrawConfirmButtonText}>
+                          탈퇴하기
+                        </Text>
+                      )}
                     </Pressable>
                   </View>
                 </>
@@ -951,6 +1054,69 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '600',
     color: '#DC2626',
+  },
+  withdrawNoticeBox: {
+    backgroundColor: '#FEF2F2',
+    borderRadius: 14,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    gap: 8,
+  },
+  withdrawNoticeTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#991B1B',
+    marginBottom: 2,
+  },
+  withdrawNoticeItem: {
+    fontSize: 13.5,
+    lineHeight: 20,
+    fontWeight: '400',
+    color: '#7F1D1D',
+    letterSpacing: -0.2,
+  },
+  withdrawErrorText: {
+    marginTop: 12,
+    fontSize: 13.5,
+    lineHeight: 19,
+    fontWeight: '500',
+    color: '#DC2626',
+  },
+  withdrawButtonRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 22,
+  },
+  withdrawCancelButton: {
+    flex: 1,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: '#F4F4F5',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  withdrawCancelButtonText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#111111',
+    letterSpacing: -0.2,
+  },
+  withdrawConfirmButton: {
+    flex: 1,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: '#DC2626',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  withdrawButtonDisabled: {
+    opacity: 0.6,
+  },
+  withdrawConfirmButtonText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#FFFFFF',
+    letterSpacing: -0.2,
   },
   saveButton: {
     marginTop: 22,
