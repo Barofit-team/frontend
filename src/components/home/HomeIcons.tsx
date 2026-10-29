@@ -499,6 +499,180 @@ export function ProfileTabIcon({ color = '#A1A1AA', size = 22 }: IconProps) {
   );
 }
 
+/**
+ * 마이페이지 닉네임 우측 채워진 연필 아이콘
+ */
+export function SolidPencilIcon({ color = '#111111', size = 18 }: IconProps) {
+  const s = size / 18;
+  return (
+    <View style={[styles.center, { width: size, height: size }]}>
+      <View
+        style={[
+          styles.center,
+          {
+            transform: [{ rotate: '45deg' }],
+          },
+        ]}>
+        {/* 상단 지우개 캡 */}
+        <View
+          style={{
+            width: 4.8 * s,
+            height: 2.8 * s,
+            backgroundColor: color,
+            borderTopLeftRadius: 1.5 * s,
+            borderTopRightRadius: 1.5 * s,
+            marginBottom: 1.2 * s,
+          }}
+        />
+        {/* 연필 몸통 */}
+        <View
+          style={{
+            width: 4.8 * s,
+            height: 8.5 * s,
+            backgroundColor: color,
+          }}
+        />
+        {/* 연필 촉 (삼각형) */}
+        <View
+          style={{
+            width: 0,
+            height: 0,
+            borderLeftWidth: 2.4 * s,
+            borderRightWidth: 2.4 * s,
+            borderTopWidth: 3.4 * s,
+            borderLeftColor: 'transparent',
+            borderRightColor: 'transparent',
+            borderTopColor: color,
+            marginTop: 0.8 * s,
+          }}
+        />
+      </View>
+    </View>
+  );
+}
+
+/**
+ * 마이페이지 '운동 완료일' 카드용 채워진 체크 원 아이콘
+ */
+export function CheckCircleSolidIcon({
+  color = '#111111',
+  size = 20,
+}: IconProps) {
+  const s = size / 20;
+  return (
+    <View
+      style={[
+        styles.center,
+        {
+          width: size,
+          height: size,
+          borderRadius: size / 2,
+          backgroundColor: color,
+        },
+      ]}>
+      <View
+        style={{
+          width: 7.5 * s,
+          height: 4.2 * s,
+          borderLeftWidth: 1.8 * s,
+          borderBottomWidth: 1.8 * s,
+          borderColor: '#FFFFFF',
+          transform: [{ rotate: '-45deg' }],
+          marginTop: -1.5 * s,
+        }}
+      />
+    </View>
+  );
+}
+
+/**
+ * 마이페이지 'Streak Day' 카드용 채워진 불꽃 아이콘
+ */
+export function FlameSolidIcon({ color = '#111111', size = 20 }: IconProps) {
+  const s = size / 20;
+  return (
+    <View style={[styles.center, { width: size, height: size }]}>
+      <View
+        style={{
+          width: 13.5 * s,
+          height: 13.5 * s,
+          borderTopLeftRadius: 2 * s,
+          borderTopRightRadius: 8 * s,
+          borderBottomLeftRadius: 8 * s,
+          borderBottomRightRadius: 8 * s,
+          backgroundColor: color,
+          transform: [{ rotate: '45deg' }],
+          marginTop: 2 * s,
+          alignItems: 'center',
+          justifyContent: 'flex-end',
+          padding: 2.2 * s,
+        }}>
+        <View
+          style={{
+            width: 4.5 * s,
+            height: 4.5 * s,
+            borderTopLeftRadius: 1 * s,
+            borderTopRightRadius: 2.8 * s,
+            borderBottomLeftRadius: 2.8 * s,
+            borderBottomRightRadius: 2.8 * s,
+            backgroundColor: '#EAEAEA',
+          }}
+        />
+      </View>
+    </View>
+  );
+}
+
+/**
+ * 마이페이지 하단 '앱 설정' 톱니바퀴 아이콘
+ */
+export function GearIcon({ color = '#111111', size = 20 }: IconProps) {
+  const s = size / 20;
+  const toothStyle = {
+    position: 'absolute' as const,
+    width: 3.4 * s,
+    height: 18 * s,
+    borderRadius: 1.2 * s,
+    borderWidth: 1.5 * s,
+    borderColor: color,
+    backgroundColor: '#FFFFFF',
+  };
+  return (
+    <View style={[styles.center, { width: size, height: size }]}>
+      {/* 4방향 톱니 (8각 기어 이빨) */}
+      <View style={toothStyle} />
+      <View style={[toothStyle, { transform: [{ rotate: '45deg' }] }]} />
+      <View style={[toothStyle, { transform: [{ rotate: '90deg' }] }]} />
+      <View style={[toothStyle, { transform: [{ rotate: '135deg' }] }]} />
+      {/* 기어 몸통 원 */}
+      <View
+        style={[
+          styles.center,
+          {
+            width: 13.5 * s,
+            height: 13.5 * s,
+            borderRadius: 6.75 * s,
+            borderWidth: 1.6 * s,
+            borderColor: color,
+            backgroundColor: '#FFFFFF',
+          },
+        ]}>
+        {/* 기어 중앙 구멍 */}
+        <View
+          style={{
+            width: 5.5 * s,
+            height: 5.5 * s,
+            borderRadius: 2.75 * s,
+            borderWidth: 1.5 * s,
+            borderColor: color,
+            backgroundColor: '#FFFFFF',
+          }}
+        />
+      </View>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   center: {
     alignItems: 'center',
