@@ -36,6 +36,7 @@ interface OnboardingState extends OnboardingProfile {
   setWeeklyWorkoutDays: (days: WeeklyWorkoutDays) => void;
   setExperienceLevel: (level: ExperienceLevel) => void;
   toggleDiscomfortSelection: (selection: DiscomfortSelection) => void;
+  setDiscomfortSelections: (selections: DiscomfortSelection[]) => void;
   setCoachingStyle: (style: CoachingStyle) => void;
   toOnboardingRequest: () => OnboardingRequest | null;
   resetOnboarding: () => void;
@@ -133,6 +134,12 @@ export const useOnboardingStore = create<OnboardingState>((set, get) => ({
         : [...withoutNone, selection];
 
       return { discomfortSelections: nextSelections };
+    }),
+
+  setDiscomfortSelections: (discomfortSelections) =>
+    set({
+      discomfortSelections:
+        discomfortSelections.length > 0 ? discomfortSelections : ['NONE'],
     }),
 
   setCoachingStyle: (coachingStyle) =>

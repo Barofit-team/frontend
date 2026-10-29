@@ -24,6 +24,8 @@ interface AuthState {
   /** POST /api/v1/users/me/onboarding 또는 GET /api/v1/users/me 응답을 스토어에 반영합니다 */
   applyMeResponse: (me: MeResponse) => void;
   completeOnboarding: (nickname?: string, profile?: ProfileResponse | null) => void;
+  updateUserNickname: (nickname: string) => void;
+  updateProfile: (partial: Partial<ProfileResponse>) => void;
   devLogin: (nickname?: string) => void;
   logout: () => Promise<void>;
   reset: () => void;
@@ -89,6 +91,39 @@ export const useAuthStore = create<AuthState>((set) => ({
               profileImageUrl: null,
               role: 'USER',
             },
+      };
+    }),
+
+  updateUserNickname: (nickname) =>
+    set((state) => {
+      const trimmed = nickname.trim() || '사용자';
+      return {
+        user: state.user
+          ? { ...state.user, nickname: trimmed }
+          : {
+              id: 'dev-user',
+              nickname: trimmed,
+              profileImageUrl: null,
+              role: 'USER',
+            },
+      };
+    }),
+
+  updateProfile: (partial) =>
+    set((state) => {
+      const base: ProfileResponse = state.profile ?? {
+        gender: 'MALE',
+        age: 29,
+        heightCm: 185,
+        weightKg: 84,
+        goal: 'ENDURANCE',
+        experienceLevel: 'BEGINNER',
+        weeklyWorkoutDays: 3,
+        discomfortAreas: [],
+        coachingStyle: 'FRIENDLY',
+      };
+      return {
+        profile: { ...base, ...partial },
       };
     }),
 
