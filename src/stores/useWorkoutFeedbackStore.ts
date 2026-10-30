@@ -23,6 +23,7 @@ interface WorkoutFeedbackState {
   toggleDiscomfortArea: (area: DiscomfortAreaId) => void;
   /** 입력이 완료된 draft를 확정 저장합니다. 미완성이면 예외 */
   submitDraft: () => Promise<SavedWorkoutFeedback>;
+  reset: () => void;
 }
 
 export function createEmptyFeedback(sessionId: string): WorkoutFeedback {
@@ -95,4 +96,6 @@ export const useWorkoutFeedbackStore = create<WorkoutFeedbackState>((set, get) =
     set(state => ({ savedBySession: { ...state.savedBySession, [saved.sessionId]: saved } }));
     return saved;
   },
+
+  reset: () => set({ draft: null, savedBySession: {} }),
 }));

@@ -117,3 +117,16 @@ export async function triggerManualInactivityAlarm(): Promise<void> {
     trigger: null,
   });
 }
+
+/**
+ * 로그아웃·회원 탈퇴 시 예약되어 있는 미접속 로컬 알림을 취소합니다.
+ */
+export async function cancelInactivityAlarm(): Promise<void> {
+  if (Platform.OS === 'web') return;
+
+  try {
+    await Notifications.cancelScheduledNotificationAsync(INACTIVITY_ALARM_ID);
+  } catch {
+    // 예약된 알림이 없거나 권한이 없는 경우 무시
+  }
+}

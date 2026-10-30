@@ -2,10 +2,29 @@ import { router } from 'expo-router';
 import { create } from 'zustand';
 
 import { apiFetch, setOnAuthFailure } from '@/services/api';
-import { fetchMyAccount } from '@/services/onboardingService';
+import { cancelInactivityAlarm } from '@/services/inactivityAlarmService';
+import { fetchMyAccount, withdrawMyAccount } from '@/services/onboardingService';
 import { tokenStorage } from '@/services/tokenStorage';
+import { useOnboardingStore } from '@/stores/useOnboardingStore';
+import { useTodayRoutineStore } from '@/stores/useTodayRoutineStore';
+import { useTtsStore } from '@/stores/useTtsStore';
+import { useWeeklyPlanStore } from '@/stores/useWeeklyPlanStore';
+import { useWorkoutDraftStore } from '@/stores/useWorkoutDraftStore';
+import { useWorkoutFeedbackStore } from '@/stores/useWorkoutFeedbackStore';
+import { useWorkoutResultStore } from '@/stores/useWorkoutResultStore';
 import type { AuthUser, SocialLoginResponse, SocialProvider } from '@/types/auth';
 import type { MeResponse, ProfileResponse } from '@/types/onboarding';
+
+function resetClientStores() {
+  useOnboardingStore.getState().resetOnboarding();
+  useWeeklyPlanStore.getState().reset();
+  useTodayRoutineStore.getState().resetAllSessions();
+  useWorkoutDraftStore.getState().clearDraft();
+  useWorkoutResultStore.getState().clearResult();
+  useWorkoutFeedbackStore.getState().reset();
+  useTtsStore.getState().disconnectWebSocket();
+  useTtsStore.getState().stop();
+}
 
 interface AuthState {
   user: AuthUser | null;
@@ -28,6 +47,8 @@ interface AuthState {
   updateProfile: (partial: Partial<ProfileResponse>) => void;
   devLogin: (nickname?: string) => void;
   logout: () => Promise<void>;
+  /** DELETE /api/v1/users/me 로 계정을 탈퇴하고 기기 내 토큰·알림·스토어를 모두 정리합니다 */
+  withdraw: () => Promise<void>;
   reset: () => void;
 }
 
@@ -151,16 +172,32 @@ export const useAuthStore = create<AuthState>((set) => ({
     } catch {
       // 네트워크 오류여도 기기의 토큰은 지웁니다
     } finally {
-      await tokenStorage.clear();
+      await Promise.all([tokenStorage.clear(), cancelInactivityAlarm()]);
+      resetClientStores();
       set({ user: null, isOnboarded: false, profile: null });
     }
   },
 
-  reset: () => set({ user: null, isOnboarded: false, profile: null }),
+  withdraw: async () => {
+    const accessToken = await tokenStorage.getAccessToken();
+    if (accessToken) {
+      await withdrawMyAccount();
+    }
+
+    await Promise.all([tokenStorage.clear(), cancelInactivityAlarm()]);
+    resetClientStores();
+    set({ user: null, isOnboarded: false, profile: null });
+  },
+
+  reset: () => {
+    resetClientStores();
+    set({ user: null, isOnboarded: false, profile: null });
+  },
 }));
 
 // refresh까지 실패하면(세션 만료·폐기·탈퇴) 로그인 화면으로 보냅니다
 setOnAuthFailure(() => {
+  void cancelInactivityAlarm();
   useAuthStore.getState().reset();
   router.replace('/login');
 });
