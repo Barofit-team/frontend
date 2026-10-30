@@ -1,7 +1,7 @@
 import { router } from 'expo-router';
 import { create } from 'zustand';
 
-import { ApiError, apiFetch, setOnAuthFailure } from '@/services/api';
+import { apiFetch, setOnAuthFailure } from '@/services/api';
 import { cancelInactivityAlarm } from '@/services/inactivityAlarmService';
 import { fetchMyAccount, withdrawMyAccount } from '@/services/onboardingService';
 import { tokenStorage } from '@/services/tokenStorage';
@@ -181,15 +181,7 @@ export const useAuthStore = create<AuthState>((set) => ({
   withdraw: async () => {
     const accessToken = await tokenStorage.getAccessToken();
     if (accessToken) {
-      try {
-        await withdrawMyAccount();
-      } catch (error) {
-        // 이미 탈퇴된 세션(401 AUTH_USER_WITHDRAWN 등)이면 로컬 정리만 마무리하고 종료합니다.
-        // 네트워크 오류나 5xx는 호출한 화면에서 재시도 안내를 띄울 수 있도록 그대로 던집니다.
-        if (!(error instanceof ApiError && error.status === 401)) {
-          throw error;
-        }
-      }
+      await withdrawMyAccount();
     }
 
     await Promise.all([tokenStorage.clear(), cancelInactivityAlarm()]);
