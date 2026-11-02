@@ -27,17 +27,20 @@ import {
 } from '@/components/home/HomeIcons';
 import { createMockWorkoutResult } from '@/mocks/workoutResult';
 import { ApiError } from '@/services/api';
+import { updateMyProfile } from '@/services/onboardingService';
 import { triggerManualInactivityAlarm } from '@/services/inactivityAlarmService';
 import { tokenStorage } from '@/services/tokenStorage';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useOnboardingStore } from '@/stores/useOnboardingStore';
 import { useWorkoutResultStore } from '@/stores/useWorkoutResultStore';
-import type {
-  DiscomfortArea,
-  DiscomfortSelection,
-  ExerciseGoal,
-  Gender,
-  WeeklyWorkoutDays,
+import {
+  NICKNAME_REGEX,
+  type DiscomfortArea,
+  type DiscomfortSelection,
+  type ExerciseGoal,
+  type Gender,
+  type ProfileUpdateRequest,
+  type WeeklyWorkoutDays,
 } from '@/types/onboarding';
 
 type EditFieldType =
@@ -52,6 +55,32 @@ type EditFieldType =
   | 'settings'
   | 'withdrawConfirm'
   | null;
+
+type EditableField = Exclude<EditFieldType, 'settings' | 'withdrawConfirm' | null>;
+
+/** 서버 검증 규칙(docs/onboarding-api.md 3장)과 같은 숫자 범위 */
+const NUMBER_RULES: Record<'age' | 'heightCm' | 'weightKg', { min: number; max: number; label: string }> = {
+  age: { min: 14, max: 100, label: '나이' },
+  heightCm: { min: 100, max: 250, label: '키' },
+  weightKg: { min: 20, max: 300, label: '몸무게' },
+};
+
+/** 프로필 수정 실패 응답을 사용자 안내 문구로 바꿉니다 */
+function toProfileUpdateMessage(error: unknown): string {
+  if (!(error instanceof ApiError)) {
+    return '프로필을 저장하지 못했어요. 다시 시도해 주세요.';
+  }
+  switch (error.code) {
+    case 'PROFILE_NICKNAME_DUPLICATED':
+      return '이미 사용 중인 닉네임이에요. 다른 닉네임을 입력해 주세요.';
+    case 'PROFILE_NICKNAME_INVALID':
+      return '닉네임은 2~10자의 한글, 영문, 숫자만 사용할 수 있어요.';
+    case 'INVALID_INPUT':
+      return '입력한 값을 다시 확인해 주세요.';
+    default:
+      return error.message || '프로필을 저장하지 못했어요. 다시 시도해 주세요.';
+  }
+}
 
 const GENDER_OPTIONS: { value: Gender; label: string }[] = [
   { value: 'MALE', label: '남성' },
@@ -119,6 +148,7 @@ export default function ProfileScreen() {
   const loadMyAccount = useAuthStore((state) => state.loadMyAccount);
   const updateUserNickname = useAuthStore((state) => state.updateUserNickname);
   const updateProfile = useAuthStore((state) => state.updateProfile);
+  const applyMeResponse = useAuthStore((state) => state.applyMeResponse);
   const logout = useAuthStore((state) => state.logout);
   const withdraw = useAuthStore((state) => state.withdraw);
 
@@ -201,6 +231,8 @@ export default function ProfileScreen() {
   const [draftDiscomforts, setDraftDiscomforts] = useState<
     DiscomfortSelection[]
   >(['NONE']);
+  const [isSaving, setIsSaving] = useState<boolean>(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [isWithdrawing, setIsWithdrawing] = useState<boolean>(false);
   const [withdrawError, setWithdrawError] = useState<string | null>(null);
 
@@ -243,12 +275,14 @@ export default function ProfileScreen() {
         setWithdrawError(null);
         break;
     }
+    setSaveError(null);
     setActiveField(field);
   };
 
   const closeModal = () => {
-    if (isWithdrawing) return;
+    if (isWithdrawing || isSaving) return;
     setWithdrawError(null);
+    setSaveError(null);
     setActiveField(null);
   };
 
@@ -266,71 +300,115 @@ export default function ProfileScreen() {
     });
   };
 
-  const handleSaveField = () => {
-    if (!activeField) return;
-
-    switch (activeField) {
+  /**
+   * 편집 중인 항목을 PATCH /api/v1/users/me/profile 요청으로 만듭니다.
+   * 값이 바뀌지 않았으면 null, 입력이 규칙에 맞지 않으면 error를 돌려줍니다.
+   */
+  const buildProfileUpdate = (
+    field: EditableField,
+  ): { request: ProfileUpdateRequest | null } | { error: string } => {
+    switch (field) {
       case 'nickname': {
-        const cleaned = draftText.trim();
-        if (cleaned) {
-          updateUserNickname(cleaned);
-          setOnboardingNickname(cleaned);
+        const nickname = draftText.trim();
+        if (!NICKNAME_REGEX.test(nickname)) {
+          return { error: '닉네임은 2~10자의 한글, 영문, 숫자만 사용할 수 있어요.' };
         }
-        break;
+        return { request: nickname === user?.nickname ? null : { nickname } };
       }
-      case 'gender': {
-        updateProfile({ gender: draftGender });
-        setOnboardingGender(draftGender);
-        break;
-      }
-      case 'age': {
-        const num = Number(draftText.replace(/[^0-9]/g, ''));
-        if (Number.isFinite(num) && num > 0) {
-          updateProfile({ age: num });
-          setOnboardingAgeInput(String(num));
-        }
-        break;
-      }
-      case 'heightCm': {
-        const num = Number(draftText.replace(/[^0-9]/g, ''));
-        if (Number.isFinite(num) && num > 0) {
-          updateProfile({ heightCm: num });
-          setOnboardingHeightInput(String(num));
-        }
-        break;
-      }
+      case 'age':
+      case 'heightCm':
       case 'weightKg': {
-        const num = Number(draftText.replace(/[^0-9]/g, ''));
-        if (Number.isFinite(num) && num > 0) {
-          updateProfile({ weightKg: num });
-          setOnboardingWeightInput(String(num));
+        const rule = NUMBER_RULES[field];
+        const value = Number(draftText);
+        if (!draftText || !Number.isInteger(value) || value < rule.min || value > rule.max) {
+          return { error: `${rule.label}는 ${rule.min}~${rule.max} 사이로 입력해 주세요.` };
         }
-        break;
+        const current = { age: effectiveAge, heightCm: effectiveHeightCm, weightKg: effectiveWeightKg }[field];
+        return { request: value === current ? null : { [field]: value } };
       }
-      case 'goal': {
-        updateProfile({ goal: draftGoal });
-        setOnboardingGoal(draftGoal);
-        break;
-      }
-      case 'weeklyWorkoutDays': {
-        updateProfile({ weeklyWorkoutDays: draftWeeklyDays });
-        setOnboardingWeeklyDays(draftWeeklyDays);
-        break;
-      }
+      case 'gender':
+        return { request: draftGender === effectiveGender ? null : { gender: draftGender } };
+      case 'goal':
+        return { request: draftGoal === effectiveGoal ? null : { goal: draftGoal } };
+      case 'weeklyWorkoutDays':
+        return {
+          request:
+            draftWeeklyDays === effectiveWeeklyDays ? null : { weeklyWorkoutDays: draftWeeklyDays },
+        };
       case 'discomfort': {
         const areas = draftDiscomforts.filter(
           (item): item is DiscomfortArea => item !== 'NONE',
         );
-        updateProfile({ discomfortAreas: areas });
-        setOnboardingDiscomforts(draftDiscomforts);
-        break;
+        const current = profile?.discomfortAreas ?? [];
+        const unchanged =
+          profile !== null &&
+          areas.length === current.length &&
+          areas.every((area) => current.includes(area));
+        // '해당 없음'은 빈 배열로 보냅니다
+        return { request: unchanged ? null : { discomfortAreas: areas } };
       }
-      case 'settings':
-      case 'withdrawConfirm':
-        break;
+    }
+  };
+
+  /** [DEV] 토큰 없는 로컬 테스트 모드: 서버 대신 앱 스토어에만 반영합니다 */
+  const applyLocally = (request: ProfileUpdateRequest) => {
+    const { nickname, ...profileFields } = request;
+    if (nickname) {
+      updateUserNickname(nickname);
+      setOnboardingNickname(nickname);
+    }
+    if (Object.keys(profileFields).length > 0) {
+      updateProfile(profileFields);
+    }
+    if (profileFields.gender) setOnboardingGender(profileFields.gender);
+    if (profileFields.age) setOnboardingAgeInput(String(profileFields.age));
+    if (profileFields.heightCm) setOnboardingHeightInput(String(profileFields.heightCm));
+    if (profileFields.weightKg) setOnboardingWeightInput(String(profileFields.weightKg));
+    if (profileFields.goal) setOnboardingGoal(profileFields.goal);
+    if (profileFields.weeklyWorkoutDays) setOnboardingWeeklyDays(profileFields.weeklyWorkoutDays);
+    if (profileFields.discomfortAreas) setOnboardingDiscomforts(draftDiscomforts);
+  };
+
+  const handleSaveField = async () => {
+    if (!activeField || activeField === 'settings' || activeField === 'withdrawConfirm') return;
+    if (isSaving) return;
+
+    const result = buildProfileUpdate(activeField);
+    if ('error' in result) {
+      setSaveError(result.error);
+      return;
+    }
+    if (!result.request) {
+      closeModal();
+      return;
     }
 
-    closeModal();
+    const accessToken = await tokenStorage.getAccessToken();
+    if (!accessToken) {
+      applyLocally(result.request);
+      closeModal();
+      return;
+    }
+
+    setIsSaving(true);
+    setSaveError(null);
+    try {
+      const me = await updateMyProfile(result.request);
+      applyMeResponse(me);
+      setActiveField(null);
+    } catch (error) {
+      if (error instanceof ApiError && error.code === 'PROFILE_NOT_ONBOARDED') {
+        // 온보딩을 마치지 않은 계정은 온보딩부터 진행합니다
+        setActiveField(null);
+        useOnboardingStore.getState().resetOnboarding();
+        router.replace('/onboarding');
+        return;
+      }
+      // 401(세션 만료·탈퇴)은 apiFetch가 로그인 화면으로 보냅니다
+      setSaveError(toProfileUpdateMessage(error));
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const handleLogout = async () => {
@@ -370,6 +448,27 @@ export default function ProfileScreen() {
     useWorkoutResultStore.getState().setResult(createMockWorkoutResult());
     router.push('/workout-result', { dangerouslySingular: true });
   };
+
+  const renderSaveFooter = () => (
+    <>
+      {saveError ? <Text style={styles.saveErrorText}>{saveError}</Text> : null}
+      <Pressable
+        accessibilityRole="button"
+        disabled={isSaving}
+        onPress={() => void handleSaveField()}
+        style={({ pressed }) => [
+          styles.saveButton,
+          isSaving && styles.saveButtonDisabled,
+          pressed && !isSaving && styles.pressed,
+        ]}>
+        {isSaving ? (
+          <ActivityIndicator size="small" color="#FFFFFF" />
+        ) : (
+          <Text style={styles.saveButtonText}>저장</Text>
+        )}
+      </Pressable>
+    </>
+  );
 
   const infoRows: {
     key: Exclude<
@@ -561,15 +660,7 @@ export default function ProfileScreen() {
                     style={styles.sheetInput}
                   />
 
-                  <Pressable
-                    accessibilityRole="button"
-                    onPress={handleSaveField}
-                    style={({ pressed }) => [
-                      styles.saveButton,
-                      pressed && styles.pressed,
-                    ]}>
-                    <Text style={styles.saveButtonText}>저장</Text>
-                  </Pressable>
+                  {renderSaveFooter()}
                 </>
               )}
 
@@ -601,15 +692,7 @@ export default function ProfileScreen() {
                     })}
                   </View>
 
-                  <Pressable
-                    accessibilityRole="button"
-                    onPress={handleSaveField}
-                    style={({ pressed }) => [
-                      styles.saveButton,
-                      pressed && styles.pressed,
-                    ]}>
-                    <Text style={styles.saveButtonText}>저장</Text>
-                  </Pressable>
+                  {renderSaveFooter()}
                 </>
               )}
 
@@ -641,15 +724,7 @@ export default function ProfileScreen() {
                     })}
                   </View>
 
-                  <Pressable
-                    accessibilityRole="button"
-                    onPress={handleSaveField}
-                    style={({ pressed }) => [
-                      styles.saveButton,
-                      pressed && styles.pressed,
-                    ]}>
-                    <Text style={styles.saveButtonText}>저장</Text>
-                  </Pressable>
+                  {renderSaveFooter()}
                 </>
               )}
 
@@ -681,15 +756,7 @@ export default function ProfileScreen() {
                     })}
                   </View>
 
-                  <Pressable
-                    accessibilityRole="button"
-                    onPress={handleSaveField}
-                    style={({ pressed }) => [
-                      styles.saveButton,
-                      pressed && styles.pressed,
-                    ]}>
-                    <Text style={styles.saveButtonText}>저장</Text>
-                  </Pressable>
+                  {renderSaveFooter()}
                 </>
               )}
 
@@ -721,15 +788,7 @@ export default function ProfileScreen() {
                     })}
                   </View>
 
-                  <Pressable
-                    accessibilityRole="button"
-                    onPress={handleSaveField}
-                    style={({ pressed }) => [
-                      styles.saveButton,
-                      pressed && styles.pressed,
-                    ]}>
-                    <Text style={styles.saveButtonText}>저장</Text>
-                  </Pressable>
+                  {renderSaveFooter()}
                 </>
               )}
 
@@ -1125,6 +1184,16 @@ const styles = StyleSheet.create({
     backgroundColor: '#111111',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  saveButtonDisabled: {
+    opacity: 0.6,
+  },
+  saveErrorText: {
+    marginTop: 12,
+    fontSize: 13.5,
+    lineHeight: 19,
+    fontWeight: '500',
+    color: '#DC2626',
   },
   saveButtonText: {
     fontSize: 15,
