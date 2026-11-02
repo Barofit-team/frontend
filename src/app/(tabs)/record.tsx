@@ -5,10 +5,12 @@
  *  - 이전/다음 달, 연도·월 선택(휠) → 해당 월 상태 갱신, 선택 날짜는 오늘(그 달이면) 또는 1일
  *  - 날짜 선택 → 일일 운동일지 목록 초기화 + 맨 위로 이동 후 첫 4개 표시
  *  - 목록 하단 도달 → 4개씩 추가, 마지막 기록 이후에는 더 불러오지 않음
+ *  - 다른 탭·화면에서 돌아오면(포커스) 보고 있던 월의 달력과 선택 날짜의 일지를 다시 조회
  *
- * 데이터: services/workoutRecordService.ts ([Mock] mocks/workoutRecords.ts — API 연동 시 서비스만 교체)
+ * 데이터: services/workoutRecordService.ts (Report API — GET /api/v1/reports/calendar, /api/v1/reports/dates/{date})
  * 리포트 상세 화면은 이번 범위 밖입니다 (리포트 보기 → 준비 중 안내).
  */
+import { useFocusEffect } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -52,9 +54,25 @@ export default function MonthlyWorkoutRecordsScreen() {
   const [pickerVisible, setPickerVisible] = useState(false);
   const listRef = useRef<FlatList<DailyWorkoutRecord>>(null);
 
-  const { statuses } = useMonthlyWorkoutStatus(yearMonth);
-  const { records, hasNext, isLoading, error, loadMore, retry } = useDailyWorkoutRecords(selectedDate);
+  const {
+    statuses,
+    error: calendarError,
+    retry: retryCalendar,
+    refresh: refreshCalendar,
+  } = useMonthlyWorkoutStatus(yearMonth);
+  const { records, hasNext, isLoading, error, loadMore, retry, refresh: refreshRecords } =
+    useDailyWorkoutRecords(selectedDate);
   const monthOptions = useMemo(() => buildMonthOptions(yearMonth), [yearMonth]);
+
+  // 탭에 들어올 때마다 최신 기록으로 다시 조회 (운동 완료 후 돌아온 경우 등).
+  // 두 refresh는 안정적인 함수라 포커스될 때만 실행되고, 이미 같은 요청이 진행 중이면 무시합니다.
+  // 첫 진입 때는 각 훅의 마운트 조회가 먼저 시작되므로 여기서 중복 요청이 나가지 않습니다.
+  useFocusEffect(
+    useCallback(() => {
+      refreshCalendar();
+      refreshRecords();
+    }, [refreshCalendar, refreshRecords])
+  );
 
   // 날짜가 바뀌면 목록을 맨 위로
   useEffect(() => {
@@ -122,6 +140,16 @@ export default function MonthlyWorkoutRecordsScreen() {
           todayKey={todayKey}
           onSelectDate={setSelectedDate}
         />
+
+        {calendarError ? (
+          <Pressable
+            accessibilityRole="button"
+            onPress={retryCalendar}
+            hitSlop={8}
+            style={styles.calendarError}>
+            <Text style={styles.retryText}>{calendarError} 다시 시도</Text>
+          </Pressable>
+        ) : null}
       </View>
 
       <Text style={styles.sectionTitle} accessibilityRole="header">
@@ -269,6 +297,7 @@ const styles = StyleSheet.create({
   retryText: { fontSize: 13, fontWeight: '600', color: RecordColors.text, textDecorationLine: 'underline' },
   loading: { marginVertical: 20 },
   footer: { marginTop: 16, alignSelf: 'center' },
+  calendarError: { marginTop: 12, alignSelf: 'center' },
   footerText: { fontSize: 12, color: RecordColors.textSecondary },
   pressed: { opacity: 0.6 },
 });
