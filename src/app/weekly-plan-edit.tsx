@@ -9,7 +9,10 @@ import {
   Text,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import {
+  SafeAreaView,
+  useSafeAreaInsets,
+} from 'react-native-safe-area-context';
 
 import {
   ArrowLeftIcon,
@@ -39,44 +42,6 @@ interface RoutinePresetOption {
   exercises: PlannedExerciseItem[];
 }
 
-const DEFAULT_ROUTINE_OPTIONS: RoutinePresetOption[] = [
-  {
-    id: 'preset-basic',
-    title: '가볍게 시작할 수 있는 기초 루틴',
-    exerciseCount: 3,
-    durationMinutes: 20,
-    calories: 150,
-    exercises: [
-      { id: 'ex-squat', exerciseId: 'squat', name: '스쿼트' },
-      { id: 'ex-pushup', exerciseId: 'pushup', name: '푸쉬업' },
-      { id: 'ex-diamond', exerciseId: 'pushup', name: '다이아몬드\n푸쉬업' },
-    ],
-  },
-  {
-    id: 'preset-endurance',
-    title: '인내의 시간을 견디는 루틴',
-    exerciseCount: 2,
-    durationMinutes: 15,
-    calories: 120,
-    exercises: [
-      { id: 'ex-squat-2', exerciseId: 'squat', name: '스쿼트' },
-      { id: 'ex-plank-2', exerciseId: 'plank', name: '플랭크' },
-    ],
-  },
-  {
-    id: 'preset-fullbody',
-    title: '전신 칼로리 버닝 루틴',
-    exerciseCount: 3,
-    durationMinutes: 25,
-    calories: 210,
-    exercises: [
-      { id: 'ex-pushup-3', exerciseId: 'pushup', name: '푸쉬업' },
-      { id: 'ex-squat-3', exerciseId: 'squat', name: '스쿼트' },
-      { id: 'ex-plank-3', exerciseId: 'plank', name: '플랭크' },
-    ],
-  },
-];
-
 function createPlanItemForDay(
   day: WeeklyCalendarDay,
   option: RoutinePresetOption,
@@ -100,6 +65,7 @@ function createPlanItemForDay(
 }
 
 export default function WeeklyPlanEditScreen() {
+  const insets = useSafeAreaInsets();
   const weekDays = useWeeklyPlanStore((state) => state.weekDays);
   const planItems = useWeeklyPlanStore((state) => state.planItems);
   const recommendedRoutines = useWeeklyPlanStore(
@@ -128,6 +94,9 @@ export default function WeeklyPlanEditScreen() {
   const [pickerTargetDay, setPickerTargetDay] =
     useState<WeeklyCalendarDay | null>(null);
 
+  // 저장 중 상태
+  const [isSaving, setIsSaving] = useState(false);
+
   useEffect(() => {
     const next: Record<string, WeeklyPlanDayItem> = {};
     for (const item of planItems) {
@@ -137,22 +106,14 @@ export default function WeeklyPlanEditScreen() {
   }, [planItems]);
 
   const routineOptions = useMemo<RoutinePresetOption[]>(() => {
-    if (recommendedRoutines.length === 0) {
-      return DEFAULT_ROUTINE_OPTIONS;
-    }
-    const mapped: RoutinePresetOption[] = recommendedRoutines.map((rec) => ({
+    return recommendedRoutines.map((rec) => ({
       id: rec.id,
       title: rec.title,
       exerciseCount: rec.exerciseCount,
       durationMinutes: rec.durationMinutes,
       calories: rec.calories,
-      exercises: [
-        { id: `${rec.id}-1`, name: '스쿼트' },
-        { id: `${rec.id}-2`, name: '푸쉬업' },
-        { id: `${rec.id}-3`, name: '플랭크' },
-      ].slice(0, Math.max(1, rec.exerciseCount)),
+      exercises: rec.exercises ?? [],
     }));
-    return [...mapped, ...DEFAULT_ROUTINE_OPTIONS];
   }, [recommendedRoutines]);
 
   const handleBack = () => {
@@ -163,7 +124,10 @@ export default function WeeklyPlanEditScreen() {
     router.replace('/weekly-plan');
   };
 
-  const handleComplete = () => {
+  const handleComplete = async () => {
+    if (isSaving) return;
+    setIsSaving(true);
+
     const updatedList = weekDays
       .map((day) => draftByDate[day.date])
       .filter((item): item is WeeklyPlanDayItem => Boolean(item));
@@ -171,16 +135,29 @@ export default function WeeklyPlanEditScreen() {
     setPlanItems(updatedList);
 
     // 백엔드 workout-plans 상태 동기화
+    const syncPromises: Promise<void>[] = [];
     for (const day of weekDays) {
       if (isPastDay(day.date)) continue;
       const initialItem = planItems.find((p) => p.date === day.date);
       const nextItem = draftByDate[day.date];
       if (initialItem?.routineId !== nextItem?.routineId) {
-        void syncWeeklyPlanAssignment(day.date, nextItem?.routineId ?? null);
+        syncPromises.push(
+          syncWeeklyPlanAssignment(day.date, nextItem?.routineId ?? null),
+        );
       }
     }
 
-    handleBack();
+    try {
+      if (syncPromises.length > 0) {
+        await Promise.all(syncPromises);
+      }
+      await useWeeklyPlanStore.getState().loadWeeklyPlan();
+    } catch (e) {
+      console.warn('[WeeklyPlanEdit] 운동 계획 동기화 실패:', e);
+    } finally {
+      setIsSaving(false);
+      handleBack();
+    }
   };
 
   const swapOrMoveBetweenDays = (
@@ -306,13 +283,16 @@ export default function WeeklyPlanEditScreen() {
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="주간 계획 편집 완료"
+          disabled={isSaving}
           hitSlop={10}
           onPress={handleComplete}
           style={({ pressed }) => [
             styles.completeButton,
-            pressed && styles.pressed,
+            (pressed || isSaving) && styles.pressed,
           ]}>
-          <Text style={styles.completeButtonText}>완료</Text>
+          <Text style={styles.completeButtonText}>
+            {isSaving ? '저장 중...' : '완료'}
+          </Text>
         </Pressable>
       </View>
 
@@ -492,7 +472,10 @@ export default function WeeklyPlanEditScreen() {
           style={styles.modalBackdrop}
           onPress={() => setPickerTargetDay(null)}>
           <Pressable
-            style={styles.modalSheet}
+            style={[
+              styles.modalSheet,
+              { paddingBottom: Math.max(insets.bottom, 20) },
+            ]}
             onPress={(e) => e.stopPropagation()}>
             <View style={styles.sheetHeader}>
               <Text style={styles.sheetTitle}>
@@ -507,49 +490,62 @@ export default function WeeklyPlanEditScreen() {
               </Pressable>
             </View>
 
-            <View style={styles.optionList}>
-              {routineOptions.map((option) => (
-                <Pressable
-                  key={option.id}
-                  accessibilityRole="button"
-                  onPress={() => handleSelectRoutineOption(option)}
-                  style={({ pressed }) => [
-                    styles.optionCard,
-                    pressed && styles.pressed,
-                  ]}>
-                  <Text style={styles.optionTitle}>{option.title}</Text>
-                  <View style={styles.routineMetaRow}>
-                    <View style={styles.metaItem}>
-                      <DumbbellIcon color="#9CA3AF" size={13} />
-                      <Text style={styles.metaText}>
-                        <Text style={styles.metaValue}>
-                          {option.exerciseCount}
-                        </Text>{' '}
-                        종목
-                      </Text>
-                    </View>
-                    <View style={styles.metaDivider} />
-                    <View style={styles.metaItem}>
-                      <StopwatchIcon color="#9CA3AF" size={13} />
-                      <Text style={styles.metaText}>
-                        <Text style={styles.metaValue}>
-                          {option.durationMinutes}
-                        </Text>{' '}
-                        분
-                      </Text>
-                    </View>
-                    <View style={styles.metaDivider} />
-                    <View style={styles.metaItem}>
-                      <FlameIcon color="#9CA3AF" size={13} />
-                      <Text style={styles.metaText}>
-                        <Text style={styles.metaValue}>{option.calories}</Text>{' '}
-                        kcal
-                      </Text>
-                    </View>
+            <ScrollView
+              style={styles.sheetScrollView}
+              contentContainerStyle={styles.sheetScrollContent}
+              showsVerticalScrollIndicator={true}>
+              <View style={styles.optionList}>
+                {routineOptions.length === 0 ? (
+                  <View style={styles.emptyOptionContainer}>
+                    <Text style={styles.emptyOptionText}>
+                      불러올 수 있는 운동 루틴 템플릿이 없습니다.
+                    </Text>
                   </View>
-                </Pressable>
-              ))}
-            </View>
+                ) : (
+                  routineOptions.map((option) => (
+                    <Pressable
+                      key={option.id}
+                      accessibilityRole="button"
+                      onPress={() => handleSelectRoutineOption(option)}
+                      style={({ pressed }) => [
+                        styles.optionCard,
+                        pressed && styles.pressed,
+                      ]}>
+                      <Text style={styles.optionTitle}>{option.title}</Text>
+                      <View style={styles.routineMetaRow}>
+                        <View style={styles.metaItem}>
+                          <DumbbellIcon color="#9CA3AF" size={13} />
+                          <Text style={styles.metaText}>
+                            <Text style={styles.metaValue}>
+                              {option.exerciseCount}
+                            </Text>{' '}
+                            종목
+                          </Text>
+                        </View>
+                        <View style={styles.metaDivider} />
+                        <View style={styles.metaItem}>
+                          <StopwatchIcon color="#9CA3AF" size={13} />
+                          <Text style={styles.metaText}>
+                            <Text style={styles.metaValue}>
+                              {option.durationMinutes}
+                            </Text>{' '}
+                            분
+                          </Text>
+                        </View>
+                        <View style={styles.metaDivider} />
+                        <View style={styles.metaItem}>
+                          <FlameIcon color="#9CA3AF" size={13} />
+                          <Text style={styles.metaText}>
+                            <Text style={styles.metaValue}>{option.calories}</Text>{' '}
+                            kcal
+                          </Text>
+                        </View>
+                      </View>
+                    </Pressable>
+                  ))
+                )}
+              </View>
+            </ScrollView>
 
             {pickerTargetDay && draftByDate[pickerTargetDay.date] ? (
               <Pressable
@@ -736,7 +732,7 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 22,
     paddingHorizontal: 20,
     paddingTop: 22,
-    paddingBottom: 36,
+    maxHeight: '80%',
   },
   sheetHeader: {
     flexDirection: 'row',
@@ -755,8 +751,25 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     color: '#71717A',
   },
+  sheetScrollView: {
+    flexGrow: 0,
+    flexShrink: 1,
+  },
+  sheetScrollContent: {
+    paddingBottom: 12,
+  },
   optionList: {
     gap: 10,
+  },
+  emptyOptionContainer: {
+    paddingVertical: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  emptyOptionText: {
+    fontSize: 14,
+    color: '#6B7280',
+    textAlign: 'center',
   },
   optionCard: {
     backgroundColor: '#F3F4F6',

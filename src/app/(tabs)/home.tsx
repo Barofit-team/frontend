@@ -1,6 +1,6 @@
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import React, { useEffect } from 'react';
+import React, { useCallback, useEffect } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -65,11 +65,11 @@ export default function HomeScreen() {
   const setSelectedDate = useWeeklyPlanStore((state) => state.setSelectedDate);
   const loadWeeklyPlan = useWeeklyPlanStore((state) => state.loadWeeklyPlan);
 
-  useEffect(() => {
-    if (!hasLoaded) {
+  useFocusEffect(
+    useCallback(() => {
       void loadWeeklyPlan();
-    }
-  }, [hasLoaded, loadWeeklyPlan]);
+    }, [loadWeeklyPlan]),
+  );
 
   const displayName =
     authUser?.nickname?.trim() ||
@@ -93,31 +93,11 @@ export default function HomeScreen() {
     routineId?: string,
     isTemplate: boolean = false,
   ) => {
-    setRoutineTitle(
-      title || selectedDayPlan?.title || '가볍게 시작할 수 있는 기초 루틴',
-    );
-    if (routineId) {
-      const isUuid =
-        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-          routineId,
-        );
-      if (isUuid) {
-        void (async () => {
-          try {
-            const detail = isTemplate
-              ? await getRoutineTemplateDetail(routineId)
-              : await getUserRoutineDetail(routineId).catch(() =>
-                  getRoutineTemplateDetail(routineId),
-                );
-            if (detail) {
-              useTodayRoutineStore.getState().loadFromRoutineDetail(detail);
-            }
-          } catch {
-            // 조회 실패 시 기본 세션 유지
-          }
-        })();
-      }
-    }
+    void useTodayRoutineStore.getState().prepareRoutine({
+      title: title || selectedDayPlan?.title,
+      routineId,
+      isTemplate,
+    });
     router.push('/today-routine', { dangerouslySingular: true });
   };
 

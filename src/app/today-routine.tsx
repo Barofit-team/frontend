@@ -39,16 +39,17 @@ export default function TodayRoutineScreen() {
   );
   const sessions = useTodayRoutineStore((state) => state.sessions);
   const currentRoutine = useTodayRoutineStore((state) => state.currentRoutine);
+  const isLoading = useTodayRoutineStore((state) => state.isLoading);
   const loadTodayRoutine = useTodayRoutineStore(
     (state) => state.loadTodayRoutine,
   );
   const updateSession = useTodayRoutineStore((state) => state.updateSession);
 
   useEffect(() => {
-    if (!currentRoutine) {
+    if (!currentRoutine && !isLoading) {
       void loadTodayRoutine();
     }
-  }, [currentRoutine, loadTodayRoutine]);
+  }, [currentRoutine, isLoading, loadTodayRoutine]);
 
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [draftSets, setDraftSets] = useState<number>(3);

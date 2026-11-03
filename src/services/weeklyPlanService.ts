@@ -103,11 +103,11 @@ export function estimateRoutineMetrics(routine: BackendRoutineDetail): {
 } {
   let totalSeconds = 0;
 
-  for (const exercise of routine.exercises) {
-    for (const set of exercise.sets) {
+  for (const exercise of routine?.exercises ?? []) {
+    for (const set of exercise?.sets ?? []) {
       const activeSeconds =
-        set.targetDurationSeconds ?? (set.targetReps ?? 10) * 3;
-      totalSeconds += activeSeconds + (set.restSeconds ?? 60);
+        set?.targetDurationSeconds ?? (set?.targetReps ?? 10) * 3;
+      totalSeconds += activeSeconds + (set?.restSeconds ?? 60);
     }
   }
 
@@ -165,16 +165,22 @@ export function mapTemplateToRecommendedRoutine(
     templateId: template.id,
     category: categoryLabel,
     title: template.name,
-    exerciseCount: template.exercises.length,
+    exerciseCount: template.exercises?.length ?? 0,
     durationMinutes,
     calories,
+    exercises:
+      template.exercises?.map((exercise) => ({
+        id: exercise.id,
+        exerciseId: exercise.exerciseId,
+        name: exercise.name,
+      })) ?? [],
   };
 }
 
 /**
  * 사용자의 이번 주 운동 계획 목록을 서버에서 조회합니다.
  * 1. 백엔드 Workout Plan API (`GET /api/v1/workout-plans?weekStart=...`) 우선 조회
- * 2. 계획이 배정되지 않은 경우 내 루틴 목록(/api/v1/routines) 조회 후 매핑
+ * 2. workout-plans API 호출 실패(엔드포인트 미지원 등) 시에만 내 루틴 목록(/api/v1/routines) fallback
  */
 export async function fetchWeeklyPlanItems(
   baseDate: Date = new Date(),
@@ -192,26 +198,25 @@ export async function fetchWeeklyPlanItems(
     const weekPlan: WorkoutPlanWeek = await getWorkoutPlanWeek(weekStartIso);
     if (weekPlan && Array.isArray(weekPlan.days)) {
       const assignedDays = weekPlan.days.filter((day) => day.routine !== null);
-      if (assignedDays.length > 0) {
-        return assignedDays.map((day) => {
-          const routine = day.routine!;
-          const targetDate = new Date(`${day.date}T00:00:00`);
-          const item = mapRoutineToWeeklyPlanDayItem(routine, targetDate);
-          if (day.estimatedMinutes != null) {
-            item.durationMinutes = day.estimatedMinutes;
-          }
-          if (day.estimatedKcal != null) {
-            item.calories = day.estimatedKcal;
-          }
-          return item;
-        });
-      }
+      return assignedDays.map((day) => {
+        const routine = day.routine!;
+        const [y, m, d] = day.date.split('-').map(Number);
+        const targetDate = new Date(y, (m || 1) - 1, d || 1);
+        const item = mapRoutineToWeeklyPlanDayItem(routine, targetDate);
+        if (day.estimatedMinutes != null) {
+          item.durationMinutes = day.estimatedMinutes;
+        }
+        if (day.estimatedKcal != null) {
+          item.calories = day.estimatedKcal;
+        }
+        return item;
+      });
     }
   } catch {
-    // workout-plans 조회 실패 시 내 루틴 fallback 시도
+    // workout-plans 엔드포인트 미지원 시에만 내 루틴 fallback 시도
   }
 
-  // 2차: 등록된 사용자 루틴 목록 조회
+  // 2차 fallback: 등록된 사용자 루틴 목록 조회
   try {
     const page = await getUserRoutines(0, 20);
     if (!page.content || page.content.length === 0) {
@@ -275,6 +280,11 @@ export async function syncWeeklyPlanAssignment(
   routineId: string | null,
 ): Promise<void> {
   try {
+    const isIsoDate = /^\d{4}-\d{2}-\d{2}$/.test(dateIso);
+    if (!isIsoDate) {
+      return;
+    }
+
     if (routineId) {
       const isUuid =
         /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(

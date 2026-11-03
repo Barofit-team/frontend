@@ -1,6 +1,6 @@
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import React, { useEffect } from 'react';
+import React, { useCallback } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -26,11 +26,11 @@ export default function WeeklyPlanScreen() {
   const hasLoaded = useWeeklyPlanStore((state) => state.hasLoaded);
   const loadWeeklyPlan = useWeeklyPlanStore((state) => state.loadWeeklyPlan);
 
-  useEffect(() => {
-    if (!hasLoaded) {
+  useFocusEffect(
+    useCallback(() => {
       void loadWeeklyPlan();
-    }
-  }, [hasLoaded, loadWeeklyPlan]);
+    }, [loadWeeklyPlan]),
+  );
 
   const handleBack = () => {
     if (router.canGoBack()) {

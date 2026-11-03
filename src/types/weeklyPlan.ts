@@ -72,6 +72,7 @@ export interface RecommendedRoutineItem {
   exerciseCount: number;
   durationMinutes: number;
   calories: number;
+  exercises?: PlannedExerciseItem[];
 }
 
 /**
