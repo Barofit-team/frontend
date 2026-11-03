@@ -1,6 +1,6 @@
 import { router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Modal,
   Pressable,
@@ -38,7 +38,17 @@ export default function TodayRoutineScreen() {
     (state) => state.interExerciseRestSeconds,
   );
   const sessions = useTodayRoutineStore((state) => state.sessions);
+  const currentRoutine = useTodayRoutineStore((state) => state.currentRoutine);
+  const loadTodayRoutine = useTodayRoutineStore(
+    (state) => state.loadTodayRoutine,
+  );
   const updateSession = useTodayRoutineStore((state) => state.updateSession);
+
+  useEffect(() => {
+    if (!currentRoutine) {
+      void loadTodayRoutine();
+    }
+  }, [currentRoutine, loadTodayRoutine]);
 
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [draftSets, setDraftSets] = useState<number>(3);

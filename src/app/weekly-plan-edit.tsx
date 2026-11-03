@@ -19,7 +19,10 @@ import {
   PlusIcon,
   StopwatchIcon,
 } from '@/components/home/HomeIcons';
-import { toIsoDateString } from '@/services/weeklyPlanService';
+import {
+  syncWeeklyPlanAssignment,
+  toIsoDateString,
+} from '@/services/weeklyPlanService';
 import { useWeeklyPlanStore } from '@/stores/useWeeklyPlanStore';
 import type {
   PlannedExerciseItem,
@@ -166,6 +169,17 @@ export default function WeeklyPlanEditScreen() {
       .filter((item): item is WeeklyPlanDayItem => Boolean(item));
 
     setPlanItems(updatedList);
+
+    // 백엔드 workout-plans 상태 동기화
+    for (const day of weekDays) {
+      if (isPastDay(day.date)) continue;
+      const initialItem = planItems.find((p) => p.date === day.date);
+      const nextItem = draftByDate[day.date];
+      if (initialItem?.routineId !== nextItem?.routineId) {
+        void syncWeeklyPlanAssignment(day.date, nextItem?.routineId ?? null);
+      }
+    }
+
     handleBack();
   };
 

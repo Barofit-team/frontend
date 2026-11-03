@@ -1,6 +1,30 @@
-export type RoutineCategoryCode = 'FULL_BODY' | 'LOWER_BODY' | 'CORE';
-export type RoutineDifficultyCode = 'BEGINNER' | 'INTERMEDIATE' | 'ADVANCED';
-export type MeasurementTypeCode = 'REPS' | 'DURATION';
+export type {
+  RoutineDifficultyCode,
+  RoutineCategoryCode,
+  MeasurementTypeCode,
+  RoutineSetDetail,
+  RoutineExerciseDetail,
+  RoutineDetail,
+  RoutineSummary,
+  RoutinePage,
+  WorkoutPlanStep,
+  WorkoutPlanDay,
+  WorkoutPlanWeek,
+  WeeklyGoalProgress,
+  AssignWorkoutPlanRequest,
+  CreateRoutineExerciseInput,
+  CreateUserRoutineRequest,
+  UpdateRoutineExerciseInput,
+  UpdateUserRoutineRequest,
+} from './routine';
+
+import type {
+  RoutineSetDetail,
+  RoutineExerciseDetail,
+  RoutineDetail,
+  RoutineSummary,
+  RoutinePage,
+} from './routine';
 
 export interface PlannedExerciseItem {
   id: string;
@@ -51,59 +75,10 @@ export interface RecommendedRoutineItem {
 }
 
 /**
- * 백엔드 Routine Service (/api/v1/routines, /api/v1/routine-templates) 응답 규격
+ * 하위 호환성을 위한 기존 백엔드 Routine Service 응답 규격 별칭
  */
-export interface BackendRoutineSetDetail {
-  id: string;
-  order: number;
-  targetReps: number | null;
-  targetDurationSeconds: number | null;
-  weightKg: number;
-  restSeconds: number;
-}
-
-export interface BackendRoutineExerciseDetail {
-  id: string;
-  exerciseId: string;
-  name: string;
-  measurementType: MeasurementTypeCode;
-  order: number;
-  preparation: string;
-  instructions: string;
-  precautions: string;
-  introTtsText: string;
-  sets: BackendRoutineSetDetail[];
-}
-
-export interface BackendRoutineDetail {
-  id: string;
-  name: string;
-  description: string | null;
-  difficulty: RoutineDifficultyCode;
-  type: 'USER' | 'TEMPLATE';
-  templateId: string | null;
-  category: RoutineCategoryCode | null;
-  exercises: BackendRoutineExerciseDetail[];
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface BackendRoutineSummary {
-  id: string;
-  name: string;
-  difficulty: RoutineDifficultyCode;
-  templateId: string | null;
-  category: RoutineCategoryCode | null;
-  exerciseCount: number;
-  totalSetCount: number;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface BackendRoutinePage {
-  content: BackendRoutineSummary[];
-  page: number;
-  size: number;
-  totalElements: number;
-  totalPages: number;
-}
+export type BackendRoutineSetDetail = RoutineSetDetail;
+export type BackendRoutineExerciseDetail = RoutineExerciseDetail;
+export type BackendRoutineDetail = RoutineDetail;
+export type BackendRoutineSummary = RoutineSummary;
+export type BackendRoutinePage = RoutinePage;

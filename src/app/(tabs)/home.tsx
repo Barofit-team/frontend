@@ -17,6 +17,10 @@ import {
   FlameIcon,
   StopwatchIcon,
 } from '@/components/home/HomeIcons';
+import {
+  getRoutineTemplateDetail,
+  getUserRoutineDetail,
+} from '@/services/routineService';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useOnboardingStore } from '@/stores/useOnboardingStore';
 import { useTodayRoutineStore } from '@/stores/useTodayRoutineStore';
@@ -84,10 +88,36 @@ export default function HomeScreen() {
   );
 
   // dangerouslySingular: 버튼을 연달아 눌러도 오늘의 운동 루틴 화면이 스택에 중복으로 쌓이지 않게 함
-  const openTodayRoutine = (title?: string) => {
+  const openTodayRoutine = (
+    title?: string,
+    routineId?: string,
+    isTemplate: boolean = false,
+  ) => {
     setRoutineTitle(
       title || selectedDayPlan?.title || '가볍게 시작할 수 있는 기초 루틴',
     );
+    if (routineId) {
+      const isUuid =
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+          routineId,
+        );
+      if (isUuid) {
+        void (async () => {
+          try {
+            const detail = isTemplate
+              ? await getRoutineTemplateDetail(routineId)
+              : await getUserRoutineDetail(routineId).catch(() =>
+                  getRoutineTemplateDetail(routineId),
+                );
+            if (detail) {
+              useTodayRoutineStore.getState().loadFromRoutineDetail(detail);
+            }
+          } catch {
+            // 조회 실패 시 기본 세션 유지
+          }
+        })();
+      }
+    }
     router.push('/today-routine', { dangerouslySingular: true });
   };
 
@@ -234,7 +264,12 @@ export default function HomeScreen() {
               {/* 오늘의 운동 확인 CTA 버튼 */}
               <Pressable
                 accessibilityRole="button"
-                onPress={() => openTodayRoutine(selectedDayPlan.title)}
+                onPress={() =>
+                  openTodayRoutine(
+                    selectedDayPlan.title,
+                    selectedDayPlan.routineId,
+                  )
+                }
                 style={({ pressed }) => [
                   styles.startWorkoutButton,
                   pressed && styles.pressed,
@@ -280,7 +315,13 @@ export default function HomeScreen() {
                 <Pressable
                   key={item.id}
                   accessibilityRole="button"
-                  onPress={() => openTodayRoutine(item.title)}
+                  onPress={() =>
+                    openTodayRoutine(
+                      item.title,
+                      item.templateId ?? item.id,
+                      true,
+                    )
+                  }
                   style={({ pressed }) => [
                     styles.recommendCard,
                     pressed && styles.pressed,
