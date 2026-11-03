@@ -4,6 +4,7 @@ import type {
   NicknameAvailabilityResponse,
   NicknameResponse,
   OnboardingRequest,
+  ProfileUpdateRequest,
 } from '@/types/onboarding';
 
 /**
@@ -52,6 +53,18 @@ export function checkNicknameAvailability(
 export function submitOnboarding(payload: OnboardingRequest): Promise<MeResponse> {
   return apiFetch<MeResponse>('/api/v1/users/me/onboarding', {
     method: 'POST',
+    auth: true,
+    body: JSON.stringify(payload),
+  });
+}
+
+/**
+ * 온보딩 후 프로필 수정 (보낸 항목만 변경)
+ * PATCH /api/v1/users/me/profile
+ */
+export function updateMyProfile(payload: ProfileUpdateRequest): Promise<MeResponse> {
+  return apiFetch<MeResponse>('/api/v1/users/me/profile', {
+    method: 'PATCH',
     auth: true,
     body: JSON.stringify(payload),
   });
