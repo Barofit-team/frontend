@@ -85,6 +85,12 @@ export interface OnboardingRequest {
   coachingStyle: CoachingStyle;
 }
 
+/**
+ * PATCH /api/v1/users/me/profile 요청 바디 (온보딩 후 프로필 수정)
+ * 바꿀 항목만 보냅니다. 생략한 항목은 서버 값이 유지됩니다. 불편 부위 '해당 없음'은 빈 배열 []
+ */
+export type ProfileUpdateRequest = Partial<OnboardingRequest>;
+
 /** GET /api/v1/users/me 및 POST /api/v1/users/me/onboarding 의 profile 필드 */
 export interface ProfileResponse {
   gender: Gender;
@@ -98,7 +104,7 @@ export interface ProfileResponse {
   coachingStyle: CoachingStyle;
 }
 
-/** GET /api/v1/users/me 및 POST /api/v1/users/me/onboarding 응답 */
+/** GET /api/v1/users/me, POST /api/v1/users/me/onboarding, PATCH /api/v1/users/me/profile 응답 */
 export interface MeResponse {
   id: string;
   nickname: string | null;
