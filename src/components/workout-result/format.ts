@@ -12,3 +12,11 @@ export function formatShortDate(isoDate: string): string {
   if (!month || !day) return isoDate;
   return `${Number(month)}/${Number(day)}`;
 }
+
+/**
+ * 자세 점수 표시값 (정수 반올림). 서버 점수는 0~100 실수이며 원본 값은 바꾸지 않고 화면 출력에만 씁니다.
+ * 예) 66.66666666666667 → "67", 84 → "84"
+ */
+export function formatScore(score: number): string {
+  return String(Math.round(score));
+}

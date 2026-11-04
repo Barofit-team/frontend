@@ -20,6 +20,8 @@ export interface ExerciseResult {
   goodFeedback?: string;
   /** 개선할 점 (API 결과에서 리포트가 없으면 비워 두고 표시하지 않음) */
   improvementFeedback?: string;
+  /** 다음 운동 목표 (API 리포트의 종목별 nextGoal. 없으면 표시하지 않음) */
+  nextGoal?: string;
   /** 주요 자세 오류 (없으면 표시하지 않음) */
   mainError?: string;
   /** 주요 자세 오류 발생 횟수 */

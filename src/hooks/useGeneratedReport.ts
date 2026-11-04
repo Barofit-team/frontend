@@ -48,7 +48,7 @@ export function useGeneratedReport(sessionId: string | null | undefined) {
             queryKey,
             key,
             report: null,
-            error: toWorkoutRecordErrorMessage(error, '운동기록'),
+            error: toWorkoutRecordErrorMessage(error, 'AI 리포트'),
             notFound: error instanceof ApiError && error.status === 404,
           });
         }

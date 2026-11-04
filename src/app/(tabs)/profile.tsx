@@ -19,9 +19,7 @@ import {
 } from 'react-native-safe-area-context';
 
 import {
-  CheckCircleSolidIcon,
   ChevronRightIcon,
-  FlameSolidIcon,
   GearIcon,
   SolidPencilIcon,
 } from '@/components/home/HomeIcons';
@@ -78,7 +76,8 @@ function toProfileUpdateMessage(error: unknown): string {
     case 'INVALID_INPUT':
       return '입력한 값을 다시 확인해 주세요.';
     default:
-      return error.message || '프로필을 저장하지 못했어요. 다시 시도해 주세요.';
+      // 서버 detail·네트워크 오류 원문(서버 주소 포함)은 화면에 보여주지 않습니다
+      return '프로필을 저장하지 못했어요. 다시 시도해 주세요.';
   }
 }
 
@@ -426,12 +425,9 @@ export default function ProfileScreen() {
       await withdraw();
       setActiveField(null);
       router.replace('/login');
-    } catch (error) {
-      const message =
-        error instanceof ApiError && error.message
-          ? error.message
-          : '회원 탈퇴 처리 중 문제가 발생했어요. 네트워크 연결을 확인한 뒤 다시 시도해 주세요.';
-      setWithdrawError(message);
+    } catch {
+      // 서버 detail·네트워크 오류 원문은 화면에 보여주지 않고 기존 안내 문구를 씁니다
+      setWithdrawError('회원 탈퇴 처리 중 문제가 발생했어요. 네트워크 연결을 확인한 뒤 다시 시도해 주세요.');
     } finally {
       setIsWithdrawing(false);
     }
@@ -541,24 +537,7 @@ export default function ProfileScreen() {
           </Pressable>
         </View>
 
-        {/* 3. 운동 완료일 & Streak Day 요약 카드 */}
-        <View style={styles.statsRow}>
-          <View style={styles.statCard}>
-            <Text style={styles.statLabel}>운동 완료일</Text>
-            <View style={styles.statValueRow}>
-              <CheckCircleSolidIcon color="#111111" size={20} />
-              <Text style={styles.statValueText}>57일</Text>
-            </View>
-          </View>
-
-          <View style={styles.statCard}>
-            <Text style={styles.statLabel}>Streak Day</Text>
-            <View style={styles.statValueRow}>
-              <FlameSolidIcon color="#111111" size={20} />
-              <Text style={styles.statValueText}>12일</Text>
-            </View>
-          </View>
-        </View>
+        {/* 3. 운동 완료일·Streak Day 요약 카드: 실제 데이터 출처가 정해질 때까지 표시하지 않습니다 (하드코딩 값 제거) */}
 
         {/* 4. 신체 정보 및 운동 설정 리스트 */}
         <View style={styles.infoList}>
@@ -962,36 +941,6 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#111111',
     letterSpacing: -0.4,
-  },
-  statsRow: {
-    flexDirection: 'row',
-    gap: 12,
-    marginTop: 26,
-  },
-  statCard: {
-    flex: 1,
-    backgroundColor: '#EAEAEA',
-    borderRadius: 16,
-    paddingHorizontal: 18,
-    paddingVertical: 18,
-  },
-  statLabel: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: '#111111',
-    letterSpacing: -0.2,
-  },
-  statValueRow: {
-    marginTop: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  statValueText: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: '#111111',
-    letterSpacing: -0.3,
   },
   infoList: {
     marginTop: 22,

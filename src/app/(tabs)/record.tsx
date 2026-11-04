@@ -6,11 +6,12 @@
  *  - 날짜 선택 → 일일 운동일지 목록 초기화 + 맨 위로 이동 후 첫 4개 표시
  *  - 목록 하단 도달 → 4개씩 추가, 마지막 기록 이후에는 더 불러오지 않음
  *  - 다른 탭·화면에서 돌아오면(포커스) 보고 있던 월의 달력과 선택 날짜의 일지를 다시 조회
+ *  - 리포트 보기 → 그 카드의 실제 sessionId로 F01(workout-result)을 엽니다. 미실행 계획(sessionId 없음)은 안내만 합니다.
+ *  - '오늘'은 서버와 같은 한국 시간(KST) 기준 날짜입니다 (기기 시간대와 무관)
  *
  * 데이터: services/workoutRecordService.ts (Report API — GET /api/v1/reports/calendar, /api/v1/reports/dates/{date})
- * 리포트 상세 화면은 이번 범위 밖입니다 (리포트 보기 → 준비 중 안내).
  */
-import { useFocusEffect } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -40,14 +41,20 @@ import { MonthPickerModal } from '@/components/workout-records/MonthPickerModal'
 import { RecordColors } from '@/components/workout-records/palette';
 import { useDailyWorkoutRecords } from '@/hooks/useDailyWorkoutRecords';
 import { useMonthlyWorkoutStatus } from '@/hooks/useMonthlyWorkoutStatus';
+import { toKstDateString } from '@/services/postureScoreService';
 import { toIsoDateString } from '@/services/weeklyPlanService';
 import { DAILY_RECORD_PAGE_SIZE } from '@/services/workoutRecordService';
+import { useWorkoutResultStore } from '@/stores/useWorkoutResultStore';
 import type { DailyWorkoutRecord } from '@/types/workoutRecord';
 
 export default function MonthlyWorkoutRecordsScreen() {
   const insets = useSafeAreaInsets();
-  const [today] = useState(() => new Date());
-  const todayKey = toIsoDateString(today);
+  // 서버(KST)와 같은 기준의 오늘. 달력 계산용 Date는 그 날짜의 기기 자정으로 만듭니다
+  const [todayKey] = useState(() => toKstDateString(new Date().toISOString()) ?? toIsoDateString(new Date()));
+  const today = useMemo(() => {
+    const [year, month, day] = todayKey.split('-').map(Number);
+    return new Date(year, month - 1, day);
+  }, [todayKey]);
 
   const [yearMonth, setYearMonth] = useState<YearMonth>(() => yearMonthOf(today));
   const [selectedDate, setSelectedDate] = useState(todayKey);
@@ -56,6 +63,7 @@ export default function MonthlyWorkoutRecordsScreen() {
 
   const {
     statuses,
+    isLoading: isCalendarLoading,
     error: calendarError,
     retry: retryCalendar,
     refresh: refreshCalendar,
@@ -87,9 +95,14 @@ export default function MonthlyWorkoutRecordsScreen() {
     [today]
   );
 
-  const handlePressReport = useCallback(() => {
-    // TODO: 리포트 상세 화면이 생기면 연결
-    Alert.alert('리포트 보기', '리포트 화면은 준비 중이에요.');
+  const handlePressReport = useCallback((record: DailyWorkoutRecord) => {
+    // 미실행 계획은 운동 세션이 없어 리포트가 없습니다 (임의 sessionId로 이동하지 않음)
+    if (!record.sessionId) {
+      Alert.alert('리포트 보기', '실행하지 않은 계획이라 리포트가 없어요.');
+      return;
+    }
+    useWorkoutResultStore.getState().openApiSession(record.sessionId);
+    router.push('/workout-result', { dangerouslySingular: true });
   }, []);
 
   const renderItem: ListRenderItem<DailyWorkoutRecord> = useCallback(
@@ -141,6 +154,13 @@ export default function MonthlyWorkoutRecordsScreen() {
           onSelectDate={setSelectedDate}
         />
 
+        {isCalendarLoading && !calendarError ? (
+          <ActivityIndicator
+            style={styles.calendarLoading}
+            color={RecordColors.textSecondary}
+            accessibilityLabel="운동 달력을 불러오는 중"
+          />
+        ) : null}
         {calendarError ? (
           <Pressable
             accessibilityRole="button"
@@ -298,6 +318,7 @@ const styles = StyleSheet.create({
   loading: { marginVertical: 20 },
   footer: { marginTop: 16, alignSelf: 'center' },
   calendarError: { marginTop: 12, alignSelf: 'center' },
+  calendarLoading: { marginTop: 12 },
   footerText: { fontSize: 12, color: RecordColors.textSecondary },
   pressed: { opacity: 0.6 },
 });

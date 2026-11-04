@@ -10,6 +10,7 @@
  *  - Mock 운동 결과(source 'mock'): 앱 메모리 보관 (API 요청 없음)
  *  - 실제 Workout 세션(source 'api'): Report API PUT /feedback.
  *    불편 부위 '있음'은 대응하는 API 코드가 정해지지 않아 저장할 수 없으며, 완료를 막고 사유를 안내합니다.
+ *    서버에 이미 화면에서 표현할 수 없는 불편 부위가 저장되어 있으면, 덮어쓰지 않도록 저장을 막고 안내합니다.
  */
 import { router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
@@ -25,12 +26,18 @@ import { useNavigationLock } from '@/components/workout-result/useNavigationLock
 import { difficultyLabel, discomfortAreaLabel } from '@/constants/workoutFeedback';
 import { toReportActionErrorMessage } from '@/services/reportFeedbackService';
 import { canSaveToReport, type FeedbackSaveTarget } from '@/services/workoutFeedbackService';
-import { isFeedbackComplete, useWorkoutFeedbackStore } from '@/stores/useWorkoutFeedbackStore';
+import {
+  hasUnrepresentableServerDiscomfort,
+  isFeedbackComplete,
+  useWorkoutFeedbackStore,
+} from '@/stores/useWorkoutFeedbackStore';
 import { useWorkoutResultStore } from '@/stores/useWorkoutResultStore';
 
 const NOT_SELECTED = '선택하지 않았어요';
 const DISCOMFORT_NOT_SUPPORTED =
   "불편 부위는 아직 서버에 저장할 수 없어요. 지금은 불편 부위가 '없음'인 피드백만 저장돼요.";
+const SERVER_DISCOMFORT_PRESERVED =
+  '이미 저장된 불편 부위 정보를 이 화면에서 표시할 수 없어, 기존 기록을 지키기 위해 지금은 수정할 수 없어요.';
 
 export default function WorkoutFeedbackConfirmScreen() {
   const insets = useSafeAreaInsets();
@@ -40,6 +47,7 @@ export default function WorkoutFeedbackConfirmScreen() {
     state.result?.source === 'api' ? 'api' : 'mock'
   );
   const storedDraft = useWorkoutFeedbackStore(state => state.draft);
+  const serverFeedback = useWorkoutFeedbackStore(state => (sessionId ? state.serverBySession[sessionId] : undefined));
   const submitDraft = useWorkoutFeedbackStore(state => state.submitDraft);
   const navigate = useNavigationLock();
 
@@ -52,6 +60,9 @@ export default function WorkoutFeedbackConfirmScreen() {
   const complete = isFeedbackComplete(draft);
   // 실제 세션 + 불편 부위 '있음': 현재 API 계약으로 저장 불가
   const unsupported = saveTarget === 'api' && draft !== null && complete && !canSaveToReport(draft);
+  // 실제 세션 + 서버에 표현할 수 없는 불편 부위가 저장됨: 저장하면 그 값을 덮어쓰므로 막습니다
+  const preservesServer = saveTarget === 'api' && hasUnrepresentableServerDiscomfort(serverFeedback);
+  const blockedReason = preservesServer ? SERVER_DISCOMFORT_PRESERVED : unsupported ? DISCOMFORT_NOT_SUPPORTED : null;
 
   const difficultyText = draft?.difficulty ? difficultyLabel(draft.difficulty) : NOT_SELECTED;
   const discomfortText =
@@ -67,7 +78,7 @@ export default function WorkoutFeedbackConfirmScreen() {
   };
 
   const finish = async () => {
-    if (submittingRef.current || !complete || unsupported) return;
+    if (submittingRef.current || !complete || blockedReason !== null) return;
     submittingRef.current = true;
     setSubmitting(true);
     setError(null);
@@ -106,9 +117,9 @@ export default function WorkoutFeedbackConfirmScreen() {
           onPress={reselect}
           style={styles.reselectButton}
         />
-        {unsupported && (
+        {blockedReason && (
           <Text style={styles.error} accessibilityLiveRegion="polite">
-            {DISCOMFORT_NOT_SUPPORTED}
+            {blockedReason}
           </Text>
         )}
         {error && (
@@ -119,7 +130,7 @@ export default function WorkoutFeedbackConfirmScreen() {
       </ScrollView>
 
       <View style={[styles.bottomBar, { paddingBottom: insets.bottom + 16 }]}>
-        <ResultButton title="완료" disabled={!complete || unsupported} loading={submitting} onPress={finish} />
+        <ResultButton title="완료" disabled={!complete || blockedReason !== null} loading={submitting} onPress={finish} />
       </View>
     </View>
   );

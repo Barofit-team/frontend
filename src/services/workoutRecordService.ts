@@ -41,20 +41,27 @@ export async function ensureAccessToken(): Promise<void> {
   }
 }
 
+/** 목적격 조사: 받침이 있으면 '을', 없으면 '를' */
+function objectParticle(word: string): '을' | '를' {
+  const code = word.charCodeAt(word.length - 1) - 0xac00;
+  return code >= 0 && code <= 11171 && code % 28 === 0 ? '를' : '을';
+}
+
 /**
  * 기록 탭 오류 문구. 인증(401)·권한(403)·네트워크 오류를 일반 오류와 구분합니다.
  * (정상적인 빈 기록은 오류가 아니라 빈 목록·빈 달력으로 옵니다)
  */
 export function toWorkoutRecordErrorMessage(
   error: unknown,
-  subject: '운동 달력' | '운동기록' | '자세 점수 기록'
+  subject: '운동 달력' | '운동기록' | '자세 점수 기록' | 'AI 리포트'
 ): string {
+  const target = `${subject}${objectParticle(subject)}`;
   if (error instanceof ApiError) {
-    if (error.status === 401) return `로그인 후 ${subject}을 볼 수 있어요.`;
-    if (error.status === 403) return `${subject}을 볼 권한이 없어요.`;
-    if (error.code === 'NETWORK_ERROR') return `서버에 연결할 수 없어 ${subject}을 불러오지 못했어요.`;
+    if (error.status === 401) return `로그인 후 ${target} 볼 수 있어요.`;
+    if (error.status === 403) return `${target} 볼 권한이 없어요.`;
+    if (error.code === 'NETWORK_ERROR') return `서버에 연결할 수 없어 ${target} 불러오지 못했어요.`;
   }
-  return `${subject}을 불러오지 못했어요.`;
+  return `${target} 불러오지 못했어요.`;
 }
 
 /** 백엔드 달력 상태 → 화면 상태. NONE(계획·수행 없음)은 표시하지 않습니다 */

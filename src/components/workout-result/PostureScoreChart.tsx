@@ -2,6 +2,7 @@
  * F01 자세 점수 변화: 같은 종목의 이전 운동과 오늘 점수를 비교하는 막대 차트 (View 기반).
  * 마지막 막대가 오늘이며 진하게 강조합니다.
  * 점수 기록이 없으면 임의 점수 대신 빈 상태 문구를 보여줍니다.
+ * 점수 숫자(막대 위·접근성 문구)는 formatScore(정수 반올림)로 표시하고, 막대 높이는 원본 값을 씁니다.
  */
 import { StyleSheet, Text, View } from 'react-native';
 
@@ -9,7 +10,7 @@ import { Card } from '@/components/ui/Card';
 import { PrepColors } from '@/components/workout-preparation/palette';
 import type { PostureScoreHistory } from '@/types/workoutResult';
 
-import { formatShortDate } from './format';
+import { formatScore, formatShortDate } from './format';
 import { resultStyles } from './resultStyles';
 
 /** 최근 몇 번까지 보여줄지 (시안: 2회 전 · 직전 · 오늘) */
@@ -30,7 +31,7 @@ export function PostureScoreChart({ postureScore }: PostureScoreChartProps) {
   const hasData = points.length > 0;
 
   const summary = points
-    .map((point, index) => `${index === points.length - 1 ? '오늘' : formatShortDate(point.date)} ${point.score}점`)
+    .map((point, index) => `${index === points.length - 1 ? '오늘' : formatShortDate(point.date)} ${formatScore(point.score)}점`)
     .join(', ');
 
   return (
@@ -50,7 +51,7 @@ export function PostureScoreChart({ postureScore }: PostureScoreChartProps) {
               const isToday = index === points.length - 1;
               return (
                 <View key={`${point.date}-${index}`} style={styles.column}>
-                  <Text style={styles.score}>{point.score}</Text>
+                  <Text style={styles.score}>{formatScore(point.score)}</Text>
                   <View
                     style={[
                       styles.bar,

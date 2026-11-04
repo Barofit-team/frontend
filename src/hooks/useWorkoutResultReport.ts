@@ -9,8 +9,9 @@ import type { ReportWorkoutResult } from '@/types/report';
 import type { ExerciseResult, PostureScoreHistory, WorkoutSessionResult } from '@/types/workoutResult';
 
 /**
- * F01에 표시할 결과. Mock 결과(WorkoutSessionResult)와 같은 모양이며,
- * API 응답과 화면 의미가 1:1로 정해지지 않은 값(시간 3종, nextFocus)은 비워 둡니다.
+ * F01에 표시할 결과. Mock 결과(WorkoutSessionResult)와 같은 모양입니다.
+ *  - 총 소요 = /result elapsedSeconds, 휴식 = /result restSeconds (null이면 비움, 0은 그대로 표시)
+ *  - 운동 시간(activeDurationSeconds)·nextFocus는 화면 의미가 정해지지 않아 비워 둡니다.
  */
 export type WorkoutResultView = Pick<WorkoutSessionResult, 'completedSets' | 'totalReps' | 'exercises'> &
   Partial<
@@ -22,7 +23,7 @@ export type WorkoutResultView = Pick<WorkoutSessionResult, 'completedSets' | 'to
 
 /**
  * /result 종목 카드에 /generated의 잘한 점·개선할 점을 붙입니다.
- * 두 응답은 모두 루틴 스냅샷의 종목 순서이므로, 종목 수가 같고 같은 위치의 exerciseId가 같을 때만 붙입니다.
+ * (다음 목표 nextGoal 포함) 두 응답은 모두 루틴 스냅샷의 종목 순서이므로, 종목 수가 같고 같은 위치의 exerciseId가 같을 때만 붙입니다.
  * 맞지 않으면 문구 없이 /result 값만 씁니다(다른 종목 문구가 섞이지 않게).
  */
 export function mergeExerciseResults(
@@ -37,6 +38,7 @@ export function mergeExerciseResults(
       ...exercise,
       ...(report.goodFeedback !== undefined ? { goodFeedback: report.goodFeedback } : {}),
       ...(report.improvementFeedback !== undefined ? { improvementFeedback: report.improvementFeedback } : {}),
+      ...(report.nextGoal !== undefined ? { nextGoal: report.nextGoal } : {}),
     };
   });
 }
@@ -71,6 +73,8 @@ export function useWorkoutResultReport(sessionId: string | null) {
   const scoresQuery = useExerciseScoreHistory(target?.exerciseId ?? null, target?.name ?? '');
 
   const resultParts = resultQuery.screenParts;
+  const elapsedSeconds = resultQuery.result?.elapsedSeconds ?? null;
+  const restSeconds = resultQuery.result?.restSeconds ?? null;
   const generatedParts = generatedQuery.screenParts;
   const scoreHistory = scoresQuery.postureScore;
   const targetScore = target?.score ?? null;
@@ -83,12 +87,16 @@ export function useWorkoutResultReport(sessionId: string | null) {
       completedSets: resultParts.summary.completedSets,
       totalReps: resultParts.summary.totalReps,
       exercises: mergeExerciseResults(resultParts, generatedParts),
+      ...(elapsedSeconds !== null ? { totalDurationSeconds: elapsedSeconds } : {}),
+      ...(restSeconds !== null ? { restDurationSeconds: restSeconds } : {}),
       ...(postureScore ? { postureScore } : {}),
     };
-  }, [resultParts, generatedParts, scoreHistory, targetScore]);
+  }, [resultParts, generatedParts, elapsedSeconds, restSeconds, scoreHistory, targetScore]);
 
   return {
     view,
+    /** /result의 저장된 피드백. 아직 응답 전이면 undefined, 저장된 피드백이 없으면 null */
+    serverFeedback: resultQuery.result ? resultQuery.result.feedback : undefined,
     result: {
       isLoading: resultQuery.isLoading,
       error: resultQuery.error,
@@ -100,6 +108,8 @@ export function useWorkoutResultReport(sessionId: string | null) {
       error: generatedQuery.error,
       /** 서버 404: 아직 생성된 리포트 없음 (생성 요청은 하지 않음) */
       isNotFound: generatedQuery.isNotFound,
+      /** 리포트 전체 피드백 문장. 리포트가 없으면 null */
+      overallFeedback: generatedQuery.report?.overallFeedback ?? null,
       retry: generatedQuery.retry,
     },
     scores: {

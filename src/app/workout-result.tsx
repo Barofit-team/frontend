@@ -8,16 +8,19 @@
  *
  * 데이터: useWorkoutResultStore의 결과로 모드를 정합니다.
  *  - source 'mock' (현재 운동 완료·프로필 개발 진입): 저장소의 Mock 결과를 그대로 표시, API 요청 없음
- *  - source 'api' (실제 Workout 세션): 그 sessionId로 Report API 조회 (hooks/useWorkoutResultReport)
+ *  - source 'api' (실제 Workout 세션, 기록 탭의 '리포트 보기' 포함): 그 sessionId로 Report API 조회 (hooks/useWorkoutResultReport)
  *      GET /result → 요약·종목 카드 / GET /generated → 잘한 점·개선점 / GET /scores → 자세 점수 차트
  *    세 API는 따로 로딩·오류를 표시합니다. /generated 404면 리포트를 생성(POST)하지 않고 "아직 없음"으로 둡니다.
- *    시간 3종·다음 운동 집중 문구·주요 오류는 API와 화면 의미가 정해지지 않아 표시하지 않습니다.
+ *    총 소요(elapsedSeconds)·휴식(restSeconds)은 값이 있을 때만, 리포트 전체 피드백은 'AI 리포트' 카드에 표시합니다.
+ *    운동 시간(activeDurationSeconds)·다음 운동 집중 문구·주요 오류는 화면 의미가 정해지지 않아 표시하지 않습니다.
+ *    /result의 저장된 피드백은 피드백 저장소에 넘겨 F02 재진입 시 초기값으로 씁니다.
+ *  - 기록 탭에서 연 지난 세션은 제목을 '운동 결과'로 표시합니다.
  *
  * 개발용 진입: barofit://workout-result (결과가 없으면 빈 상태 표시)
  */
 import { router, Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { Fragment, type ReactNode } from 'react';
+import { Fragment, useEffect, type ReactNode } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -31,6 +34,7 @@ import { RESULT_SCREEN_PADDING, resultStyles } from '@/components/workout-result
 import { useNavigationLock } from '@/components/workout-result/useNavigationLock';
 import { WorkoutSummaryCard } from '@/components/workout-result/WorkoutSummaryCard';
 import { useWorkoutResultReport, type WorkoutResultView } from '@/hooks/useWorkoutResultReport';
+import { useWorkoutFeedbackStore } from '@/stores/useWorkoutFeedbackStore';
 import { useWorkoutResultStore } from '@/stores/useWorkoutResultStore';
 
 /** API 모드의 로딩·빈 상태·오류 안내 카드 (기존 카드 스타일 사용) */
@@ -66,7 +70,16 @@ export default function WorkoutResultScreen() {
   const apiSessionId = storeResult?.source === 'api' ? storeResult.sessionId : null;
   const isApiMode = apiSessionId !== null;
   const report = useWorkoutResultReport(apiSessionId);
-  const result: WorkoutResultView | null = isApiMode ? report.view : storeResult;
+  const mockResult = storeResult?.source === 'mock' ? storeResult : null;
+  const result: WorkoutResultView | null = isApiMode ? report.view : mockResult;
+  const isRecordSession = storeResult !== null && 'openedFrom' in storeResult && storeResult.openedFrom === 'record';
+
+  // 서버에 저장된 피드백을 sessionId별로 넘깁니다. 같은 응답이면 다시 넘기지 않고, 입력 중인 draft는 바꾸지 않습니다
+  const setServerFeedback = useWorkoutFeedbackStore(state => state.setServerFeedback);
+  const serverFeedback = report.serverFeedback;
+  useEffect(() => {
+    if (apiSessionId && serverFeedback !== undefined) setServerFeedback(apiSessionId, serverFeedback);
+  }, [apiSessionId, serverFeedback, setServerFeedback]);
 
   const goHome = () => navigate(() => router.dismissTo('/home'));
   const openFeedback = () =>
@@ -102,6 +115,8 @@ export default function WorkoutResultScreen() {
       generatedNotice = (
         <StatusCard title="AI 리포트" body={report.generated.error} onRetry={report.generated.retry} />
       );
+    } else if (report.generated.overallFeedback) {
+      generatedNotice = <StatusCard title="AI 리포트" body={report.generated.overallFeedback} />;
     }
   }
 
@@ -132,7 +147,7 @@ export default function WorkoutResultScreen() {
         contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 24 }]}
         showsVerticalScrollIndicator={false}>
         <Text style={resultStyles.pageTitle} accessibilityRole="header">
-          오늘 운동을 완료했어요
+          {isRecordSession ? '운동 결과' : '오늘 운동을 완료했어요'}
         </Text>
         {__DEV__ && storeResult?.source === 'mock' && (
           <Text style={styles.mockLabel}>[DEV] Mock 데이터 · 실제 측정·AI 분석 결과가 아닙니다</Text>

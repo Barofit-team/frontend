@@ -119,7 +119,7 @@ export type GeneratedExercisePart = Pick<
   ExerciseResult,
   'exerciseId' | 'exerciseName' | 'completedSets' | 'completedReps' | 'score'
 > &
-  Partial<Pick<ExerciseResult, 'goodFeedback' | 'improvementFeedback'>> & {
+  Partial<Pick<ExerciseResult, 'goodFeedback' | 'improvementFeedback' | 'nextGoal'>> & {
     /** 루틴 내 종목 ID. 같은 종목이 두 번 있을 때 구분용 */
     routineExerciseId: string;
   };
@@ -132,11 +132,12 @@ export interface GeneratedReportScreenParts {
 
 /**
  * 리포트 → 결과 화면 모델 중 의미가 1:1로 같은 필드만 옮깁니다.
- *  - strengths → goodFeedback(잘한 점), improvements → improvementFeedback(개선할 점). null이면 넣지 않음
+ *  - strengths → goodFeedback(잘한 점), improvements → improvementFeedback(개선할 점),
+ *    nextGoal → nextGoal(종목별 다음 목표). null이면 넣지 않음
  *  - performedSets → completedSets, actualReps → completedReps, postureScore → score(반올림 없음, null → undefined)
  *
  * 옮기지 않은 것 (규칙 미정):
- *  - nextGoal: 종목마다 있지만 화면 nextFocus는 세션당 하나라 어느 종목 값을 쓸지 미정
+ *  - nextFocus(세션당 하나): nextGoal은 종목별이라 어느 종목 값을 쓸지 정하지 않고 종목 카드에 둡니다
  *  - errorCounts → mainError·errorCount: 오류 코드의 한국어 이름과 "주요 오류" 선정 기준이 없음
  *  - overallFeedback: 대응하는 화면 항목 없음
  *  - 시간 3종: STEP 5와 같은 미정 사항
@@ -153,6 +154,7 @@ export function toGeneratedReportScreenParts(report: ReportGenerated): Generated
       score: exercise.postureScore ?? undefined,
       ...(exercise.strengths !== null ? { goodFeedback: exercise.strengths } : {}),
       ...(exercise.improvements !== null ? { improvementFeedback: exercise.improvements } : {}),
+      ...(exercise.nextGoal !== null ? { nextGoal: exercise.nextGoal } : {}),
     })),
   };
 }
