@@ -16,10 +16,10 @@ export interface ExerciseResult {
   exerciseName: string;
   completedSets: number;
   completedReps: number;
-  /** 잘한 점 */
-  goodFeedback: string;
-  /** 개선할 점 */
-  improvementFeedback: string;
+  /** 잘한 점 (API 결과에서 리포트가 없으면 비워 두고 표시하지 않음) */
+  goodFeedback?: string;
+  /** 개선할 점 (API 결과에서 리포트가 없으면 비워 두고 표시하지 않음) */
+  improvementFeedback?: string;
   /** 주요 자세 오류 (없으면 표시하지 않음) */
   mainError?: string;
   /** 주요 자세 오류 발생 횟수 */

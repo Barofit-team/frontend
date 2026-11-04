@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 
 import type { DiscomfortAreaId } from '@/constants/workoutFeedback';
-import { saveWorkoutFeedback } from '@/services/workoutFeedbackService';
+import { saveWorkoutFeedback, type FeedbackSaveTarget } from '@/services/workoutFeedbackService';
 import type { SavedWorkoutFeedback, WorkoutDifficulty, WorkoutFeedback } from '@/types/workoutResult';
 
 /**
@@ -10,7 +10,8 @@ import type { SavedWorkoutFeedback, WorkoutDifficulty, WorkoutFeedback } from '@
  *  - draft: 지금 입력 중인 피드백. F02 ↔ F03을 오가는 동안 유지됩니다.
  *  - savedBySession: 확정된 피드백을 sessionId별로 보관 → 세션 간 데이터가 섞이지 않습니다.
  *
- * [Mock] 저장은 서버가 아닌 메모리 보관입니다(앱 종료 시 사라짐). workoutFeedbackService 참고.
+ * 저장: Mock 결과는 메모리 보관만(앱 종료 시 사라짐), 실제 Workout 세션은 Report API에 저장한 뒤 성공하면 보관합니다.
+ * 실패하면 보관하지 않고 예외를 그대로 던집니다(draft 유지). workoutFeedbackService 참고.
  */
 interface WorkoutFeedbackState {
   draft: WorkoutFeedback | null;
@@ -21,8 +22,8 @@ interface WorkoutFeedbackState {
   setDifficulty: (difficulty: WorkoutDifficulty) => void;
   setHasDiscomfort: (hasDiscomfort: boolean) => void;
   toggleDiscomfortArea: (area: DiscomfortAreaId) => void;
-  /** 입력이 완료된 draft를 확정 저장합니다. 미완성이면 예외 */
-  submitDraft: () => Promise<SavedWorkoutFeedback>;
+  /** 입력이 완료된 draft를 확정 저장합니다(기본 'mock'). 미완성이거나 저장에 실패하면 예외 */
+  submitDraft: (target?: FeedbackSaveTarget) => Promise<SavedWorkoutFeedback>;
   reset: () => void;
 }
 
@@ -87,12 +88,12 @@ export const useWorkoutFeedbackStore = create<WorkoutFeedbackState>((set, get) =
       };
     }),
 
-  submitDraft: async () => {
+  submitDraft: async (target = 'mock') => {
     const { draft } = get();
     if (!isFeedbackComplete(draft)) {
       throw new Error('피드백 입력이 완료되지 않았습니다.');
     }
-    const saved = await saveWorkoutFeedback(draft);
+    const saved = await saveWorkoutFeedback(draft, target);
     set(state => ({ savedBySession: { ...state.savedBySession, [saved.sessionId]: saved } }));
     return saved;
   },

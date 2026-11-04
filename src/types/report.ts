@@ -88,12 +88,48 @@ export interface ReportExerciseResult {
   postureScore: number | null;
 }
 
+/**
+ * 세션 자세 항목 집계 (ReportRepository.findSessionSummary의 postureItems 항목, LinkedHashMap).
+ * 세트별 결과(posture_item_results)를 항목·집계 기준·단위·종목·엔진 버전별로 합산한 값입니다.
+ * 수치 컬럼은 DOUBLE PRECISION이라 실수입니다.
+ */
+export interface ReportSessionPostureItem extends ReportPostureItem {
+  /** AI 종목 코드 (예: pushup) */
+  exercise: string;
+  engineVersion: string;
+  unknown: number;
+  notApplicable: number;
+  evaluated: number;
+  /** 100 × compliant / evaluated. evaluated가 0이면 null */
+  compliancePct: number | null;
+}
+
+/**
+ * 세션 자세 집계 (ReportRepository.findSessionSummary, DTO 없는 Map).
+ * 업로드된 AI 세트 결과가 없으면 수치는 0, postureItems는 []입니다.
+ */
+export interface ReportSessionPostureSummary {
+  sessionId: string;
+  /** Java long */
+  setCount: number;
+  /** Java long */
+  totalReps: number;
+  /** Java double */
+  totalHoldSeconds: number;
+  /** Java double */
+  totalObservedSeconds: number;
+  postureItems: ReportSessionPostureItem[];
+}
+
 /** GET /api/v1/reports/sessions/{sessionId}/result 응답 (ReportViewService.WorkoutResult) */
 export interface ReportWorkoutResult {
   sessionId: string;
   routineId: string;
   routineName: string;
-  /** Workout 세션 상태 (예: COMPLETED, ABANDONED) */
+  /**
+   * Workout 세션 상태. Workout SessionStatus 기준 ACTIVE | PAUSED | COMPLETED | ABANDONED.
+   * Report는 Workout 응답 문자열을 그대로 전달하므로 string으로 둡니다.
+   */
   status: string;
   plannedSets: number;
   completedSets: number;
@@ -108,8 +144,8 @@ export interface ReportWorkoutResult {
   routineScore: number | null;
   scoredExercises: number;
   plannedExercises: number;
-  /** 자세 항목별 집계 원본 (ReportRepository.findSessionSummary, Map<String,Object>) */
-  postureSummary: Record<string, unknown>;
+  /** 자세 항목별 집계 원본 (ReportRepository.findSessionSummary) */
+  postureSummary: ReportSessionPostureSummary;
   /** 사용자가 아직 피드백을 남기지 않았으면 null */
   feedback: ReportFeedback | null;
 }
@@ -167,4 +203,115 @@ export interface ReportGenerated {
   exercises: ReportGeneratedExercise[];
   /** 현재는 'TEMPLATE_V1' */
   generationMethod: string;
+}
+
+/**
+ * GET /api/v1/reports/daily?date=, GET /api/v1/reports/weekly?startDate= 응답 (ReportRepository.findPeriodSummary).
+ *
+ * 백엔드는 DTO 없이 Map<String, Object>를 돌려주며, 키 5개가 항상 모두 옵니다(null 없음).
+ * 업로드된 AI 세트 결과(exercise_set_results) 중 기간 안의 것만 집계합니다.
+ * 기간 기준 시각은 performed_at(없으면 received_at), 경계는 Asia/Seoul 자정입니다.
+ *  - daily: date 00:00 ~ 다음 날 00:00 (KST)
+ *  - weekly: startDate 00:00 ~ 7일 뒤 00:00 (KST). startDate가 월요일인지는 서버가 확인하지 않습니다
+ * 기간에 결과가 없으면 404가 아니라 모든 값이 0인 200입니다.
+ */
+export interface ReportPeriodSummary {
+  /** 업로드된 세트 결과 수 (Java long) */
+  setCount: number;
+  /** 세트 결과가 1개 이상 있는 세션 수 (Java long) */
+  sessionCount: number;
+  /** 반복 횟수 합계. 횟수가 없는 세트는 제외 (Java long) */
+  totalReps: number;
+  /** 유지 시간(초) 합계. 실수 (Java double) */
+  totalHoldSeconds: number;
+  /** 관측 시간(초) 합계. 실수 (Java double) */
+  totalObservedSeconds: number;
+}
+
+/**
+ * GET /api/v1/reports/sessions/{sessionId}/sets 응답 항목 (ReportRepository.findSessionSets, DTO 없는 Map).
+ *
+ * 업로드된 AI 세트 결과(exercise_set_results)만 담습니다. AI 결과가 업로드되지 않은 세트는 목록에 없습니다.
+ * 순서는 서버 기준(수신 시각 received_at, set_id 오름차순)이며 수행 시각 순서와 다를 수 있습니다.
+ * 반복 횟수·시간·수신 시각·routineSetId는 응답에 포함되지 않습니다.
+ */
+export interface ReportSessionSet {
+  /** 결과 업로드용 세트 ID(UUID). 운동 계획의 세트 ID(routineSetId)와 다릅니다 */
+  setId: string;
+  /** AI 종목 코드 (예: pushup) */
+  exercise: string;
+  engineVersion: string;
+  /**
+   * 업로드한 AI set.completed 원문의 JSON 문자열 (DB jsonb를 text로 변환한 값, null 없음).
+   * jsonb 저장 과정에서 키 순서·공백이 바뀔 수 있어 업로드한 바이트와 같지 않습니다.
+   * 구조가 서버에서 고정되어 있지 않으므로 파싱하지 않고 그대로 보존합니다.
+   */
+  rawResult: string;
+}
+
+/**
+ * POST .../sessions/{sessionId}/sets/{setId} 요청 본문 — AI set.completed 2.0 원문.
+ *
+ * Report 서버(ReportService.saveSet)가 검사하는 필드만 타입으로 적었습니다. AI 결과의 나머지 필드(details 등)는
+ * 서버가 해석하지 않고 원문 그대로 저장하므로 unknown으로 보존합니다. AI 팀 스키마 전체를 정의한 타입이 아닙니다.
+ */
+export interface ReportSetCompletedPayload {
+  schemaVersion: '2.0';
+  type: 'set.completed';
+  /** AI 종목 코드 [a-z][a-z0-9_-]{0,49} (예: pushup) */
+  exercise: string;
+  engineVersion: string;
+  /** 모델 내부 시간(ms, 0 이상). 절대 시각으로 쓰지 않습니다 */
+  timestampMs?: number | null;
+  /** X-Workout-Performed-At 헤더가 없을 때만 서버가 읽는 수행 시각(ISO 8601 + 오프셋) */
+  performedAt?: string | null;
+  summary: ReportSetSummary;
+  [key: string]: unknown;
+}
+
+/** set.completed의 summary. schemaVersion·exercise·engineVersion은 바깥 값과 같아야 합니다 */
+export interface ReportSetSummary {
+  schemaVersion: '2.0';
+  exercise: string;
+  engineVersion: string;
+  /** 반복 횟수(0 이상 정수) */
+  count?: number | null;
+  /** 초, 0 이상 */
+  holdSeconds?: number | null;
+  observedSeconds?: number | null;
+  gapSeconds?: number | null;
+  /** 자세 항목 ID → 항목 집계. 빈 객체 허용 */
+  items: Record<string, ReportSetItemSummary>;
+  [key: string]: unknown;
+}
+
+/**
+ * 자세 항목 집계. aggregationBasis·unit은 repetition·repetitions 또는 time·seconds 쌍.
+ * 수치는 0 이상, evaluated = compliant + warning, compliancePct = 100 × compliant / evaluated (±0.1, evaluated 0이면 없음)
+ */
+export interface ReportSetItemSummary {
+  aggregationBasis: 'repetition' | 'time';
+  unit: 'repetitions' | 'seconds';
+  compliant: number;
+  warning: number;
+  unknown: number;
+  notApplicable: number;
+  evaluated: number;
+  compliancePct?: number | null;
+  [key: string]: unknown;
+}
+
+/** 업로드 요청 헤더 값 */
+export interface ReportSetUploadOptions {
+  /** X-Workout-Performed-At — 실제 수행 시각(ISO 8601 + 오프셋). 없으면 서버 수신 시각으로 집계됩니다 */
+  performedAt?: string;
+  /** X-Routine-Set-Id — Workout 세션 스냅샷의 계획 세트 ID. 없으면 점수·리포트 집계에 쓰이지 않습니다 */
+  routineSetId?: string;
+}
+
+/** 업로드 응답 (201). 같은 세트·같은 원문 재전송이면 already_saved */
+export interface ReportSetUploadResult {
+  setId: string;
+  sessionId: string;
+  status: 'saved' | 'already_saved';
 }

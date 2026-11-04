@@ -10,7 +10,7 @@
  * 토큰이 없으면(dev 로그인 등) 요청하지 않고 인증 오류(AUTH_TOKEN_MISSING)를 던집니다. 빈 기록으로 처리하지 않습니다.
  */
 import { ApiError } from '@/services/api';
-import { getReportCalendar, getReportDateRecords } from '@/services/reportService';
+import { getReportCalendar, getReportDateRecords, getReportHistory } from '@/services/reportService';
 import { tokenStorage } from '@/services/tokenStorage';
 import type { ReportDayStatus, ReportRecordCard, ReportRecordStatus } from '@/types/report';
 import type {
@@ -24,6 +24,9 @@ import type {
 /** 일일 운동일지 한 번에 불러오는 개수 */
 export const DAILY_RECORD_PAGE_SIZE = 4;
 
+/** 월간 운동일지(GET /history) 기본 페이지 크기. 백엔드 기본값과 같고, 허용 범위는 1~100입니다 */
+export const MONTHLY_RECORD_PAGE_SIZE = 10;
+
 /** 앱에서 붙이는 오류 코드: 저장된 토큰이 없어 요청을 보내지 않음 (서버 응답 코드가 아님) */
 export const AUTH_TOKEN_MISSING = 'AUTH_TOKEN_MISSING';
 
@@ -31,7 +34,7 @@ export const AUTH_TOKEN_MISSING = 'AUTH_TOKEN_MISSING';
  * 토큰 없이 요청하면 서버가 401(AUTH_INVALID_TOKEN)을 주고, apiFetch가 세션을 정리하며 로그인 화면으로 보냅니다.
  * dev 로그인(토큰 없음) 상태에서 기록 탭을 열 때 그렇게 튕기지 않도록 요청 전에 막습니다.
  */
-async function ensureAccessToken(): Promise<void> {
+export async function ensureAccessToken(): Promise<void> {
   const accessToken = await tokenStorage.getAccessToken();
   if (!accessToken) {
     throw new ApiError(401, AUTH_TOKEN_MISSING, '로그인이 필요합니다.');
@@ -42,7 +45,10 @@ async function ensureAccessToken(): Promise<void> {
  * 기록 탭 오류 문구. 인증(401)·권한(403)·네트워크 오류를 일반 오류와 구분합니다.
  * (정상적인 빈 기록은 오류가 아니라 빈 목록·빈 달력으로 옵니다)
  */
-export function toWorkoutRecordErrorMessage(error: unknown, subject: '운동 달력' | '운동기록'): string {
+export function toWorkoutRecordErrorMessage(
+  error: unknown,
+  subject: '운동 달력' | '운동기록' | '자세 점수 기록'
+): string {
   if (error instanceof ApiError) {
     if (error.status === 401) return `로그인 후 ${subject}을 볼 수 있어요.`;
     if (error.status === 403) return `${subject}을 볼 권한이 없어요.`;
@@ -123,5 +129,32 @@ export async function fetchDailyWorkoutRecords(
     page,
     size,
     hasNext: start + size < all.length,
+  };
+}
+
+/**
+ * 월간 운동일지 한 페이지 (GET /api/v1/reports/history). month: 1~12, page: 0부터, size: 1~100.
+ * 서버가 날짜 최신순으로 페이지를 나눠 주므로, 미실행 카드 키에는 페이지 안 순번이 아니라
+ * 월 전체에서의 순번(page * size + index)을 써서 페이지 사이에 키가 겹치지 않게 합니다.
+ */
+export async function fetchMonthlyWorkoutRecords(
+  year: number,
+  month: number,
+  page: number,
+  size: number = MONTHLY_RECORD_PAGE_SIZE
+): Promise<DailyWorkoutRecordPage> {
+  // 서버가 400으로 거절할 값은 요청하지 않습니다
+  if (!Number.isInteger(page) || page < 0 || !Number.isInteger(size) || size < 1 || size > 100) {
+    throw new RangeError(`Invalid pagination: page=${page}, size=${size}`);
+  }
+  await ensureAccessToken();
+  const result = await getReportHistory(year, month, page, size);
+  return {
+    items: result.content
+      .map((card, index) => toDailyWorkoutRecord(card, page * size + index))
+      .filter((record): record is DailyWorkoutRecord => record !== null),
+    page: result.page,
+    size: result.size,
+    hasNext: result.hasNext,
   };
 }
