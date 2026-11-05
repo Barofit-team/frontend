@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { fetchDailyWorkoutRecords } from '@/services/workoutRecordService';
+import { fetchDailyWorkoutRecords, toWorkoutRecordErrorMessage } from '@/services/workoutRecordService';
 import type { DailyWorkoutRecord } from '@/types/workoutRecord';
 
 interface DailyRecordsState {
@@ -22,6 +22,8 @@ function initialStateOf(date: string): DailyRecordsState {
  *  - 날짜가 바뀌면 목록을 비우고 첫 페이지부터 다시 불러옵니다.
  *  - 요청 중에는 추가 로딩을 막고(중복 방지), 마지막 페이지 이후에는 더 요청하지 않습니다.
  *  - 날짜가 바뀐 뒤 도착한 이전 날짜의 응답은 버립니다.
+ *  - refresh: 같은 날짜의 첫 페이지를 서버에서 다시 받습니다 (탭 재진입 등).
+ *    목록은 응답이 올 때까지 유지하고, 첫 페이지를 이미 받는 중이면 무시합니다.
  */
 export function useDailyWorkoutRecords(date: string) {
   const [state, setState] = useState<DailyRecordsState>(() => initialStateOf(date));
@@ -37,7 +39,8 @@ export function useDailyWorkoutRecords(date: string) {
 
     try {
       const result = await fetchDailyWorkoutRecords(targetDate, page);
-      if (latestDateRef.current !== targetDate) return;
+      // 날짜가 바뀌었거나 새 요청(refresh)으로 대체된 응답은 버립니다
+      if (latestDateRef.current !== targetDate || inFlightRef.current !== request) return;
       setState((prev) =>
         prev.date !== targetDate
           ? prev
@@ -49,12 +52,13 @@ export function useDailyWorkoutRecords(date: string) {
               isLoading: false,
             }
       );
-    } catch {
-      if (latestDateRef.current !== targetDate) return;
+    } catch (error) {
+      if (latestDateRef.current !== targetDate || inFlightRef.current !== request) return;
       setState((prev) =>
         prev.date !== targetDate
           ? prev
-          : { ...prev, isLoading: false, error: '운동기록을 불러오지 못했어요.' }
+          : // 다시 시도하면 실패한 페이지를 다시 요청하도록 (refresh 실패 시 page 0)
+            { ...prev, nextPage: page, isLoading: false, error: toWorkoutRecordErrorMessage(error, '운동기록') }
       );
     } finally {
       if (inFlightRef.current === request) inFlightRef.current = null;
@@ -82,6 +86,15 @@ export function useDailyWorkoutRecords(date: string) {
     void load(date, current.nextPage);
   }, [current.nextPage, date, load]);
 
+  // 화면 포커스 콜백에서 쓰기 좋도록 date에 의존하지 않는 안정적인 함수로 둡니다
+  const refresh = useCallback(() => {
+    const targetDate = latestDateRef.current;
+    const inFlight = inFlightRef.current;
+    if (inFlight?.date === targetDate && inFlight.page === 0) return;
+    inFlightRef.current = null; // 진행 중인 추가 로딩이 있으면 그 응답은 버립니다
+    void load(targetDate, 0);
+  }, [load]);
+
   return {
     records: current.records,
     hasNext: current.hasNext,
@@ -89,5 +102,6 @@ export function useDailyWorkoutRecords(date: string) {
     error: current.error,
     loadMore,
     retry,
+    refresh,
   };
 }

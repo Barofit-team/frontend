@@ -1,7 +1,6 @@
 /**
- * 월간 운동기록 타입.
- * 백엔드 API 계약이 정해지기 전까지 화면에 필요한 최소 형태만 정의합니다.
- * (API 연동 시 응답 → 이 타입으로 변환하는 매핑만 추가하면 됩니다)
+ * 월간 운동기록 화면 타입.
+ * Report API 응답(types/report.ts)은 services/workoutRecordService.ts 에서 이 타입으로 변환됩니다.
  */
 
 /** 달력 날짜별 상태 */
@@ -15,6 +14,8 @@ export type MonthlyWorkoutStatusMap = Record<string, WorkoutDayStatus>;
 
 export interface DailyWorkoutRecord {
   id: string;
+  /** Report API의 운동 세션 ID. 미실행 계획은 null (리포트 상세 연결용) */
+  sessionId?: string | null;
   /** 'YYYY-MM-DD' */
   date: string;
   routineName: string;
