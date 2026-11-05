@@ -2,8 +2,6 @@ import {
   assignWorkoutPlan,
   getRecommendedRoutineTemplates,
   getRoutineTemplates,
-  getUserRoutines,
-  getUserRoutineDetail,
   getWorkoutPlanWeek,
   removeWorkoutPlan,
 } from '@/services/routineService';
@@ -179,8 +177,6 @@ export function mapTemplateToRecommendedRoutine(
 
 /**
  * 사용자의 이번 주 운동 계획 목록을 서버에서 조회합니다.
- * 1. 백엔드 Workout Plan API (`GET /api/v1/workout-plans?weekStart=...`) 우선 조회
- * 2. workout-plans API 호출 실패(엔드포인트 미지원 등) 시에만 내 루틴 목록(/api/v1/routines) fallback
  */
 export async function fetchWeeklyPlanItems(
   baseDate: Date = new Date(),
@@ -193,53 +189,25 @@ export async function fetchWeeklyPlanItems(
   const monday = getMondayOfWeek(baseDate);
   const weekStartIso = toIsoDateString(monday);
 
-  // 1차: 실제 workout-plans 주간 계획 조회
-  try {
-    const weekPlan: WorkoutPlanWeek = await getWorkoutPlanWeek(weekStartIso);
-    if (weekPlan && Array.isArray(weekPlan.days)) {
-      const assignedDays = weekPlan.days.filter((day) => day.routine !== null);
-      return assignedDays.map((day) => {
-        const routine = day.routine!;
-        const [y, m, d] = day.date.split('-').map(Number);
-        const targetDate = new Date(y, (m || 1) - 1, d || 1);
-        const item = mapRoutineToWeeklyPlanDayItem(routine, targetDate);
-        if (day.estimatedMinutes != null) {
-          item.durationMinutes = day.estimatedMinutes;
-        }
-        if (day.estimatedKcal != null) {
-          item.calories = day.estimatedKcal;
-        }
-        return item;
-      });
-    }
-  } catch {
-    // workout-plans 엔드포인트 미지원 시에만 내 루틴 fallback 시도
+  const weekPlan: WorkoutPlanWeek = await getWorkoutPlanWeek(weekStartIso);
+  if (weekPlan && Array.isArray(weekPlan.days)) {
+    const assignedDays = weekPlan.days.filter((day) => day.routine !== null);
+    return assignedDays.map((day) => {
+      const routine = day.routine!;
+      const [y, m, d] = day.date.split('-').map(Number);
+      const targetDate = new Date(y, (m || 1) - 1, d || 1);
+      const item = mapRoutineToWeeklyPlanDayItem(routine, targetDate);
+      if (day.estimatedMinutes != null) {
+        item.durationMinutes = day.estimatedMinutes;
+      }
+      if (day.estimatedKcal != null) {
+        item.calories = day.estimatedKcal;
+      }
+      return item;
+    });
   }
 
-  // 2차 fallback: 등록된 사용자 루틴 목록 조회
-  try {
-    const page = await getUserRoutines(0, 20);
-    if (!page.content || page.content.length === 0) {
-      return [];
-    }
-
-    const details = await Promise.all(
-      page.content.slice(0, 7).map((summary) => getUserRoutineDetail(summary.id)),
-    );
-
-    const defaultOffsets = [0, 2, 4, 1, 3, 5, 6]; // 월, 수, 금 우선 배치
-    return details
-      .map((detail, idx) => {
-        const targetDate = new Date(monday);
-        targetDate.setDate(
-          monday.getDate() + defaultOffsets[idx % defaultOffsets.length],
-        );
-        return mapRoutineToWeeklyPlanDayItem(detail, targetDate);
-      })
-      .sort((a, b) => a.date.localeCompare(b.date));
-  } catch {
-    return [];
-  }
+  return [];
 }
 
 /**
@@ -272,35 +240,28 @@ export async function fetchRecommendedRoutineItems(): Promise<
 
 /**
  * 특정 요일들의 운동 배정 상태를 서버와 동기화합니다.
- * - UUID 형식이 아닌 클라이언트 로컬 프리셋('preset-basic' 등)은 백엔드로 전송하지 않습니다.
- * - 비정상 응답이나 네트워크 단절 시에도 에러를 안전하게 격리하여 Uncaught Promise 에러를 방지합니다.
+ * - UUID 형식이 아닌 경우 백엔드로 전송하지 않습니다.
+ * - 서버 오류 발생 시 호출부(UI)에서 인지하고 처리할 수 있도록 에러를 상위로 전파합니다.
  */
 export async function syncWeeklyPlanAssignment(
   dateIso: string,
   routineId: string | null,
 ): Promise<void> {
-  try {
-    const isIsoDate = /^\d{4}-\d{2}-\d{2}$/.test(dateIso);
-    if (!isIsoDate) {
+  const isIsoDate = /^\d{4}-\d{2}-\d{2}$/.test(dateIso);
+  if (!isIsoDate) {
+    return;
+  }
+
+  if (routineId) {
+    const isUuid =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        routineId,
+      );
+    if (!isUuid) {
       return;
     }
-
-    if (routineId) {
-      const isUuid =
-        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-          routineId,
-        );
-      if (!isUuid) {
-        return;
-      }
-      await assignWorkoutPlan(dateIso, routineId);
-    } else {
-      await removeWorkoutPlan(dateIso);
-    }
-  } catch (error) {
-    console.warn(
-      `[weeklyPlanService] 운동 계획 동기화 실패 (${dateIso}):`,
-      error,
-    );
+    await assignWorkoutPlan(dateIso, routineId);
+  } else {
+    await removeWorkoutPlan(dateIso);
   }
 }

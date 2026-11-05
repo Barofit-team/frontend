@@ -2,6 +2,7 @@ import { router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import React, { useEffect, useMemo, useState } from 'react';
 import {
+  Alert,
   Modal,
   Pressable,
   ScrollView,
@@ -22,6 +23,7 @@ import {
   PlusIcon,
   StopwatchIcon,
 } from '@/components/home/HomeIcons';
+import { ApiError } from '@/services/api';
 import {
   syncWeeklyPlanAssignment,
   toIsoDateString,
@@ -128,13 +130,7 @@ export default function WeeklyPlanEditScreen() {
     if (isSaving) return;
     setIsSaving(true);
 
-    const updatedList = weekDays
-      .map((day) => draftByDate[day.date])
-      .filter((item): item is WeeklyPlanDayItem => Boolean(item));
-
-    setPlanItems(updatedList);
-
-    // 백엔드 workout-plans 상태 동기화
+    // 변경된 요일별 운동 계획을 백엔드 workout-plans 상태와 동기화
     const syncPromises: Promise<void>[] = [];
     for (const day of weekDays) {
       if (isPastDay(day.date)) continue;
@@ -151,12 +147,18 @@ export default function WeeklyPlanEditScreen() {
       if (syncPromises.length > 0) {
         await Promise.all(syncPromises);
       }
+      // 서버 영구 저장 완료 후 백엔드 최신 데이터로 스토어를 동기화하고 화면 복귀
       await useWeeklyPlanStore.getState().loadWeeklyPlan();
+      handleBack();
     } catch (e) {
       console.warn('[WeeklyPlanEdit] 운동 계획 동기화 실패:', e);
+      const message =
+        e instanceof ApiError
+          ? e.message
+          : '운동 계획 저장 중 오류가 발생했습니다. 다시 시도해 주세요.';
+      Alert.alert('저장 실패', message);
     } finally {
       setIsSaving(false);
-      handleBack();
     }
   };
 

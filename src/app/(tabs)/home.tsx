@@ -62,6 +62,7 @@ export default function HomeScreen() {
   );
   const isLoading = useWeeklyPlanStore((state) => state.isLoading);
   const hasLoaded = useWeeklyPlanStore((state) => state.hasLoaded);
+  const error = useWeeklyPlanStore((state) => state.error);
   const setSelectedDate = useWeeklyPlanStore((state) => state.setSelectedDate);
   const loadWeeklyPlan = useWeeklyPlanStore((state) => state.loadWeeklyPlan);
 
@@ -185,6 +186,23 @@ export default function HomeScreen() {
               <Text style={styles.emptyRoutineDesc}>
                 운동 계획 데이터를 불러오는 중입니다...
               </Text>
+            </View>
+          ) : error ? (
+            <View style={styles.emptyRoutineContainer}>
+              <Text style={styles.emptyRoutineTitle}>
+                운동 계획을 불러오지 못했습니다
+              </Text>
+              <Text style={styles.emptyRoutineDesc}>{error}</Text>
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => void loadWeeklyPlan()}
+                style={({ pressed }) => [
+                  styles.startWorkoutButton,
+                  styles.fullWidthButton,
+                  pressed && styles.pressed,
+                ]}>
+                <Text style={styles.startWorkoutButtonText}>다시 시도</Text>
+              </Pressable>
             </View>
           ) : selectedDayPlan ? (
             <>

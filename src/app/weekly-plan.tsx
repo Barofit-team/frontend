@@ -24,6 +24,7 @@ export default function WeeklyPlanScreen() {
   const planItems = useWeeklyPlanStore((state) => state.planItems);
   const isLoading = useWeeklyPlanStore((state) => state.isLoading);
   const hasLoaded = useWeeklyPlanStore((state) => state.hasLoaded);
+  const error = useWeeklyPlanStore((state) => state.error);
   const loadWeeklyPlan = useWeeklyPlanStore((state) => state.loadWeeklyPlan);
 
   useFocusEffect(
@@ -90,8 +91,29 @@ export default function WeeklyPlanScreen() {
               이번 주 운동 계획을 불러오는 중입니다...
             </Text>
           </View>
+        ) : error ? (
+          /* 2. 에러 발생 상태 */
+          <View style={styles.stateCard}>
+            <View style={styles.emptyIconCircle}>
+              <DumbbellIcon color="#EF4444" size={22} />
+            </View>
+            <Text style={styles.emptyTitle}>
+              운동 계획을 불러오지 못했습니다
+            </Text>
+            <Text style={styles.stateDescription}>{error}</Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="운동 계획 다시 시도"
+              onPress={() => void loadWeeklyPlan()}
+              style={({ pressed }) => [
+                styles.retryButton,
+                pressed && styles.pressed,
+              ]}>
+              <Text style={styles.retryButtonText}>다시 시도</Text>
+            </Pressable>
+          </View>
         ) : planItems.length === 0 ? (
-          /* 2. 데이터 없음(Empty State) 상태 */
+          /* 3. 데이터 없음(Empty State) 상태 */
           <View style={styles.stateCard}>
             <View style={styles.emptyIconCircle}>
               <DumbbellIcon color="#71717A" size={22} />
@@ -105,13 +127,13 @@ export default function WeeklyPlanScreen() {
             </Text>
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="운동 계획 다시 불러오기"
-              onPress={() => void loadWeeklyPlan()}
+              accessibilityLabel="운동 계획 배정하기"
+              onPress={openEditScreen}
               style={({ pressed }) => [
                 styles.retryButton,
                 pressed && styles.pressed,
               ]}>
-              <Text style={styles.retryButtonText}>다시 불러오기</Text>
+              <Text style={styles.retryButtonText}>운동 계획 배정하기</Text>
             </Pressable>
           </View>
         ) : (
