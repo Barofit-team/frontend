@@ -1,4 +1,4 @@
-/** F01 운동별 결과 카드: 종목명 · 세트/횟수 + 잘한 점 / 개선점 / 주요 오류 */
+/** F01 운동별 결과 카드: 종목명 · 세트/횟수 + 잘한 점 / 개선점 / 다음 목표 / 주요 오류 (값이 없는 줄은 표시하지 않음) */
 import { StyleSheet, Text, View } from 'react-native';
 
 import { Card } from '@/components/ui/Card';
@@ -34,8 +34,9 @@ export function ExerciseResultCard({ result }: ExerciseResultCardProps) {
         {result.exerciseName} · {result.completedSets}세트 / {result.completedReps}회
       </Text>
       <View style={styles.lines}>
-        <FeedbackLine label="잘한 점" text={result.goodFeedback} />
-        <FeedbackLine label="개선점" text={result.improvementFeedback} />
+        {result.goodFeedback !== undefined && <FeedbackLine label="잘한 점" text={result.goodFeedback} />}
+        {result.improvementFeedback !== undefined && <FeedbackLine label="개선점" text={result.improvementFeedback} />}
+        {result.nextGoal !== undefined && <FeedbackLine label="다음 목표" text={result.nextGoal} />}
         {errorText !== null && <FeedbackLine label="주요 오류" text={errorText} />}
       </View>
     </Card>
