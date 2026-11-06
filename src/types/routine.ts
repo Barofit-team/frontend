@@ -87,6 +87,23 @@ export interface RoutinePage {
   totalPages: number;
 }
 
+/**
+ * 온보딩 프로필 기반 맞춤형 추천 루틴 개별 항목
+ */
+export interface RoutineTemplateRecommendationItem {
+  template: RoutineDetail;
+  reason: string;
+  assessmentReady: boolean;
+}
+
+/**
+ * 백엔드 추천 API (/api/v1/routine-templates/recommendations) 응답 규격
+ */
+export interface RoutineTemplateRecommendationResponse {
+  recommendations: RoutineTemplateRecommendationItem[];
+  notice: string;
+}
+
 export interface WorkoutPlanStep {
   type: 'EXERCISE' | 'REST';
   exercise: RoutineExerciseDetail | null;

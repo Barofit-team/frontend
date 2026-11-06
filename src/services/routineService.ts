@@ -7,11 +7,21 @@ import type {
   RoutineDetail,
   RoutineDifficultyCode,
   RoutinePage,
+  RoutineSummary,
+  RoutineTemplateRecommendationResponse,
   UpdateUserRoutineRequest,
   WeeklyGoalProgress,
   WorkoutPlanDay,
   WorkoutPlanWeek,
 } from '@/types/routine';
+
+/**
+ * 개발 초기(V2, V3)에 임의 제작된 9개 레거시 Mock 템플릿(00000000-0000-0000-0000-000000000001~0009)인지 판별합니다.
+ * 최신 백엔드 정규 템플릿(V6: 15개 다양화 루틴)만 서비스에 노출하도록 필터링합니다.
+ */
+export function isLegacyMockTemplate(templateId: string): boolean {
+  return /^00000000-0000-0000-0000-00000000000[1-9]$/i.test(templateId);
+}
 
 /**
  * Routine Service & Workout Plan API 클라이언트
@@ -110,7 +120,10 @@ export async function getRoutineTemplates(
     ? `/api/v1/routine-templates?${query}`
     : '/api/v1/routine-templates';
 
-  return apiFetch<RoutineDetail[]>(path);
+  const list = await apiFetch<RoutineDetail[]>(path);
+  return Array.isArray(list)
+    ? list.filter((item) => !isLegacyMockTemplate(item.id))
+    : [];
 }
 
 /**
@@ -124,13 +137,28 @@ export async function getRoutineTemplateDetail(
 
 /**
  * 온보딩 프로필 기반 맞춤형 추천 루틴 템플릿 목록 조회 (로그인 필요)
+ *
+ * 백엔드 /api/v1/routine-templates/recommendations 응답의
+ * { recommendations: [{ template, reason, assessmentReady }], notice } 구조를
+ * 안전하게 파싱하고 레거시 Mock 템플릿(V2, V3)을 배제합니다.
  */
 export async function getRecommendedRoutineTemplates(): Promise<
   RoutineDetail[]
 > {
-  return apiFetch<RoutineDetail[]>('/api/v1/routine-templates/recommendations', {
+  const response = await apiFetch<
+    RoutineTemplateRecommendationResponse | RoutineDetail[]
+  >('/api/v1/routine-templates/recommendations', {
     auth: true,
   });
+
+  let rawList: RoutineDetail[] = [];
+  if (Array.isArray(response)) {
+    rawList = response;
+  } else if (response && Array.isArray(response.recommendations)) {
+    rawList = response.recommendations.map((item) => item.template);
+  }
+
+  return rawList.filter((item) => !isLegacyMockTemplate(item.id));
 }
 
 // --------------------------------------------------------------------------

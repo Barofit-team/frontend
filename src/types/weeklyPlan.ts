@@ -8,6 +8,8 @@ export type {
   RoutineDetail,
   RoutineSummary,
   RoutinePage,
+  RoutineTemplateRecommendationItem,
+  RoutineTemplateRecommendationResponse,
   WorkoutPlanStep,
   WorkoutPlanDay,
   WorkoutPlanWeek,
