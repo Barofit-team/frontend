@@ -309,7 +309,7 @@ export default function HomeScreen() {
 
           {recommendedRoutines.length > 0 ? (
             <View style={styles.recommendList}>
-              {recommendedRoutines.map((item) => (
+              {recommendedRoutines.slice(0, 3).map((item) => (
                 <Pressable
                   key={item.id}
                   accessibilityRole="button"

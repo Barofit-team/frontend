@@ -217,23 +217,41 @@ export async function fetchRecommendedRoutineItems(): Promise<
   RecommendedRoutineItem[]
 > {
   const accessToken = await tokenStorage.getAccessToken();
+  let recommendedList: BackendRoutineDetail[] = [];
 
   if (accessToken) {
     try {
       const recommended = await getRecommendedRoutineTemplates();
-      if (Array.isArray(recommended) && recommended.length > 0) {
-        return recommended.map(mapTemplateToRecommendedRoutine);
+      if (Array.isArray(recommended)) {
+        recommendedList = recommended;
       }
     } catch {
       // 추천 API 409(온보딩 미완료) 등 발생 시 기본 템플릿 조회로 진행
     }
   }
 
-  const templates = await getRoutineTemplates();
-  if (!Array.isArray(templates) || templates.length === 0) {
-    return [];
+  // 전체 유효 템플릿 목록 조회 (레거시 Mock 제외된 최신 V6 정규 템플릿 목록)
+  const allTemplates = await getRoutineTemplates().catch(() => []);
+
+  // 추천 루틴을 우선 배치하고, 나머지 템플릿을 중복 없이 병합
+  const seenIds = new Set<string>();
+  const combined: BackendRoutineDetail[] = [];
+
+  for (const item of recommendedList) {
+    if (item && !seenIds.has(item.id)) {
+      seenIds.add(item.id);
+      combined.push(item);
+    }
   }
-  return templates.map(mapTemplateToRecommendedRoutine);
+
+  for (const item of allTemplates) {
+    if (item && !seenIds.has(item.id)) {
+      seenIds.add(item.id);
+      combined.push(item);
+    }
+  }
+
+  return combined.map(mapTemplateToRecommendedRoutine);
 }
 
 /**
