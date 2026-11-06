@@ -111,6 +111,13 @@ export default function TodayRoutineScreen() {
   };
 
   const handleOpenSessionSheet = (session: TodayRoutineSession) => {
+    if (savedWorkout) {
+      Alert.alert(
+        '운동 진행 중',
+        '운동이 중단된 상태에서는 당일 루틴의 상세 설정을 변경할 수 없습니다.',
+      );
+      return;
+    }
     setEditingSessionId(session.id);
     setDraftSets(session.sets);
     setDraftReps(session.reps);
@@ -247,12 +254,20 @@ export default function TodayRoutineScreen() {
                 <Pressable
                   accessibilityRole="button"
                   accessibilityLabel={`${session.name} 세트·횟수 조절`}
+                  disabled={Boolean(savedWorkout) || saving}
                   onPress={() => handleOpenSessionSheet(session)}
                   style={({ pressed }) => [
                     styles.adjustButton,
-                    pressed && styles.pressed,
+                    Boolean(savedWorkout) && styles.disabledAdjustButton,
+                    pressed && !savedWorkout && styles.pressed,
                   ]}>
-                  <Text style={styles.adjustButtonText}>세트·횟수 조절</Text>
+                  <Text
+                    style={[
+                      styles.adjustButtonText,
+                      Boolean(savedWorkout) && styles.disabledAdjustButtonText,
+                    ]}>
+                    {savedWorkout ? '조절 불가 (운동 진행 중)' : '세트·횟수 조절'}
+                  </Text>
                 </Pressable>
               </View>
 
@@ -570,11 +585,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  disabledAdjustButton: {
+    backgroundColor: '#E4E4E7',
+    opacity: 0.6,
+  },
   adjustButtonText: {
     fontSize: 14,
     fontWeight: '700',
     color: '#111111',
     letterSpacing: -0.2,
+  },
+  disabledAdjustButtonText: {
+    color: '#9CA3AF',
   },
   restCard: {
     backgroundColor: '#F3F4F6',

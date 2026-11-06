@@ -24,11 +24,14 @@ import {
   StopwatchIcon,
 } from '@/components/home/HomeIcons';
 import { ApiError } from '@/services/api';
+import { clearLocalWorkout } from '@/services/offlineWorkout';
 import {
   saveWeeklyPlanChanges,
   toIsoDateString,
 } from '@/services/weeklyPlanService';
+import { useAuthStore } from '@/stores/useAuthStore';
 import { useWeeklyPlanStore } from '@/stores/useWeeklyPlanStore';
+import { useWorkoutDraftStore } from '@/stores/useWorkoutDraftStore';
 import type {
   PlannedExerciseItem,
   WeeklyCalendarDay,
@@ -126,6 +129,33 @@ export default function WeeklyPlanEditScreen() {
     router.replace('/weekly-plan');
   };
 
+  const checkActiveWorkoutAndConfirm = (action: () => void) => {
+    const draft = useWorkoutDraftStore.getState().draft;
+    if (draft) {
+      Alert.alert(
+        '진행 중인 운동 초기화',
+        '중단 중 주간 계획 변경을 시도하면 기존의 진행도는 저장되지 않습니다. 당일의 운동 계획을 초기화하고 계속 진행하시겠습니까?',
+        [
+          { text: '취소', style: 'cancel' },
+          {
+            text: '초기화 후 변경',
+            style: 'destructive',
+            onPress: async () => {
+              const owner = useAuthStore.getState().user?.id;
+              useWorkoutDraftStore.getState().clearDraft();
+              if (owner) {
+                await clearLocalWorkout(owner, draft.sessionId).catch(() => {});
+              }
+              action();
+            },
+          },
+        ],
+      );
+      return;
+    }
+    action();
+  };
+
   const handleComplete = async () => {
     if (isSaving) return;
     setIsSaving(true);
@@ -136,6 +166,16 @@ export default function WeeklyPlanEditScreen() {
 
     try {
       await saveWeeklyPlanChanges(planItems, updatedList);
+
+      const draft = useWorkoutDraftStore.getState().draft;
+      if (draft) {
+        useWorkoutDraftStore.getState().clearDraft();
+        const owner = useAuthStore.getState().user?.id;
+        if (owner) {
+          await clearLocalWorkout(owner, draft.sessionId).catch(() => {});
+        }
+      }
+
       await useWeeklyPlanStore.getState().loadWeeklyPlan();
       handleBack();
     } catch (e) {
@@ -211,9 +251,28 @@ export default function WeeklyPlanEditScreen() {
       return;
     }
     if (movingSourceDate) {
+      const todayIso = toIsoDateString(new Date());
+      if (
+        (movingSourceDate === todayIso || day.date === todayIso) &&
+        useWorkoutDraftStore.getState().draft
+      ) {
+        checkActiveWorkoutAndConfirm(() => {
+          swapOrMoveBetweenDays(movingSourceDate, day);
+        });
+        return;
+      }
       swapOrMoveBetweenDays(movingSourceDate, day);
       return;
     }
+
+    const todayIso = toIsoDateString(new Date());
+    if (day.date === todayIso && useWorkoutDraftStore.getState().draft) {
+      checkActiveWorkoutAndConfirm(() => {
+        setPickerTargetDay(day);
+      });
+      return;
+    }
+
     setPickerTargetDay(day);
   };
 
@@ -226,9 +285,28 @@ export default function WeeklyPlanEditScreen() {
       return;
     }
     if (movingSourceDate) {
+      const todayIso = toIsoDateString(new Date());
+      if (
+        (movingSourceDate === todayIso || day.date === todayIso) &&
+        useWorkoutDraftStore.getState().draft
+      ) {
+        checkActiveWorkoutAndConfirm(() => {
+          swapOrMoveBetweenDays(movingSourceDate, day);
+        });
+        return;
+      }
       swapOrMoveBetweenDays(movingSourceDate, day);
       return;
     }
+
+    const todayIso = toIsoDateString(new Date());
+    if (day.date === todayIso && useWorkoutDraftStore.getState().draft) {
+      checkActiveWorkoutAndConfirm(() => {
+        setMovingSourceDate(day.date);
+      });
+      return;
+    }
+
     setMovingSourceDate(day.date);
   };
 
