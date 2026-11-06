@@ -76,15 +76,22 @@ const api = load('src/services/workoutSessionService.ts', {
   assert.equal(calls[1].init.headers['X-Workout-Performed-At'], '2026-11-02T00:00:00Z');
   const weekCalls = [];
   const planRoutine = { id: 'planned-routine', name: '테스트', exercises: [], type: 'TEMPLATE' };
-  const plans = load('src/services/weeklyPlanService.ts', {
-    '@/services/api': { apiFetch: async (url, init) => {
+  const fakeApi = {
+    apiFetch: async (url, init) => {
       weekCalls.push({ url, init });
       if (url.startsWith('/api/v1/workout-plans?')) return { days: [
         { date: '2026-11-02', routine: planRoutine, estimatedMinutes: 12, estimatedKcal: null },
         { date: '2026-11-03', routine: null, estimatedMinutes: null, estimatedKcal: null },
       ] };
       return {};
-    } },
+    },
+  };
+  const routineService = load('src/services/routineService.ts', {
+    '@/services/api': fakeApi,
+  });
+  const plans = load('src/services/weeklyPlanService.ts', {
+    '@/services/api': fakeApi,
+    '@/services/routineService': routineService,
     '@/services/tokenStorage': { tokenStorage: { getAccessToken: async () => 'test' } },
   });
   const items = await plans.fetchWeeklyPlanItems(new Date('2026-11-02T12:00:00'));
