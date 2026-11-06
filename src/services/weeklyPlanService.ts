@@ -230,7 +230,7 @@ export async function fetchRecommendedRoutineItems(): Promise<
     }
   }
 
-  // 전체 유효 템플릿 목록 조회 (레거시 Mock 제외된 최신 V6 정규 템플릿 목록)
+  // 전체 유효 템플릿 목록 조회 (레거시 Mock 제외된 정규 템플릿 목록)
   const allTemplates = await getRoutineTemplates().catch(() => []);
 
   // 추천 루틴을 우선 배치하고, 나머지 템플릿을 중복 없이 병합
