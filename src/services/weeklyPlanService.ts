@@ -38,34 +38,30 @@ export function toIsoDateString(date: Date): string {
 }
 
 /**
- * 기준 날짜가 속한 주의 월요일 Date를 반환합니다.
+ * 주어진 날짜가 포함된 주의 월요일 Date 객체를 계산합니다. (Asia/Seoul 기준 날짜 기반)
  */
-export function getMondayOfWeek(baseDate: Date = new Date()): Date {
+export function getMondayOfWeek(baseDate: Date): Date {
   const date = new Date(baseDate);
-  date.setHours(0, 0, 0, 0);
   const day = date.getDay(); // 0(일) ~ 6(토)
   const diffToMonday = day === 0 ? -6 : 1 - day;
   date.setDate(date.getDate() + diffToMonday);
+  date.setHours(0, 0, 0, 0);
   return date;
 }
 
 /**
- * 기준 날짜의 'M월 N주차' 타이틀을 계산합니다.
- * 대한민국 국가표준(KS X ISO 8601)에 따라 한 주(월~일)의 기준 월과 주차는
- * 해당 주의 '목요일'이 속한 달의 몇 번째 목요일인지로 산정합니다.
+ * 'YYYY년 M월 N주차' 형식의 주차 타이틀 문자열을 생성합니다.
  */
-export function formatWeekTitle(baseDate: Date = new Date()): string {
+export function formatWeekTitle(baseDate: Date): string {
   const monday = getMondayOfWeek(baseDate);
-  const thursday = new Date(monday);
-  thursday.setDate(monday.getDate() + 3);
-
-  const month = thursday.getMonth() + 1;
-  const weekOfMonth = Math.floor((thursday.getDate() - 1) / 7) + 1;
-  return `${month}월 ${weekOfMonth}주차`;
+  const year = monday.getFullYear();
+  const month = monday.getMonth() + 1;
+  const weekNumber = Math.ceil(monday.getDate() / 7);
+  return `${year}년 ${month}월 ${weekNumber}주차`;
 }
 
 /**
- * 이번 주 월~일 7일간의 캘린더 메타 정보를 생성합니다.
+ * 월요일부터 일요일까지 7일간의 주간 캘린더 요일 배열을 구성합니다.
  */
 export function buildWeekCalendarDays(
   planItems: WeeklyPlanDayItem[],
@@ -74,13 +70,14 @@ export function buildWeekCalendarDays(
   const monday = getMondayOfWeek(baseDate);
   const plannedDateSet = new Set(planItems.map((item) => item.date));
 
-  return DAY_LABELS.map((dayLabel, index) => {
+  return Array.from({ length: 7 }, (_, index) => {
     const current = new Date(monday);
     current.setDate(monday.getDate() + index);
 
+    const isoDate = toIsoDateString(current);
     const month = padTwo(current.getMonth() + 1);
     const dateNumber = current.getDate();
-    const isoDate = toIsoDateString(current);
+    const dayLabel = DAY_LABELS[index];
 
     return {
       date: isoDate,
@@ -93,11 +90,11 @@ export function buildWeekCalendarDays(
 }
 
 /**
- * 백엔드 루틴 상세의 세트 구성으로부터 예상 소요 시간(분)과 칼로리(kcal)를 계산합니다.
+ * 템플릿 세트 목표로 예상 소요 시간을 계산합니다. 칼로리 근거가 없으면 null입니다.
  */
 export function estimateRoutineMetrics(routine: BackendRoutineDetail): {
   durationMinutes: number;
-  calories: number;
+  calories: number | null;
 } {
   let totalSeconds = 0;
 
@@ -110,7 +107,7 @@ export function estimateRoutineMetrics(routine: BackendRoutineDetail): {
   }
 
   const durationMinutes = Math.max(5, Math.round(totalSeconds / 60));
-  const calories = Math.max(30, Math.round(durationMinutes * 6.5));
+  const calories = null;
 
   return { durationMinutes, calories };
 }
@@ -176,7 +173,7 @@ export function mapTemplateToRecommendedRoutine(
 }
 
 /**
- * 사용자의 이번 주 운동 계획 목록을 서버에서 조회합니다.
+ * 사용자의 이번 주 날짜별 운동 계획을 서버에서 조회합니다.
  */
 export async function fetchWeeklyPlanItems(
   baseDate: Date = new Date(),
@@ -194,9 +191,10 @@ export async function fetchWeeklyPlanItems(
     const assignedDays = weekPlan.days.filter((day) => day.routine !== null);
     return assignedDays.map((day) => {
       const routine = day.routine!;
-      const [y, m, d] = day.date.split('-').map(Number);
-      const targetDate = new Date(y, (m || 1) - 1, d || 1);
-      const item = mapRoutineToWeeklyPlanDayItem(routine, targetDate);
+      const item = mapRoutineToWeeklyPlanDayItem(
+        routine,
+        new Date(`${day.date}T12:00:00`),
+      );
       if (day.estimatedMinutes != null) {
         item.durationMinutes = day.estimatedMinutes;
       }
@@ -239,29 +237,23 @@ export async function fetchRecommendedRoutineItems(): Promise<
 }
 
 /**
- * 특정 요일들의 운동 배정 상태를 서버와 동기화합니다.
- * - UUID 형식이 아닌 경우 백엔드로 전송하지 않습니다.
- * - 서버 오류 발생 시 호출부(UI)에서 인지하고 처리할 수 있도록 에러를 상위로 전파합니다.
+ * 변경된 날짜만 동기화합니다.
  */
-export async function syncWeeklyPlanAssignment(
-  dateIso: string,
-  routineId: string | null,
+export async function saveWeeklyPlanChanges(
+  previous: WeeklyPlanDayItem[],
+  next: WeeklyPlanDayItem[],
 ): Promise<void> {
-  const isIsoDate = /^\d{4}-\d{2}-\d{2}$/.test(dateIso);
-  if (!isIsoDate) {
-    return;
-  }
-
-  if (routineId) {
-    const isUuid =
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-        routineId,
-      );
-    if (!isUuid) {
-      return;
+  const oldByDate = new Map(previous.map((item) => [item.date, item.routineId]));
+  const newByDate = new Map(next.map((item) => [item.date, item.routineId]));
+  const dates = new Set([...oldByDate.keys(), ...newByDate.keys()]);
+  for (const date of dates) {
+    const before = oldByDate.get(date);
+    const after = newByDate.get(date);
+    if (before === after) continue;
+    if (after) {
+      await assignWorkoutPlan(date, after);
+    } else {
+      await removeWorkoutPlan(date);
     }
-    await assignWorkoutPlan(dateIso, routineId);
-  } else {
-    await removeWorkoutPlan(dateIso);
   }
 }

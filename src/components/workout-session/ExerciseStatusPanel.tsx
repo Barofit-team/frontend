@@ -11,7 +11,8 @@ const PANEL_HEIGHT = 258;
 
 type ExerciseStatusPanelProps = {
   exerciseName: string;
-  currentReps: number;
+  currentReps: number | null;
+  measurementType?: 'REPS' | 'DURATION';
   targetReps: number;
   remainingSeconds: number;
   /** 하단 Safe Area(Android 내비게이션 바) 높이 */
@@ -30,6 +31,7 @@ export function ExerciseStatusPanel({
   exerciseName,
   currentReps,
   targetReps,
+  measurementType = 'REPS',
   remainingSeconds,
   bottomInset,
 }: ExerciseStatusPanelProps) {
@@ -38,9 +40,9 @@ export function ExerciseStatusPanel({
       <View
         style={styles.repsRow}
         accessible
-        accessibilityLabel={`${targetReps}회 중 ${currentReps}회 완료`}>
-        <Text style={styles.repsCurrent}>{currentReps}</Text>
-        <Text style={styles.repsTarget}>/{targetReps}</Text>
+        accessibilityLabel={currentReps === null ? '자세 측정 연결 대기 중' : `${targetReps} 중 ${currentReps} 완료`}>
+        <Text style={styles.repsCurrent}>{currentReps ?? '—'}</Text>
+        <Text style={styles.repsTarget}>/{targetReps}{measurementType === 'DURATION' ? '초' : '회'}</Text>
       </View>
 
       <View style={styles.divider} />

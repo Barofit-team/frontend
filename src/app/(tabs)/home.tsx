@@ -238,7 +238,7 @@ export default function HomeScreen() {
                   <FlameIcon color="#9CA3AF" size={14} />
                   <Text style={styles.metaText}>
                     <Text style={styles.metaValue}>
-                      {selectedDayPlan.calories}
+                      {selectedDayPlan.calories ?? '—'}
                     </Text>{' '}
                     kcal
                   </Text>

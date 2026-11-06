@@ -2,6 +2,7 @@ import { router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import React, { useEffect, useState } from 'react';
 import {
+  Alert,
   Modal,
   Pressable,
   ScrollView,
@@ -19,6 +20,12 @@ import {
   MinusIcon,
   PlusIcon,
 } from '@/components/home/HomeIcons';
+import { apiFetch } from '@/services/api';
+import { getTodayWorkoutPlan } from '@/services/workoutSessionService';
+import { cachePlan, clearLocalWorkout, getCachedPlan, getLocalWorkout, isOffline, pendingCount } from '@/services/offlineWorkout';
+import { useAuthStore } from '@/stores/useAuthStore';
+import { useWorkoutDraftStore } from '@/stores/useWorkoutDraftStore';
+import type { BackendRoutineDetail } from '@/types/weeklyPlan';
 import {
   useTodayRoutineStore,
   type TodayRoutineSession,
@@ -32,24 +39,61 @@ const MAX_REPS = 100;
 export default function TodayRoutineScreen() {
   const insets = useSafeAreaInsets();
 
+  const owner = useAuthStore(state => state.user?.id);
+  const savedWorkout = useWorkoutDraftStore((state) => state.draft);
   const routineTitle = useTodayRoutineStore((state) => state.routineTitle);
   const tags = useTodayRoutineStore((state) => state.tags);
-  const interExerciseRestSeconds = useTodayRoutineStore(
-    (state) => state.interExerciseRestSeconds,
-  );
   const sessions = useTodayRoutineStore((state) => state.sessions);
-  const currentRoutine = useTodayRoutineStore((state) => state.currentRoutine);
-  const isLoading = useTodayRoutineStore((state) => state.isLoading);
-  const loadTodayRoutine = useTodayRoutineStore(
-    (state) => state.loadTodayRoutine,
-  );
+  const routineSnapshot = useTodayRoutineStore((state) => state.routineSnapshot);
+  const planDate = useTodayRoutineStore((state) => state.planDate);
+  const setPlan = useTodayRoutineStore((state) => state.setPlan);
   const updateSession = useTodayRoutineStore((state) => state.updateSession);
+  const [pending, setPending] = useState(0);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    if (!owner) return;
+    let active = true;
+    const refresh = () => void pendingCount(owner).then(count => { if (active) setPending(count); }).catch(() => {});
+    refresh();
+    const timer = setInterval(refresh, 5000);
+    return () => { active = false; clearInterval(timer); };
+  }, [owner]);
+  const [saving, setSaving] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!currentRoutine && !isLoading) {
-      void loadTodayRoutine();
+    let mounted = true;
+    if (!owner) return;
+    if (routineSnapshot && sessions.length > 0) {
+      setLoading(false);
+      return;
     }
-  }, [currentRoutine, isLoading, loadTodayRoutine]);
+    setLoading(true);
+    void (async () => {
+      const local = await getLocalWorkout(owner);
+      if (local && (local.session.status === 'COMPLETED' || local.session.status === 'ABANDONED')) {
+        await clearLocalWorkout(owner, local.sessionId);
+        if (mounted) useWorkoutDraftStore.getState().clearDraft();
+      } else if (mounted && local) useWorkoutDraftStore.getState().saveDraft(local.draft);
+      try {
+        const day = await getTodayWorkoutPlan();
+        await cachePlan(owner, day);
+        if (mounted) { setPlan(day.routine, day.date); setLoadError(null); }
+      } catch (error) {
+        const cached = isOffline(error) ? await getCachedPlan(owner) : null;
+        const today = new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10);
+        if (mounted && cached?.date === today) {
+          setPlan(cached.routine, cached.date);
+          setLoadError('오프라인: 저장된 오늘의 계획을 보여드려요.');
+        } else if (mounted) {
+          setPlan(null, '');
+          setLoadError('오늘의 계획을 불러오지 못했어요. 온라인에서 계획을 먼저 확인해 주세요.');
+        }
+      }
+    })().catch(() => { if (mounted) setLoadError('기기에 저장된 운동을 읽지 못했어요.'); })
+      .finally(() => { if (mounted) setLoading(false); });
+    return () => { mounted = false; };
+  }, [owner, setPlan, routineSnapshot, sessions.length]);
 
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [draftSets, setDraftSets] = useState<number>(3);
@@ -76,13 +120,34 @@ export default function TodayRoutineScreen() {
     setEditingSessionId(null);
   };
 
-  const handleSaveSession = () => {
-    if (!editingSession) return;
-    updateSession(editingSession.id, {
-      sets: draftSets,
-      reps: draftReps,
-    });
-    setEditingSessionId(null);
+  const handleSaveSession = async () => {
+    if (!editingSession || !routineSnapshot || !planDate || saving) return;
+    setSaving(true);
+    try {
+      const goal = editingSession.measurementType === 'DURATION'
+        ? { targetDurationSeconds: draftReps } : { targetReps: draftReps };
+      let updated: BackendRoutineDetail;
+      if (routineSnapshot.type === 'TEMPLATE') {
+        updated = await apiFetch<BackendRoutineDetail>('/api/v1/routines', {
+          method: 'POST', auth: true, body: JSON.stringify({ templateId: routineSnapshot.id,
+            exercises: [{ templateExerciseId: editingSession.id, setCount: draftSets, ...goal }] }),
+        });
+        await apiFetch(`/api/v1/workout-plans/${planDate}`, {
+          method: 'PUT', auth: true, body: JSON.stringify({ routineId: updated.id }),
+        });
+      } else {
+        updated = await apiFetch<BackendRoutineDetail>(`/api/v1/routines/${routineSnapshot.id}`, {
+          method: 'PATCH', auth: true, body: JSON.stringify({ exercises: [
+            { routineExerciseId: editingSession.id, setCount: draftSets, ...goal },
+          ] }),
+        });
+      }
+      setPlan(updated, planDate);
+      if (owner) await cachePlan(owner, { date: planDate, planId: null, routine: updated });
+      setEditingSessionId(null);
+    } catch {
+      Alert.alert('저장 실패', '운동 설정을 저장하지 못했어요. 다시 시도해 주세요.');
+    } finally { setSaving(false); }
   };
 
   const handleRevertSession = () => {
@@ -91,7 +156,23 @@ export default function TodayRoutineScreen() {
     setDraftReps(editingSession.defaultReps);
   };
 
+  const handleResumeWorkout = async () => {
+    if (!savedWorkout || saving) return;
+    setSaving(true);
+    try {
+      if (!owner) throw new Error('로그인이 필요해요.');
+      const local = await getLocalWorkout(owner);
+      if (!local || local.sessionId !== savedWorkout.sessionId) throw new Error('저장된 운동이 없어요.');
+      setPlan(local.session.routineSnapshot, planDate ?? '');
+      router.push({ pathname: '/workout-session', params: { resume: '1' } });
+    } catch {
+      Alert.alert('이어하기 실패', '저장된 운동 세션을 불러오지 못했어요.');
+    } finally { setSaving(false); }
+  };
+
   const handleStartWorkout = () => {
+    if (savedWorkout) { Alert.alert('진행 중인 운동', '저장된 운동을 먼저 이어서 진행해 주세요.'); return; }
+    if (!routineSnapshot || loading || saving) { Alert.alert('운동 계획 없음', '오늘의 운동을 먼저 계획해 주세요.'); return; }
     router.push('/workout-preparation', { dangerouslySingular: true });
   };
 
@@ -124,7 +205,9 @@ export default function TodayRoutineScreen() {
         {/* 상단 루틴 제목 및 태그 */}
         <View style={styles.titleSection}>
           <Text style={styles.pageTitle}>오늘의 운동 루틴</Text>
-          <Text style={styles.routineSubtitle}>{routineTitle}</Text>
+          <Text style={styles.routineSubtitle}>{loading ? '운동 계획을 불러오는 중이에요.' : (loadError ?? routineTitle)}</Text>
+          {pending > 0 && <Text style={styles.routineSubtitle}>기기에 저장됨 · 서버 동기화 대기 중</Text>}
+          <Text style={styles.assessmentNotice}>판정 로직 상태를 표시해요. 앱에서 자세 측정 기능을 연결하고 있어요.</Text>
 
           <View style={styles.tagRow}>
             {tags.map((tag) => (
@@ -135,6 +218,12 @@ export default function TodayRoutineScreen() {
           </View>
         </View>
 
+        {savedWorkout && (
+          <Pressable accessibilityRole="button" disabled={saving} onPress={handleResumeWorkout} style={styles.adjustButton}>
+            <Text style={styles.adjustButtonText}>저장한 운동 이어하기</Text>
+          </Pressable>
+        )}
+
         {/* 운동 세션 및 휴식 타임라인 리스트 */}
         <View style={styles.sessionList}>
           {sessions.map((session, index) => (
@@ -142,10 +231,13 @@ export default function TodayRoutineScreen() {
               {/* 운동 종목 카드 */}
               <View style={styles.exerciseCard}>
                 <Text style={styles.exerciseTitle}>{session.name}</Text>
+                <Text style={styles.assessmentStatus}>
+                  {session.assessmentStatus === 'READY' ? '판정 로직 준비' : session.assessmentStatus ? '판정 로직 준비 중' : '판정 상태 확인 중'}
+                </Text>
 
                 <View style={styles.exerciseMetaGroup}>
                   <Text style={styles.exerciseVolumeText}>
-                    {`${session.reps}회 × ${session.sets}세트`}
+                    {`${session.reps}${session.measurementType === 'DURATION' ? '초' : '회'} × ${session.sets}세트`}
                   </Text>
                   <Text style={styles.exerciseRestText}>
                     {`세트 간 ${session.restSeconds}초 휴식`}
@@ -169,7 +261,7 @@ export default function TodayRoutineScreen() {
                 <View style={styles.restCard}>
                   <Text style={styles.restTitle}>휴식</Text>
                   <Text style={styles.restDesc}>
-                    {`종목 간 ${interExerciseRestSeconds}초 휴식`}
+                    {`종목 간 ${routineSnapshot?.exercises[index]?.sets.at(-1)?.restSeconds ?? session.restSeconds}초 휴식`}
                   </Text>
                 </View>
               ) : null}
@@ -288,10 +380,10 @@ export default function TodayRoutineScreen() {
 
               {/* 세트당 횟수 조절 카드 */}
               <View style={styles.stepperCard}>
-                <Text style={styles.stepperLabel}>세트당 횟수</Text>
+                <Text style={styles.stepperLabel}>{editingSession.measurementType === 'DURATION' ? '세트당 시간' : '세트당 횟수'}</Text>
                 <View style={styles.stepperValueRow}>
                   <Text style={styles.stepperValueText}>
-                    {`${draftReps}회`}
+                    {`${draftReps}${editingSession.measurementType === 'DURATION' ? '초' : '회'}`}
                   </Text>
 
                   <View style={styles.stepperControlPill}>
@@ -339,6 +431,7 @@ export default function TodayRoutineScreen() {
                 accessibilityRole="button"
                 accessibilityLabel="세션 저장"
                 onPress={handleSaveSession}
+                disabled={saving}
                 style={({ pressed }) => [
                   styles.saveSessionButton,
                   pressed && styles.pressed,
@@ -442,6 +535,16 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#111111',
     letterSpacing: -0.3,
+  },
+  assessmentNotice: {
+    marginTop: 10,
+    fontSize: 13,
+    color: '#71717A',
+  },
+  assessmentStatus: {
+    marginTop: 8,
+    fontSize: 13,
+    color: '#52525B',
   },
   exerciseMetaGroup: {
     marginTop: 12,

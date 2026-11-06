@@ -13,7 +13,7 @@ import { SessionProgressCard } from './SessionProgressCard';
 type StopConfirmSheetProps = {
   visible: boolean;
   statusText: string;
-  reps: number;
+  reps: number | null;
   targetReps: number;
   onConfirm: () => void;
   onCancel: () => void;
@@ -54,7 +54,7 @@ export function StopConfirmSheet({
             운동을 중단할까요?
           </Text>
           <Text style={styles.body}>
-            {'지금까지 저장한 상태를 임시 저장합니다.\n오늘이 지나면, 새로운 루틴으로 다시 시작해요.'}
+            {'현재 운동 상태를 저장하고 나갑니다.'}
           </Text>
           <SessionProgressCard statusText={statusText} reps={reps} targetReps={targetReps} style={styles.card} />
           <Pressable

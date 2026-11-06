@@ -2,6 +2,8 @@ import { router } from 'expo-router';
 import { useEffect } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 
+import { ApiError } from '@/services/api';
+import type { MeResponse } from '@/types/onboarding';
 import { Colors } from '@/constants/theme';
 import { tokenStorage } from '@/services/tokenStorage';
 import { useAuthStore } from '@/stores/useAuthStore';
@@ -33,8 +35,21 @@ export default function Index() {
           useOnboardingStore.getState().resetOnboarding();
           router.replace('/onboarding');
         }
-      } catch {
-        // 네트워크 오류 등으로 확인하지 못하면 로그인 화면에서 다시 시작합니다
+      } catch (error) {
+        // 오프라인일 때만 마지막으로 서버가 확인한 계정을 사용합니다.
+        if (error instanceof ApiError && error.status === 0) {
+          const cached = await tokenStorage.getCachedAccount();
+          if (cached) {
+            try {
+              const me = JSON.parse(cached) as MeResponse;
+              if (me.id && me.isOnboarded) {
+                useAuthStore.getState().applyMeResponse(me);
+                if (active) router.replace('/home');
+                return;
+              }
+            } catch {}
+          }
+        }
         if (active) router.replace('/login');
       }
     };

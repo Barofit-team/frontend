@@ -1,0 +1,13 @@
+const fs = require('node:fs'), path = require('node:path'), ts = require('../node_modules/typescript'), assert = require('node:assert/strict');
+const source = fs.readFileSync(path.join(__dirname, '../src/services/poseExerciseIds.ts'), 'utf8');
+const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText;
+const m = { exports: {} }; new Function('module', 'exports', compiled)(m, m.exports);
+const { POSE_EXERCISE_IDS: ids, poseExerciseId } = m.exports;
+assert.equal(Object.keys(ids).length, 17);
+assert.equal(new Set(Object.values(ids)).size, 17);
+assert.equal(poseExerciseId('push-up'), 'pushup');
+assert.equal(poseExerciseId('pike-push-up'), 'pike_pushup');
+assert.equal(poseExerciseId('incline-push-up'), 'incline_pushup');
+assert.equal(poseExerciseId('forward-lunge'), null);
+assert.equal(poseExerciseId('toString'), null);
+console.log('PASS: 17 explicit routine-to-pose IDs; unsupported variants rejected');

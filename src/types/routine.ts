@@ -15,6 +15,8 @@ export type RoutineCategoryCode =
 
 export type MeasurementTypeCode = 'REPS' | 'DURATION';
 
+export type AssessmentStatus = 'READY' | 'IN_PROGRESS' | 'PLANNED';
+
 export interface ExerciseResponse {
   id: string;
   name: string;
@@ -43,6 +45,7 @@ export interface RoutineExerciseDetail {
   exerciseId: string;
   name: string;
   measurementType: MeasurementTypeCode;
+  assessmentStatus?: AssessmentStatus;
   order: number;
   preparation: string;
   instructions: string;

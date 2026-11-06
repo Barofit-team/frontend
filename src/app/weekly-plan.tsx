@@ -175,7 +175,7 @@ export default function WeeklyPlanScreen() {
                     <View style={styles.metaItem}>
                       <FlameIcon color="#9CA3AF" size={14} />
                       <Text style={styles.metaText}>
-                        <Text style={styles.metaValue}>{plan.calories}</Text>{' '}
+                        <Text style={styles.metaValue}>{plan.calories ?? '—'}</Text>{' '}
                         kcal
                       </Text>
                     </View>

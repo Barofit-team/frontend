@@ -25,7 +25,7 @@ import {
 } from '@/components/home/HomeIcons';
 import { ApiError } from '@/services/api';
 import {
-  syncWeeklyPlanAssignment,
+  saveWeeklyPlanChanges,
   toIsoDateString,
 } from '@/services/weeklyPlanService';
 import { useWeeklyPlanStore } from '@/stores/useWeeklyPlanStore';
@@ -40,7 +40,7 @@ interface RoutinePresetOption {
   title: string;
   exerciseCount: number;
   durationMinutes: number;
-  calories: number;
+  calories: number | null;
   exercises: PlannedExerciseItem[];
 }
 
@@ -130,24 +130,12 @@ export default function WeeklyPlanEditScreen() {
     if (isSaving) return;
     setIsSaving(true);
 
-    // 변경된 요일별 운동 계획을 백엔드 workout-plans 상태와 동기화
-    const syncPromises: Promise<void>[] = [];
-    for (const day of weekDays) {
-      if (isPastDay(day.date)) continue;
-      const initialItem = planItems.find((p) => p.date === day.date);
-      const nextItem = draftByDate[day.date];
-      if (initialItem?.routineId !== nextItem?.routineId) {
-        syncPromises.push(
-          syncWeeklyPlanAssignment(day.date, nextItem?.routineId ?? null),
-        );
-      }
-    }
+    const updatedList = weekDays
+      .map((day) => draftByDate[day.date])
+      .filter((item): item is WeeklyPlanDayItem => Boolean(item));
 
     try {
-      if (syncPromises.length > 0) {
-        await Promise.all(syncPromises);
-      }
-      // 서버 영구 저장 완료 후 백엔드 최신 데이터로 스토어를 동기화하고 화면 복귀
+      await saveWeeklyPlanChanges(planItems, updatedList);
       await useWeeklyPlanStore.getState().loadWeeklyPlan();
       handleBack();
     } catch (e) {
@@ -155,7 +143,7 @@ export default function WeeklyPlanEditScreen() {
       const message =
         e instanceof ApiError
           ? e.message
-          : '운동 계획 저장 중 오류가 발생했습니다. 다시 시도해 주세요.';
+          : '일부 계획이 저장되지 않았어요. 서버의 계획을 확인한 후 다시 시도해 주세요.';
       Alert.alert('저장 실패', message);
     } finally {
       setIsSaving(false);
@@ -367,7 +355,7 @@ export default function WeeklyPlanEditScreen() {
                             <FlameIcon color="#9CA3AF" size={13} />
                             <Text style={styles.metaText}>
                               <Text style={styles.metaValue}>
-                                {assignedPlan.calories}
+                                {assignedPlan.calories ?? '—'}
                               </Text>{' '}
                               kcal
                             </Text>
@@ -425,7 +413,7 @@ export default function WeeklyPlanEditScreen() {
                           <FlameIcon color="#9CA3AF" size={13} />
                           <Text style={styles.metaText}>
                             <Text style={styles.metaValue}>
-                              {assignedPlan.calories}
+                              {assignedPlan.calories ?? '—'}
                             </Text>{' '}
                             kcal
                           </Text>
@@ -538,7 +526,7 @@ export default function WeeklyPlanEditScreen() {
                         <View style={styles.metaItem}>
                           <FlameIcon color="#9CA3AF" size={13} />
                           <Text style={styles.metaText}>
-                            <Text style={styles.metaValue}>{option.calories}</Text>{' '}
+                            <Text style={styles.metaValue}>{option.calories ?? '—'}</Text>{' '}
                             kcal
                           </Text>
                         </View>

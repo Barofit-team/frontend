@@ -2,6 +2,7 @@ export type {
   RoutineDifficultyCode,
   RoutineCategoryCode,
   MeasurementTypeCode,
+  AssessmentStatus,
   RoutineSetDetail,
   RoutineExerciseDetail,
   RoutineDetail,
@@ -47,7 +48,7 @@ export interface WeeklyPlanDayItem {
   title: string;
   exerciseCount: number;
   durationMinutes: number;
-  calories: number;
+  calories: number | null;
   exercises: PlannedExerciseItem[];
 }
 
@@ -67,12 +68,12 @@ export interface WeeklyCalendarDay {
 export interface RecommendedRoutineItem {
   id: string;
   templateId?: string;
+  exercises?: PlannedExerciseItem[];
   category: string;
   title: string;
   exerciseCount: number;
   durationMinutes: number;
-  calories: number;
-  exercises?: PlannedExerciseItem[];
+  calories: number | null;
 }
 
 /**

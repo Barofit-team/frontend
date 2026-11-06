@@ -32,6 +32,7 @@ export class ApiError extends Error {
 type ApiFetchInit = RequestInit & {
   /** true면 저장된 Access Token을 Authorization 헤더에 붙이고, 만료 시 refresh 후 한 번 재시도합니다. */
   auth?: boolean;
+  ownerGuard?: () => boolean;
 };
 
 let onAuthFailure: (() => void) | null = null;
@@ -42,8 +43,10 @@ export function setOnAuthFailure(handler: () => void) {
 }
 
 export async function apiFetch<T>(path: string, init?: ApiFetchInit): Promise<T> {
-  const { auth = false, ...requestInit } = init ?? {};
-  let response = await send(path, requestInit, auth ? await tokenStorage.getAccessToken() : null);
+  const { auth = false, ownerGuard, ...requestInit } = init ?? {};
+  const token = auth ? await tokenStorage.getAccessToken() : null;
+  if (ownerGuard && !ownerGuard()) throw new Error('운동 기록의 계정이 변경되었습니다.');
+  let response = await send(path, requestInit, token);
 
   if (auth && response.status === 401) {
     const error = await toApiError(response);
@@ -55,6 +58,7 @@ export async function apiFetch<T>(path: string, init?: ApiFetchInit): Promise<T>
     if (!accessToken) {
       throw error;
     }
+    if (ownerGuard && !ownerGuard()) throw new Error('운동 기록의 계정이 변경되었습니다.');
     response = await send(path, requestInit, accessToken);
   }
 
@@ -100,6 +104,7 @@ async function doRefresh(): Promise<string | null> {
     if (error instanceof ApiError && error.status === 401) {
       await failSession();
     }
+    if (error instanceof ApiError && error.status === 0) throw error;
     return null;
   }
 }

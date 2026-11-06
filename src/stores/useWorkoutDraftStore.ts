@@ -1,11 +1,9 @@
 import { create } from 'zustand';
 
-/**
- * [Mock] 운동 중단 시 진행 상태 임시 보관소 (메모리, 앱 종료 시 사라짐).
- * 백엔드 저장 API가 정해지면 saveDraft에서 API를 호출하도록 교체합니다.
- * 현재는 보관만 하며, 이어하기(복원) 기능은 구현하지 않았습니다.
- */
+/** 화면 진행 위치는 앱 메모리에 보관합니다. 서버 세션은 별도로 저장됩니다. */
 export type WorkoutDraft = {
+  sessionId: string;
+  routineId: string;
   /** 루틴 안의 종목 순서(0부터) */
   exerciseIndex: number;
   totalExercises: number;
@@ -17,12 +15,14 @@ export type WorkoutDraft = {
   set: number;
   /** 현재 종목의 세트 수 */
   totalSets: number;
-  reps: number;
+  reps: number | null;
   targetReps: number;
   /** 중단 시점 단계의 남은 시간(초) */
   remainingSeconds: number;
   /** ISO 시각 */
   savedAt: string;
+  activeDurationSeconds?: number;
+  restDurationSeconds?: number;
 };
 
 interface WorkoutDraftState {
