@@ -11,6 +11,7 @@ const KEYS = {
   accessToken: 'barofit.accessToken',
   accessTokenExpiresAt: 'barofit.accessTokenExpiresAt',
   refreshToken: 'barofit.refreshToken',
+  cachedAccount: 'barofit.cachedAccount',
 } as const;
 
 const memory = new Map<string, string>();
@@ -39,6 +40,8 @@ async function deleteItem(key: string): Promise<void> {
 export const tokenStorage = {
   getAccessToken: () => getItem(KEYS.accessToken),
   getRefreshToken: () => getItem(KEYS.refreshToken),
+  getCachedAccount: () => getItem(KEYS.cachedAccount),
+  saveCachedAccount: (account: string) => setItem(KEYS.cachedAccount, account),
 
   async save(tokens: TokenResponse): Promise<void> {
     await Promise.all([

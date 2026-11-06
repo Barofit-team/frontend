@@ -1,38 +1,8 @@
-/**
- * 운동 진행 화면 (Workout Session)
- *
- * 흐름 (sessionFlow.ts) — Mock 루틴(MOCK_ROUTINE): 스쿼트 2세트 → 푸쉬업 2세트
- *   시작 카운트다운 10초 → 운동 60초 → 휴식 30초 → 다음 세트 시작 카운트다운 → …
- *   → 다음 종목 안내 카운트다운 30초("세션 2 / 푸쉬업") → … 마지막 종목의 마지막 세트가 끝나면 completed.
- *   종목이 바뀌어도 같은 화면 컴포넌트를 쓰고, 현재 Phase의 종목 데이터(운동명·목표 횟수)로 표시합니다.
- *
- *  - 운동: 전면 카메라 + 횟수(0/20 고정) · 운동명 · 60초 (ExerciseCameraArea + ExerciseStatusPanel)
- *  - 시작/휴식: CountdownView (카메라 비활성)
- *  - 각 Phase는 key가 다른 PhaseTimer로 렌더 → 이전 타이머는 정리되고 새 타이머가 처음부터 시작.
- *    완료 시 Phase id를 비교해 중복·지연 완료 처리를 무시합니다.
- *
- * 일시 정지 (pause 상태)
- *  - 상단 X / Android 뒤로가기 / 앱 백그라운드 전환 → 일시 정지. 타이머는 멈추고(같은 인스턴스 유지)
- *    PauseView를 표시하므로 카메라는 언마운트됩니다.
- *  - 운동 이어하기: 운동 중이었다면 5초 재개 카운트다운 후 남은 시간부터, 시작·휴식 중이었다면 바로 이어서 진행.
- *  - 운동 중단하기(또는 일시 정지 화면의 X) → 중단 확인 시트
- *    · 계속 운동하기 → 일시 정지 화면으로 복귀
- *    · 저장하고 나가기 → 진행 상태를 Mock 저장소(useWorkoutDraftStore)에 보관하고 이전 화면(홈)으로 이동
- *
- * 운동 완료 (completed 상태)
- *  - "오늘의 루틴 / 운동 완료!" 화면을 약 1.2초 보여준 뒤 결과 화면(F01, workout-result)으로 replace.
- *    replace라서 뒤로가기 시 운동 진행 화면으로 돌아오지 않습니다. 이동은 한 번만 실행되고,
- *    화면을 벗어나면 타이머가 정리됩니다.
- *  - 결과 데이터는 [Mock] 예시 결과를 useWorkoutResultStore에 넣습니다 (AI 분석·기록 API 연동 전).
- *
- * 이번 단계 범위 밖: AI 자세 분석, 스켈레톤 Overlay, 횟수 계산, 서버 연동
- *
- * 개발용 진입: barofit://workout-session
- */
-import { router } from 'expo-router';
+/** 서버 운동 세션과 코칭 연결 화면. AI 측정 결과 연동 전에는 세트 완료를 추정하지 않습니다. */
+import { router, useLocalSearchParams } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AppState, BackHandler, StyleSheet, View } from 'react-native';
+import { Alert, AppState, BackHandler, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { PrepColors } from '@/components/workout-preparation/palette';
@@ -43,7 +13,6 @@ import { PauseView } from '@/components/workout-session/PauseView';
 import { PhaseTimer } from '@/components/workout-session/PhaseTimer';
 import {
   EXERCISES,
-  MOCK_ROUTINE,
   RESUME_COUNTDOWN_SECONDS,
   type ExerciseConfig,
   type RoutineItem,
@@ -57,13 +26,15 @@ import {
 } from '@/components/workout-session/sessionFlow';
 import { StopConfirmSheet } from '@/components/workout-session/StopConfirmSheet';
 import { WorkoutCompleteView } from '@/components/workout-session/WorkoutCompleteView';
-import { createMockWorkoutResult } from '@/mocks/workoutResult';
+import { createWorkoutSessionDraft, type WorkoutSessionSync, type WorkoutStatus } from '@/services/workoutSessionService';
+import { clearLocalWorkout, flushWorkoutQueue, getLocalWorkout, pendingCount, queueSession, savePosition } from '@/services/offlineWorkout';
+import { useAuthStore } from '@/stores/useAuthStore';
+import type { WorkoutDraft } from '@/stores/useWorkoutDraftStore';
+import { connectSessionCoach } from '@/services/ttsService';
+import { useTtsStore } from '@/stores/useTtsStore';
 import { useTodayRoutineStore } from '@/stores/useTodayRoutineStore';
-import { useWorkoutDraftStore } from '@/stores/useWorkoutDraftStore';
 import { useWorkoutResultStore } from '@/stores/useWorkoutResultStore';
-
-/** 횟수 계산 방식이 정해지기 전까지 고정값으로 표시합니다 */
-const PLACEHOLDER_REPS = 0;
+import { useWorkoutDraftStore } from '@/stores/useWorkoutDraftStore';
 
 /**
  * none: 정상 진행 / paused: 일시 정지 화면 / stop-confirm: 중단 확인 시트 /
@@ -106,22 +77,150 @@ function describePause(phase: ActivePhase, exerciseName: string) {
 
 export default function WorkoutSessionScreen() {
   const insets = useSafeAreaInsets();
+  const owner = useAuthStore(state => state.user?.id);
+  const params = useLocalSearchParams<{ resume?: string }>();
+  const resumeDraft = useRef(params.resume === '1' ? useWorkoutDraftStore.getState().draft : null);
+  const initialPhase: SessionPhase = !resumeDraft.current ? INITIAL_PHASE
+    : resumeDraft.current.phase === 'resting'
+      ? { id: 0, kind: 'resting', exerciseIndex: resumeDraft.current.exerciseIndex, completedSet: resumeDraft.current.set }
+      : { id: 0, kind: resumeDraft.current.phase, exerciseIndex: resumeDraft.current.exerciseIndex, set: resumeDraft.current.set };
   const sessions = useTodayRoutineStore((state) => state.sessions);
+  const snapshot = useTodayRoutineStore((state) => state.routineSnapshot);
+  const [sessionReady, setSessionReady] = useState(false);
+  const [sessionError, setSessionError] = useState<string | null>(null);
+  const serverSession = useRef<{ sessionId: string; session: WorkoutSessionSync } | null>(null);
+  const startPromise = useRef<Promise<{ sessionId: string; session: WorkoutSessionSync }> | null>(null);
+  const updateQueue = useRef<Promise<void>>(Promise.resolve());
+  const running = useRef<{ started: number; kind: 'active' | 'rest' } | null>(null);
+  const remainingRef = useRef(resumeDraft.current?.remainingSeconds ?? 0);
+  const positionRef = useRef<WorkoutDraft | null>(resumeDraft.current);
+  const coachCleanup = useRef<(() => void) | null>(null);
+  const coachAttempting = useRef(false);
+  const elapsed = useRef({ activeMs: 0, restMs: 0 });
+  const phaseRef = useRef<SessionPhase>(initialPhase);
+
+  const currentElapsed = useCallback(() => {
+    const value = { ...elapsed.current };
+    if (running.current) {
+      const delta = Math.max(0, Date.now() - running.current.started);
+      if (running.current.kind === 'active') value.activeMs += delta;
+      else value.restMs += delta;
+    }
+    return value;
+  }, []);
+  const updateServerStatus = useCallback((status: WorkoutStatus) => {
+    const operation = updateQueue.current.then(async () => {
+      const currentRef = serverSession.current;
+      if (!currentRef || !owner || !positionRef.current) throw new Error('운동 세션이 아직 준비되지 않았어요.');
+      const local = await getLocalWorkout(owner);
+      if (!local || local.sessionId !== currentRef.sessionId) throw new Error('저장된 운동 세션을 찾지 못했어요.');
+      const current = { sessionId: local.sessionId, session: local.session };
+      const duration = currentElapsed();
+      const next: WorkoutSessionSync = { ...current.session, status, revision: current.session.revision + 1,
+        endedAt: status === 'COMPLETED' || status === 'ABANDONED' ? new Date().toISOString() : null,
+        activeDurationSeconds: Math.floor(duration.activeMs / 1000),
+        restDurationSeconds: Math.floor(duration.restMs / 1000) };
+      await queueSession(owner, current.sessionId, next, positionRef.current);
+      serverSession.current = { sessionId: current.sessionId, session: next };
+      void flushWorkoutQueue(owner, () => useAuthStore.getState().user?.id === owner).catch(() => {});
+    });
+    updateQueue.current = operation.catch(() => {});
+    return operation;
+  }, [owner, currentElapsed]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!snapshot) { setSessionError('오늘의 운동 계획을 먼저 선택해 주세요.'); return; }
+    if (!owner) { setSessionError('로그인이 필요해요.'); return; }
+    if (!startPromise.current) {
+      if (resumeDraft.current) {
+        const saved = resumeDraft.current;
+        startPromise.current = getLocalWorkout(owner).then(local => {
+          if (!local || local.sessionId !== saved.sessionId || local.session.routineId !== snapshot.id ||
+              local.session.status === 'COMPLETED' || local.session.status === 'ABANDONED')
+            throw new Error('이어갈 수 없는 세션입니다.');
+          positionRef.current = local.draft;
+          return { sessionId: local.sessionId, session: local.session };
+        });
+      } else {
+        const draft = createWorkoutSessionDraft(snapshot);
+        const first = snapshot.exercises[0];
+        if (!first) { setSessionError('운동 종목이 없어요.'); return; }
+        const position: WorkoutDraft = { sessionId: draft.sessionId, routineId: snapshot.id,
+          exerciseIndex: 0, totalExercises: snapshot.exercises.length, exerciseId: first.exerciseId,
+          exerciseName: first.name, phase: 'countdown', set: 1, totalSets: first.sets.length,
+          reps: null, targetReps: first.sets[0]?.targetReps ?? 0,
+          remainingSeconds: phaseDurationSeconds(INITIAL_PHASE, sessions.map(s => ({ exerciseId: s.exerciseId, sets: s.sets }))) ?? 0,
+          savedAt: new Date().toISOString(), activeDurationSeconds: 0, restDurationSeconds: 0 };
+        positionRef.current = position;
+        remainingRef.current = position.remainingSeconds;
+        startPromise.current = queueSession(owner, draft.sessionId, draft.session, position).then(() => draft);
+      }
+    }
+    startPromise.current.then((draft) => {
+      if (cancelled) return;
+      serverSession.current = draft;
+      elapsed.current = { activeMs: (positionRef.current?.activeDurationSeconds ?? draft.session.activeDurationSeconds) * 1000,
+        restMs: (positionRef.current?.restDurationSeconds ?? draft.session.restDurationSeconds ?? 0) * 1000 };
+      setSessionReady(true);
+      coachAttempting.current = true;
+      flushWorkoutQueue(owner, () => useAuthStore.getState().user?.id === owner).then(() => connectSessionCoach(draft.sessionId)).then((cleanup) => {
+        if (cancelled) { cleanup(); return; }
+        coachCleanup.current = cleanup;
+        const current = phaseRef.current;
+        if (!resumeDraft.current && current.kind !== 'completed') {
+          const exercise = snapshot.exercises[current.exerciseIndex];
+          if (exercise) useTtsStore.getState().sendCoachEvent({ eventType: 'EXERCISE_START', exerciseId: exercise.exerciseId });
+        }
+      }).catch(() => {
+        if (cancelled) return;
+        const current = phaseRef.current;
+        if (current.kind !== 'completed') {
+          const intro = snapshot.exercises[current.exerciseIndex]?.introTtsText;
+          if (intro) useTtsStore.getState().playSpeech(intro, 'EXERCISE_START');
+        }
+      }).finally(() => { coachAttempting.current = false; });
+    }).catch(() => { if (!cancelled) setSessionError('운동 세션을 저장하지 못했어요. 연결을 확인한 후 다시 시작해 주세요.'); });
+    return () => { cancelled = true; coachCleanup.current?.(); coachCleanup.current = null; };
+  }, [snapshot, owner, sessions]);
+
+  // Reconnect after an offline workout without interrupting local speech or delaying the session.
+  useEffect(() => {
+    if (!sessionReady || !owner) return;
+    let disposed = false;
+    const reconnect = () => {
+      const session = serverSession.current;
+      const state = useTtsStore.getState().socketStatus;
+      if (disposed || coachAttempting.current || !session || state === 'connected' || state === 'connecting') return;
+      coachAttempting.current = true;
+      void flushWorkoutQueue(owner, () => useAuthStore.getState().user?.id === owner)
+        .then(() => {
+          if (disposed || useAuthStore.getState().user?.id !== owner) return null;
+          return connectSessionCoach(session.sessionId);
+        }).then(cleanup => {
+          if (!cleanup) return;
+          if (disposed) cleanup();
+          else coachCleanup.current = cleanup;
+        }).catch(() => {}).finally(() => { coachAttempting.current = false; });
+    };
+    const timer = setInterval(reconnect, 15000);
+    const subscription = AppState.addEventListener('change', state => { if (state === 'active') reconnect(); });
+    return () => { disposed = true; clearInterval(timer); subscription.remove(); };
+  }, [sessionReady, owner]);
 
   const activeRoutine = useMemo<readonly RoutineItem[]>(
     () =>
-      sessions.length > 0
-        ? sessions.map((s) => ({ exerciseId: s.exerciseId, sets: s.sets }))
-        : MOCK_ROUTINE,
-    [sessions],
+      sessions.map((s, index) => ({ exerciseId: s.exerciseId, sets: s.sets, targets: snapshot?.exercises[index]?.sets })),
+    [sessions, snapshot],
   );
 
   /** 현재 Phase의 종목 데이터 (오늘의 운동 루틴에서 설정한 세트/횟수 반영) */
   const resolveExercise = useCallback(
     (current: ActivePhase): ExerciseConfig => {
       const session = sessions[current.exerciseIndex];
-      const item = activeRoutine[current.exerciseIndex] ?? MOCK_ROUTINE[0];
-      const base = EXERCISES[session?.exerciseId ?? item.exerciseId];
+      const exerciseId = session?.exerciseId ?? activeRoutine[current.exerciseIndex]?.exerciseId ?? '';
+      const base = EXERCISES[exerciseId] ?? { id: exerciseId, name: session?.name ?? exerciseId,
+        targetReps: session?.reps ?? 0, cameraView: 'side' as const };
       return {
         ...base,
         name: session?.name ?? base.name,
@@ -131,9 +230,48 @@ export default function WorkoutSessionScreen() {
     [sessions, activeRoutine],
   );
 
-  const [phase, setPhase] = useState<SessionPhase>(INITIAL_PHASE);
-  const [pause, setPause] = useState<PauseState>('none');
+  const [phase, setPhase] = useState<SessionPhase>(initialPhase);
+  const [pause, setPause] = useState<PauseState>(resumeDraft.current ? 'paused' : 'none');
   const [exiting, setExiting] = useState(false);
+
+  useEffect(() => { phaseRef.current = phase; }, [phase]);
+  useEffect(() => {
+    if (!sessionReady || pause !== 'none' || phase.kind === 'completed') return;
+    const kind = phase.kind === 'exercising' ? 'active'
+      : phase.kind === 'resting' || (phase.kind === 'countdown' && phase.exerciseIndex > 0 && phase.set === 1) ? 'rest' : null;
+    if (!kind) return;
+    running.current = { started: Date.now(), kind };
+    return () => {
+      if (!running.current) return;
+      const duration = Math.max(0, Date.now() - running.current.started);
+      if (running.current.kind === 'active') elapsed.current.activeMs += duration;
+      else elapsed.current.restMs += duration;
+      running.current = null;
+    };
+  }, [phase, pause, sessionReady]);
+
+  useEffect(() => {
+    if (!sessionReady || pause !== 'none' || phase.kind !== 'countdown' || phase.set !== 1 || phase.exerciseIndex === 0) return;
+    const exercise = snapshot?.exercises[phase.exerciseIndex];
+    if (exercise && !useTtsStore.getState().sendCoachEvent({ eventType: 'EXERCISE_START', exerciseId: exercise.exerciseId })) {
+      if (exercise.introTtsText) useTtsStore.getState().playSpeech(exercise.introTtsText, 'EXERCISE_START');
+    }
+  }, [phase, pause, sessionReady, snapshot]);
+  const checkpoint = useCallback((remainingSeconds: number) => {
+    remainingRef.current = remainingSeconds;
+    const current = serverSession.current;
+    if (!owner || !current || phase.kind === 'completed') return;
+    const exercise = resolveExercise(phase);
+    const duration = currentElapsed();
+    const position: WorkoutDraft = { sessionId: current.sessionId, routineId: current.session.routineId,
+      exerciseIndex: phase.exerciseIndex, totalExercises: activeRoutine.length, exerciseId: exercise.id,
+      exerciseName: exercise.name, phase: phase.kind, set: describePause(phase, exercise.name).set,
+      totalSets: activeRoutine[phase.exerciseIndex]?.sets ?? 1, reps: null, targetReps: exercise.targetReps,
+      remainingSeconds, savedAt: new Date().toISOString(),
+      activeDurationSeconds: Math.floor(duration.activeMs / 1000), restDurationSeconds: Math.floor(duration.restMs / 1000) };
+    positionRef.current = position;
+    void savePosition(owner, current.sessionId, position).catch(() => Alert.alert('저장 실패', '기기에 운동 진행 상태를 저장하지 못했어요.'));
+  }, [owner, phase, resolveExercise, activeRoutine, currentElapsed]);
   const exitingRef = useRef(false);
 
   // 일시 정지 상태를 바꾼 시각. 렌더·effect를 기다리지 않도록 전환을 요청하는 즉시 기록
@@ -165,13 +303,15 @@ export default function WorkoutSessionScreen() {
   const requestPause = useCallback(() => {
     markPauseChange();
     setPause(p => (p === 'none' || p === 'resuming' ? 'paused' : p));
-  }, [markPauseChange]);
+    if (serverSession.current) void updateServerStatus('PAUSED').catch(() => Alert.alert('동기화 실패', '운동 일시 정지 상태를 저장하지 못했어요.'));
+  }, [markPauseChange, updateServerStatus]);
   const resume = useCallback(() => {
     if (isTapLocked()) return;
     markPauseChange();
     // 운동 중이었다면 재개 카운트다운, 시작·휴식 카운트다운 중이었다면 바로 이어서
     setPause(p => (p !== 'paused' ? p : phase.kind === 'exercising' ? 'resuming' : 'none'));
-  }, [phase.kind, isTapLocked, markPauseChange]);
+    void updateServerStatus('ACTIVE').catch(() => Alert.alert('동기화 실패', '운동 재개 상태를 저장하지 못했어요.'));
+  }, [phase.kind, isTapLocked, markPauseChange, updateServerStatus]);
   const finishResumeCountdown = useCallback(() => {
     markPauseChange();
     setPause(p => (p === 'resuming' ? 'none' : p));
@@ -204,9 +344,12 @@ export default function WorkoutSessionScreen() {
       if (exitingRef.current || isTapLocked() || phase.kind === 'completed') return;
       exitingRef.current = true;
       setExiting(true);
-      // [Mock] 백엔드 저장 대신 메모리에 보관
       const exercise = resolveExercise(phase);
-      useWorkoutDraftStore.getState().saveDraft({
+      const current = serverSession.current;
+      if (!current) { exitingRef.current = false; setExiting(false); return; }
+      const draft = {
+        sessionId: current.sessionId,
+        routineId: current.session.routineId,
         exerciseIndex: phase.exerciseIndex,
         totalExercises: activeRoutine.length,
         exerciseId: exercise.id,
@@ -214,37 +357,64 @@ export default function WorkoutSessionScreen() {
         phase: phase.kind,
         set: describePause(phase, exercise.name).set,
         totalSets: activeRoutine[phase.exerciseIndex]?.sets ?? 1,
-        reps: PLACEHOLDER_REPS,
+        reps: null,
         targetReps: exercise.targetReps,
         remainingSeconds,
         savedAt: new Date().toISOString(),
+      };
+      checkpoint(remainingSeconds);
+      void updateServerStatus('PAUSED').then(async () => {
+        const saved = positionRef.current ?? draft;
+        if (owner) await savePosition(owner, current.sessionId, saved);
+        useWorkoutDraftStore.getState().saveDraft(saved);
+        close();
+      }).catch(() => {
+        exitingRef.current = false; setExiting(false);
+        Alert.alert('저장 실패', '운동 상태를 저장하지 못했어요. 연결 후 다시 시도해 주세요.');
       });
-      // 화면이 언마운트되며 타이머·카메라가 정리됩니다
-      close();
     },
-    [phase, close, isTapLocked, resolveExercise, activeRoutine]
+    [phase, close, isTapLocked, resolveExercise, activeRoutine, updateServerStatus, checkpoint, owner]
   );
 
-  // 운동 완료 → 결과 저장 후 잠시 완료 화면을 보여주고 결과 화면으로 교체 (한 번만)
+  // 모델이 연결되기 전에는 측정 결과를 만들어 내지 않습니다.
   useEffect(() => {
-    if (phase.kind !== 'completed') return;
-    // [Mock] 실제 횟수·자세 분석 결과가 아직 없어 예시 결과를 넣습니다
-    useWorkoutResultStore.getState().setResult(createMockWorkoutResult());
-    const timer = setTimeout(() => {
-      if (exitingRef.current) return;
-      exitingRef.current = true;
-      router.replace('/workout-result');
-    }, RESULT_ENTRY_DELAY_MS);
-    return () => clearTimeout(timer);
-  }, [phase.kind]);
+    if (phase.kind !== 'completed' || !sessionReady) return;
+    let cancelled = false;
+    updateServerStatus('COMPLETED').then(async () => {
+      useTtsStore.getState().sendCoachEvent({ eventType: 'WORKOUT_FINISH' });
+      const current = serverSession.current;
+      if (!owner || !current) throw new Error('운동 세션을 찾지 못했어요.');
+      const hasResult = current.session.sets.some(set => (set.actualReps ?? 0) > 0 || (set.actualDurationSeconds ?? 0) > 0);
+      await clearLocalWorkout(owner, current.sessionId);
+      useWorkoutDraftStore.getState().clearDraft();
+      let uploaded = false;
+      try {
+        await flushWorkoutQueue(owner, () => useAuthStore.getState().user?.id === owner);
+        if (await pendingCount(owner)) await flushWorkoutQueue(owner, () => useAuthStore.getState().user?.id === owner);
+        uploaded = await pendingCount(owner) === 0;
+      } catch { /* The persisted queue will retry once connectivity returns. */ }
+      if (!cancelled) setTimeout(() => {
+        if (cancelled || exitingRef.current) return;
+        exitingRef.current = true;
+        if (uploaded && hasResult) {
+          useWorkoutResultStore.getState().openApiSession(current.sessionId, 'workout');
+          router.replace('/workout-result');
+        } else {
+          Alert.alert('운동 종료', uploaded ? '운동 세션을 저장했어요.' : '운동 기록은 기기에 보관됐어요. 연결되면 동기화합니다.');
+          router.replace('/home');
+        }
+      }, RESULT_ENTRY_DELAY_MS);
+    }).catch(() => { if (!cancelled) Alert.alert('저장 실패', '운동 종료 상태를 저장하지 못했어요.'); });
+    return () => { cancelled = true; };
+  }, [phase.kind, sessionReady, updateServerStatus, owner]);
 
   // 앱이 백그라운드로 가면 일시 정지 (복귀 후에는 사용자가 '운동 이어하기'로 재개)
   useEffect(() => {
     const sub = AppState.addEventListener('change', state => {
-      if (state !== 'active') requestPause();
+      if (state !== 'active') { checkpoint(remainingRef.current); requestPause(); }
     });
     return () => sub.remove();
-  }, [requestPause]);
+  }, [requestPause, checkpoint]);
 
   // Android 하드웨어 뒤로가기 → 상단 X와 동일하게 처리
   useEffect(() => {
@@ -260,8 +430,9 @@ export default function WorkoutSessionScreen() {
       <ExerciseCameraArea onPressClose={handleClose} />
       <ExerciseStatusPanel
         exerciseName={exercise.name}
-        currentReps={PLACEHOLDER_REPS}
+        currentReps={null}
         targetReps={exercise.targetReps}
+        measurementType={sessions[phase.kind === 'completed' ? 0 : phase.exerciseIndex]?.measurementType}
         remainingSeconds={remainingSeconds}
         bottomInset={insets.bottom}
       />
@@ -317,7 +488,7 @@ export default function WorkoutSessionScreen() {
         <PauseView
           subtitle={info.subtitle}
           statusText={info.statusText}
-          reps={PLACEHOLDER_REPS}
+          reps={null}
           targetReps={exercise.targetReps}
           onPressStop={openStopConfirm}
           onPressResume={resume}
@@ -326,7 +497,7 @@ export default function WorkoutSessionScreen() {
         <StopConfirmSheet
           visible={pause === 'stop-confirm'}
           statusText={info.statusText}
-          reps={PLACEHOLDER_REPS}
+          reps={null}
           targetReps={exercise.targetReps}
           busy={exiting}
           onConfirm={() => saveAndExit(remainingSeconds)}
@@ -336,12 +507,18 @@ export default function WorkoutSessionScreen() {
     );
   };
 
-  const duration = phaseDurationSeconds(phase);
+  const duration = resumeDraft.current && phase.id === 0
+    ? resumeDraft.current.remainingSeconds : phaseDurationSeconds(phase, activeRoutine);
 
   return (
     <>
       <StatusBar style="dark" />
-      {phase.kind === 'completed' || duration === null ? (
+      {!sessionReady ? (
+        <View style={[styles.screen, { paddingTop: insets.top + 30, paddingHorizontal: 20 }]}>
+          <Text>{sessionError ?? '운동 세션을 준비하고 있어요.'}</Text>
+          {sessionError && <Pressable onPress={close}><Text>돌아가기</Text></Pressable>}
+        </View>
+      ) : phase.kind === 'completed' || duration === null ? (
         // 카메라를 끄고 완료 화면만 표시 → RESULT_ENTRY_DELAY_MS 뒤 결과 화면으로 이동
         <WorkoutCompleteView onPressClose={handleClose} />
       ) : (
@@ -349,7 +526,15 @@ export default function WorkoutSessionScreen() {
           key={phase.id}
           durationSeconds={duration}
           paused={pause !== 'none'}
-          onComplete={() => completePhase(phase.id)}>
+          onTick={checkpoint}
+          onComplete={() => {
+            if (phase.kind === 'exercising') {
+              requestPause();
+              Alert.alert('자세 측정 연결 대기', 'AI 모델이 연결되면 세트 수행 결과를 기록할 수 있어요.');
+              return;
+            }
+            completePhase(phase.id);
+          }}>
           {remainingSeconds =>
             pause === 'none' ? renderPhase(phase, remainingSeconds) : renderPaused(phase, remainingSeconds)
           }

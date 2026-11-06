@@ -84,11 +84,11 @@ export function buildWeekCalendarDays(
 }
 
 /**
- * 백엔드 루틴 상세의 세트 구성으로부터 예상 소요 시간(분)과 칼로리(kcal)를 계산합니다.
+ * 템플릿 세트 목표로 예상 소요 시간을 계산합니다. 칼로리 근거가 없으면 null입니다.
  */
 function estimateRoutineMetrics(routine: BackendRoutineDetail): {
   durationMinutes: number;
-  calories: number;
+  calories: number | null;
 } {
   let totalSeconds = 0;
 
@@ -101,7 +101,7 @@ function estimateRoutineMetrics(routine: BackendRoutineDetail): {
   }
 
   const durationMinutes = Math.max(5, Math.round(totalSeconds / 60));
-  const calories = Math.max(30, Math.round(durationMinutes * 6.5));
+  const calories = null;
 
   return { durationMinutes, calories };
 }
@@ -155,14 +155,14 @@ export function mapTemplateToRecommendedRoutine(
     category: categoryLabel,
     title: template.name,
     exerciseCount: template.exercises.length,
+    exercises: template.exercises.map(exercise => ({ id: exercise.id, exerciseId: exercise.exerciseId, name: exercise.name })),
     durationMinutes,
     calories,
   };
 }
 
 /**
- * 사용자의 이번 주 운동 계획 목록을 서버에서 조회합니다.
- * - 저장된 토큰이 없거나 등록된 사용자 루틴이 없으면 빈 배열([])을 반환합니다.
+ * 사용자의 이번 주 날짜별 운동 계획을 서버에서 조회합니다.
  */
 export async function fetchWeeklyPlanItems(
   baseDate: Date = new Date(),
@@ -172,36 +172,16 @@ export async function fetchWeeklyPlanItems(
     return [];
   }
 
-  const page = await apiFetch<BackendRoutinePage>(
-    '/api/v1/routines?page=0&size=20',
-    { auth: true },
-  );
-
-  if (!page.content || page.content.length === 0) {
-    return [];
-  }
-
-  // 각 사용자 루틴의 상세(종목 목록 포함)를 조회하여 이번 주 운동 요일(월/수/금 등)에 매핑
-  const details = await Promise.all(
-    page.content.slice(0, 7).map((summary) =>
-      apiFetch<BackendRoutineDetail>(`/api/v1/routines/${summary.id}`, {
-        auth: true,
-      }),
-    ),
-  );
-
   const monday = getMondayOfWeek(baseDate);
-  const defaultOffsets = [0, 2, 4, 1, 3, 5, 6]; // 월, 수, 금 우선 배치
-
-  return details
-    .map((detail, idx) => {
-      const targetDate = new Date(monday);
-      targetDate.setDate(
-        monday.getDate() + defaultOffsets[idx % defaultOffsets.length],
-      );
-      return mapRoutineToWeeklyPlanDayItem(detail, targetDate);
-    })
-    .sort((a, b) => a.date.localeCompare(b.date));
+  const week = await apiFetch<{ days: { date: string; routine: BackendRoutineDetail | null;
+      estimatedMinutes: number | null; estimatedKcal: number | null }[] }>(
+    `/api/v1/workout-plans?weekStart=${toIsoDateString(monday)}`, { auth: true },
+  );
+  return week.days.filter(day => day.routine !== null).map(day => {
+    const item = mapRoutineToWeeklyPlanDayItem(day.routine!, new Date(`${day.date}T12:00:00`));
+    return { ...item, durationMinutes: day.estimatedMinutes ?? item.durationMinutes,
+      calories: day.estimatedKcal };
+  });
 }
 
 /**
@@ -217,4 +197,17 @@ export async function fetchRecommendedRoutineItems(): Promise<
     return [];
   }
   return templates.map(mapTemplateToRecommendedRoutine);
+}
+
+/** 변경된 날짜만 동기화합니다. 일부 요청 실패 시 호출자가 서버 계획을 다시 조회해야 합니다. */
+export async function saveWeeklyPlanChanges(previous: WeeklyPlanDayItem[], next: WeeklyPlanDayItem[]): Promise<void> {
+  const oldByDate = new Map(previous.map(item => [item.date, item.routineId]));
+  const newByDate = new Map(next.map(item => [item.date, item.routineId]));
+  const dates = new Set([...oldByDate.keys(), ...newByDate.keys()]);
+  for (const date of dates) {
+    const before = oldByDate.get(date), after = newByDate.get(date);
+    if (before === after) continue;
+    if (after) await apiFetch(`/api/v1/workout-plans/${date}`, { method: 'PUT', auth: true, body: JSON.stringify({ routineId: after }) });
+    else await apiFetch(`/api/v1/workout-plans/${date}`, { method: 'DELETE', auth: true });
+  }
 }

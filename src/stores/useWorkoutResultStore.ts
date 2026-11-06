@@ -9,7 +9,7 @@ import type { WorkoutSessionResult } from '@/types/workoutResult';
 export interface ApiSessionReference {
   source: 'api';
   sessionId: string;
-  openedFrom: 'record';
+  openedFrom: 'record' | 'workout';
 }
 
 export type StoredWorkoutResult = WorkoutSessionResult | ApiSessionReference;
@@ -23,13 +23,13 @@ export type StoredWorkoutResult = WorkoutSessionResult | ApiSessionReference;
 interface WorkoutResultState {
   result: StoredWorkoutResult | null;
   setResult: (result: WorkoutSessionResult) => void;
-  openApiSession: (sessionId: string) => void;
+  openApiSession: (sessionId: string, openedFrom?: 'record' | 'workout') => void;
   clearResult: () => void;
 }
 
 export const useWorkoutResultStore = create<WorkoutResultState>((set) => ({
   result: null,
   setResult: (result) => set({ result }),
-  openApiSession: (sessionId) => set({ result: { source: 'api', sessionId, openedFrom: 'record' } }),
+  openApiSession: (sessionId, openedFrom = 'record') => set({ result: { source: 'api', sessionId, openedFrom } }),
   clearResult: () => set({ result: null }),
 }));

@@ -1,10 +1,4 @@
-/**
- * 운동 진행 화면 설정값.
- *
- * ⚠️ 임시 정책(퍼블리싱 검증용)
- *  - 운동 시간은 60초 고정이며, 시간이 끝나면 운동 완료로 처리합니다.
- *  - 횟수는 아직 계산하지 않습니다(항상 0회). 실제 완료 기준은 백엔드·AI팀과 협의 후 변경합니다.
- */
+/** 모델 연결 전 안내 화면의 기본 시간과 카메라 설정입니다. */
 
 /** 한 세트의 운동 진행 시간(초) */
 export const EXERCISE_DURATION_SECONDS = 60;
@@ -21,7 +15,7 @@ export const REST_DURATION_SECONDS = 30;
 /** 카메라 촬영 방향: 정면(스쿼트) / 측면(푸쉬업) */
 export type CameraView = 'front' | 'side';
 
-export type ExerciseId = 'squat' | 'push-up';
+export type ExerciseId = string;
 
 export type ExerciseConfig = {
   id: ExerciseId;
@@ -47,6 +41,7 @@ export type RoutineItem = {
   exerciseId: ExerciseId;
   /** 세트 수 */
   sets: number;
+  targets?: { targetDurationSeconds: number | null; restSeconds: number }[];
 };
 
 /** [Mock] 운동 루틴. 운동 루틴(백엔드) 연동 전 임시값: 스쿼트 2세트 → 푸쉬업 2세트 */
