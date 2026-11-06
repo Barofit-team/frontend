@@ -5,9 +5,12 @@ import {
   setAudioModeAsync,
 } from 'expo-audio';
 import { create } from 'zustand';
+import * as Speech from 'expo-speech';
 
 import {
   BackendCoachingPayload,
+  CoachingAuthentication,
+  CoachingEvent,
   CoachMessage,
   SocketConnectionStatus,
 } from '@/types/tts';
@@ -15,6 +18,7 @@ import {
 let wsInstance: WebSocket | null = null;
 let activePlayer: AudioPlayer | null = null;
 let audioModeReady = false;
+let speechGeneration = 0;
 
 async function ensureAudioMode(): Promise<void> {
   if (audioModeReady) return;
@@ -56,9 +60,11 @@ interface TtsState {
   currentText: string;
   lastMessage: CoachMessage | null;
 
-  connectWebSocket: (customUrl?: string) => void;
+  connectWebSocket: (customUrl?: string, auth?: CoachingAuthentication) => void;
+  sendCoachEvent: (event: CoachingEvent) => boolean;
   disconnectWebSocket: () => void;
   playAudio: (source: AudioSource, text?: string, type?: string) => Promise<void>;
+  playSpeech: (text: string, type?: string) => void;
   stop: () => void;
 }
 
@@ -70,7 +76,7 @@ export const useTtsStore = create<TtsState>((set, get) => ({
   lastMessage: null,
 
   // 1. 운동 시작 시 웹소켓 연결 및 백엔드 오디오 수신 리스닝
-  connectWebSocket: (customUrl?: string) => {
+  connectWebSocket: (customUrl?: string, auth?: CoachingAuthentication) => {
     const targetUrl = customUrl || get().wsUrl;
 
     if (wsInstance) {
@@ -79,6 +85,10 @@ export const useTtsStore = create<TtsState>((set, get) => ({
       wsInstance = null;
     }
 
+    if (!auth?.accessToken || !auth.sessionId) {
+      set({ socketStatus: 'error', wsUrl: targetUrl });
+      return;
+    }
     set({ socketStatus: 'connecting', wsUrl: targetUrl });
 
     try {
@@ -86,15 +96,22 @@ export const useTtsStore = create<TtsState>((set, get) => ({
       wsInstance = ws;
 
       ws.onopen = () => {
-        set({ socketStatus: 'connected' });
+        if (wsInstance !== ws) return;
+        ws.send(JSON.stringify({ type: 'AUTH', accessToken: auth.accessToken, sessionId: auth.sessionId }));
       };
 
       ws.onmessage = (event) => {
+        if (wsInstance !== ws) return;
         const raw = String(event.data ?? '').trim();
         if (!raw) return;
 
         try {
           const payload = JSON.parse(raw) as BackendCoachingPayload;
+          if (payload.type === 'AUTH_OK') {
+            if (wsInstance === ws) set({ socketStatus: 'connected' });
+            return;
+          }
+          if (!payload.text) return;
           const label = payload.text || '백엔드 코칭 음성';
           const type = payload.type || 'BACKEND_PUSH';
 
@@ -103,6 +120,8 @@ export const useTtsStore = create<TtsState>((set, get) => ({
           } else if (payload.audioBase64) {
             const cleanBase64 = payload.audioBase64.replace(/^data:audio\/\w+;base64,/, '');
             get().playAudio({ uri: `data:audio/mp3;base64,${cleanBase64}` }, label, type);
+          } else {
+            get().playSpeech(label, type);
           }
         } catch {
           // 유효하지 않은 JSON 형식 무시
@@ -110,16 +129,23 @@ export const useTtsStore = create<TtsState>((set, get) => ({
       };
 
       ws.onerror = () => {
-        set({ socketStatus: 'error' });
+        if (wsInstance === ws) set({ socketStatus: 'error' });
       };
 
       ws.onclose = () => {
-        set({ socketStatus: 'disconnected' });
+        if (wsInstance !== ws) return;
+        set({ socketStatus: get().socketStatus === 'connecting' ? 'error' : 'disconnected' });
         wsInstance = null;
       };
     } catch {
       set({ socketStatus: 'error' });
     }
+  },
+
+  sendCoachEvent: (event) => {
+    if (!wsInstance || wsInstance.readyState !== WebSocket.OPEN || get().socketStatus !== 'connected') return false;
+    try { wsInstance.send(JSON.stringify({ type: 'COACH_EVENT', ...event })); return true; }
+    catch { return false; }
   },
 
   disconnectWebSocket: () => {
@@ -174,11 +200,31 @@ export const useTtsStore = create<TtsState>((set, get) => ({
 
       player.play();
     } catch {
-      set({ isPlaying: false, currentText: '' });
+      if (text) get().playSpeech(text, type);
+      else set({ isPlaying: false, currentText: '' });
     }
   },
 
+  playSpeech: (text, type = 'LOCAL_SPEECH') => {
+    if (!text.trim()) return;
+    releaseActivePlayer();
+    const generation = ++speechGeneration;
+    const msg: CoachMessage = { id: `${Date.now()}`, text, type,
+      timestamp: new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) };
+    set({ isPlaying: true, currentText: text, lastMessage: msg });
+    void Speech.stop().then(() => {
+      if (speechGeneration !== generation) return;
+      Speech.speak(text, { language: 'ko-KR',
+        onDone: () => { if (speechGeneration === generation) set({ isPlaying: false, currentText: '' }); },
+        onStopped: () => { if (speechGeneration === generation) set({ isPlaying: false, currentText: '' }); },
+        onError: () => { if (speechGeneration === generation) set({ isPlaying: false }); },
+      });
+    }).catch(() => { if (speechGeneration === generation) set({ isPlaying: false }); });
+  },
+
   stop: () => {
+    speechGeneration++;
+    void Speech.stop().catch(() => {});
     releaseActivePlayer();
     set({ isPlaying: false, currentText: '' });
   },

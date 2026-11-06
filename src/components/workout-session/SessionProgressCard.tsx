@@ -11,7 +11,7 @@ import { PrepColors } from '@/components/workout-preparation/palette';
 type SessionProgressCardProps = {
   /** 예: "스쿼트 · 2세트 진행 중" */
   statusText: string;
-  reps: number;
+  reps: number | null;
   targetReps: number;
   style?: StyleProp<ViewStyle>;
 };
@@ -22,7 +22,7 @@ export function SessionProgressCard({ statusText, reps, targetReps, style }: Ses
       <Text style={styles.title}>현재 진행 상태</Text>
       <Text style={styles.line}>{statusText}</Text>
       <Text style={styles.line}>
-        수행 {reps}회 / 목표 {targetReps}회
+        {reps === null ? '자세 측정 연결 대기 중' : `수행 ${reps}회 / 목표 ${targetReps}회`}
       </Text>
     </View>
   );

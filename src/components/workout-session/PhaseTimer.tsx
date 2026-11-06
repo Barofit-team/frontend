@@ -5,7 +5,7 @@
  * 새 Phase의 타이머가 처음부터 시작됩니다(타이머 동시 실행 없음).
  * paused 동안 같은 인스턴스가 유지되므로, 재개 시 남은 시간부터 이어집니다.
  */
-import type { ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 
 import { useCountdown } from './useCountdown';
 
@@ -13,10 +13,12 @@ type PhaseTimerProps = {
   durationSeconds: number;
   onComplete: () => void;
   paused?: boolean;
+  onTick?: (remainingSeconds: number) => void;
   children: (remainingSeconds: number) => ReactNode;
 };
 
-export function PhaseTimer({ durationSeconds, onComplete, paused, children }: PhaseTimerProps) {
+export function PhaseTimer({ durationSeconds, onComplete, paused, onTick, children }: PhaseTimerProps) {
   const remainingSeconds = useCountdown({ durationSeconds, onComplete, paused });
+  useEffect(() => { onTick?.(remainingSeconds); }, [remainingSeconds, onTick]);
   return <>{children(remainingSeconds)}</>;
 }

@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 
 import type { ExerciseId } from '@/components/workout-session/sessionConfig';
+import type { AssessmentStatus, BackendRoutineDetail } from '@/types/weeklyPlan';
 
 export interface TodayRoutineSession {
   id: string;
@@ -12,6 +13,8 @@ export interface TodayRoutineSession {
   reps: number;
   defaultReps: number;
   restSeconds: number;
+  measurementType: 'REPS' | 'DURATION';
+  assessmentStatus?: AssessmentStatus;
 }
 
 interface TodayRoutineState {
@@ -19,6 +22,9 @@ interface TodayRoutineState {
   tags: string[];
   interExerciseRestSeconds: number;
   sessions: TodayRoutineSession[];
+  routineSnapshot: BackendRoutineDetail | null;
+  planDate: string | null;
+  setPlan: (routine: BackendRoutineDetail | null, date: string) => void;
 
   setRoutineTitle: (title: string) => void;
   updateSession: (
@@ -29,40 +35,28 @@ interface TodayRoutineState {
   resetAllSessions: () => void;
 }
 
-const DEFAULT_SESSIONS: TodayRoutineSession[] = [
-  {
-    id: 'session-squat',
-    exerciseId: 'squat',
-    name: '스쿼트',
-    partAndLevel: '하체 · 초급',
-    sets: 3,
-    defaultSets: 3,
-    reps: 20,
-    defaultReps: 20,
-    restSeconds: 30,
-  },
-  {
-    id: 'session-pushup',
-    exerciseId: 'push-up',
-    name: '푸쉬업',
-    partAndLevel: '상체 · 초급',
-    sets: 2,
-    defaultSets: 2,
-    reps: 20,
-    defaultReps: 20,
-    restSeconds: 30,
-  },
-];
-
-function cloneDefaultSessions(): TodayRoutineSession[] {
-  return DEFAULT_SESSIONS.map((item) => ({ ...item }));
-}
-
 export const useTodayRoutineStore = create<TodayRoutineState>((set) => ({
-  routineTitle: '가볍게 시작할 수 있는 기초 루틴',
+  routineTitle: '오늘 배정된 운동이 없어요',
   tags: ['초보자 추천', '근력', '코어'],
   interExerciseRestSeconds: 30,
-  sessions: cloneDefaultSessions(),
+  sessions: [],
+  routineSnapshot: null,
+  planDate: null,
+  setPlan: (routine, date) => set({
+    routineSnapshot: routine,
+    planDate: date,
+    routineTitle: routine?.name ?? '오늘 배정된 운동이 없어요',
+    sessions: routine?.exercises.map((exercise) => {
+      const first = exercise.sets[0];
+      const target = exercise.measurementType === 'DURATION' ? first?.targetDurationSeconds : first?.targetReps;
+      return { id: exercise.id, exerciseId: exercise.exerciseId, name: exercise.name,
+        partAndLevel: exercise.measurementType === 'DURATION' ? '시간 기반' : '횟수 기반',
+        sets: exercise.sets.length, defaultSets: exercise.sets.length,
+        reps: target ?? 0, defaultReps: target ?? 0,
+        restSeconds: first?.restSeconds ?? 0, measurementType: exercise.measurementType,
+        assessmentStatus: exercise.assessmentStatus };
+    }) ?? [],
+  }),
 
   setRoutineTitle: (title) =>
     set({
@@ -97,7 +91,9 @@ export const useTodayRoutineStore = create<TodayRoutineState>((set) => ({
 
   resetAllSessions: () =>
     set({
-      routineTitle: '가볍게 시작할 수 있는 기초 루틴',
-      sessions: cloneDefaultSessions(),
+      routineTitle: '오늘 배정된 운동이 없어요',
+      sessions: [],
+      routineSnapshot: null,
+      planDate: null,
     }),
 }));

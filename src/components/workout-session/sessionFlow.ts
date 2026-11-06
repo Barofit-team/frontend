@@ -32,14 +32,14 @@ function isNextExerciseIntro(phase: ActivePhase) {
 }
 
 /** 타이머가 있는 Phase의 진행 시간(초). completed는 타이머 없음 */
-export function phaseDurationSeconds(phase: SessionPhase): number | null {
+export function phaseDurationSeconds(phase: SessionPhase, routine?: readonly RoutineItem[]): number | null {
   switch (phase.kind) {
     case 'countdown':
-      return isNextExerciseIntro(phase) ? REST_DURATION_SECONDS : START_COUNTDOWN_SECONDS;
+      return isNextExerciseIntro(phase) ? (routine?.[phase.exerciseIndex - 1]?.targets?.at(-1)?.restSeconds ?? REST_DURATION_SECONDS) : START_COUNTDOWN_SECONDS;
     case 'exercising':
-      return EXERCISE_DURATION_SECONDS;
+      return routine?.[phase.exerciseIndex]?.targets?.[phase.set - 1]?.targetDurationSeconds ?? EXERCISE_DURATION_SECONDS;
     case 'resting':
-      return REST_DURATION_SECONDS;
+      return routine?.[phase.exerciseIndex]?.targets?.[phase.completedSet - 1]?.restSeconds ?? REST_DURATION_SECONDS;
     case 'completed':
       return null;
   }

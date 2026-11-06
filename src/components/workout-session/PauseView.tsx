@@ -16,7 +16,7 @@ type PauseViewProps = {
   subtitle: string;
   /** 예: "스쿼트 · 2세트 진행 중" */
   statusText: string;
-  reps: number;
+  reps: number | null;
   targetReps: number;
   onPressStop: () => void;
   onPressResume: () => void;

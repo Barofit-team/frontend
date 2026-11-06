@@ -1,9 +1,10 @@
-import React, { useEffect } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import React, { useEffect, useRef } from 'react';
+import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { Card } from '@/components/ui/Card';
 import { Colors, FontSize, Radius, Spacing } from '@/constants/theme';
-import { startCoachWebSocketListener } from '@/services/ttsService';
+import { connectSessionCoach } from '@/services/ttsService';
+import { useWorkoutDraftStore } from '@/stores/useWorkoutDraftStore';
 import { useTtsStore } from '@/stores/useTtsStore';
 
 export function TtsConsole() {
@@ -13,16 +14,30 @@ export function TtsConsole() {
     isPlaying,
     currentText,
     lastMessage,
-    connectWebSocket,
     disconnectWebSocket,
     stop,
   } = useTtsStore();
 
-  // 운동 화면 진입 시 웹소켓 연결 및 리스닝 시작
+  const savedWorkout = useWorkoutDraftStore(state => state.draft);
+  const cleanup = useRef<(() => void) | null>(null);
+  const mounted = useRef(true);
+  const connecting = useRef(false);
   useEffect(() => {
-    const cleanup = startCoachWebSocketListener();
-    return cleanup;
+    mounted.current = true;
+    return () => { mounted.current = false; cleanup.current?.(); cleanup.current = null; };
   }, []);
+  const connect = async () => {
+    if (!savedWorkout) { Alert.alert('운동 세션 필요', '운동을 시작하면 코칭이 연결돼요.'); return; }
+    if (connecting.current) return;
+    connecting.current = true;
+    cleanup.current?.(); cleanup.current = null;
+    try {
+      const close = await connectSessionCoach(savedWorkout.sessionId);
+      if (!mounted.current) { close(); return; }
+      cleanup.current = close;
+    } catch { if (mounted.current) Alert.alert('연결 실패', '운동 코칭을 연결하지 못했어요.'); }
+    finally { connecting.current = false; }
+  };
 
   const getStatusText = () => {
     switch (socketStatus) {
@@ -64,7 +79,7 @@ export function TtsConsole() {
             <Text style={styles.wsUrlText}>{wsUrl}</Text>
           </View>
           {socketStatus !== 'connected' ? (
-            <Pressable onPress={() => connectWebSocket()} style={styles.wsBtn}>
+            <Pressable onPress={() => { void connect(); }} style={styles.wsBtn}>
               <Text style={styles.wsBtnText}>운동 시작 (연결)</Text>
             </Pressable>
           ) : (

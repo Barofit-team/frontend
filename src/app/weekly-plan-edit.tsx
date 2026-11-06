@@ -2,6 +2,7 @@ import { router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import React, { useEffect, useMemo, useState } from 'react';
 import {
+  Alert,
   Modal,
   Pressable,
   ScrollView,
@@ -19,7 +20,7 @@ import {
   PlusIcon,
   StopwatchIcon,
 } from '@/components/home/HomeIcons';
-import { toIsoDateString } from '@/services/weeklyPlanService';
+import { saveWeeklyPlanChanges, toIsoDateString } from '@/services/weeklyPlanService';
 import { useWeeklyPlanStore } from '@/stores/useWeeklyPlanStore';
 import type {
   PlannedExerciseItem,
@@ -32,47 +33,9 @@ interface RoutinePresetOption {
   title: string;
   exerciseCount: number;
   durationMinutes: number;
-  calories: number;
+  calories: number | null;
   exercises: PlannedExerciseItem[];
 }
-
-const DEFAULT_ROUTINE_OPTIONS: RoutinePresetOption[] = [
-  {
-    id: 'preset-basic',
-    title: '가볍게 시작할 수 있는 기초 루틴',
-    exerciseCount: 3,
-    durationMinutes: 20,
-    calories: 150,
-    exercises: [
-      { id: 'ex-squat', exerciseId: 'squat', name: '스쿼트' },
-      { id: 'ex-pushup', exerciseId: 'pushup', name: '푸쉬업' },
-      { id: 'ex-diamond', exerciseId: 'pushup', name: '다이아몬드\n푸쉬업' },
-    ],
-  },
-  {
-    id: 'preset-endurance',
-    title: '인내의 시간을 견디는 루틴',
-    exerciseCount: 2,
-    durationMinutes: 15,
-    calories: 120,
-    exercises: [
-      { id: 'ex-squat-2', exerciseId: 'squat', name: '스쿼트' },
-      { id: 'ex-plank-2', exerciseId: 'plank', name: '플랭크' },
-    ],
-  },
-  {
-    id: 'preset-fullbody',
-    title: '전신 칼로리 버닝 루틴',
-    exerciseCount: 3,
-    durationMinutes: 25,
-    calories: 210,
-    exercises: [
-      { id: 'ex-pushup-3', exerciseId: 'pushup', name: '푸쉬업' },
-      { id: 'ex-squat-3', exerciseId: 'squat', name: '스쿼트' },
-      { id: 'ex-plank-3', exerciseId: 'plank', name: '플랭크' },
-    ],
-  },
-];
 
 function createPlanItemForDay(
   day: WeeklyCalendarDay,
@@ -134,22 +97,15 @@ export default function WeeklyPlanEditScreen() {
   }, [planItems]);
 
   const routineOptions = useMemo<RoutinePresetOption[]>(() => {
-    if (recommendedRoutines.length === 0) {
-      return DEFAULT_ROUTINE_OPTIONS;
-    }
     const mapped: RoutinePresetOption[] = recommendedRoutines.map((rec) => ({
       id: rec.id,
       title: rec.title,
       exerciseCount: rec.exerciseCount,
       durationMinutes: rec.durationMinutes,
       calories: rec.calories,
-      exercises: [
-        { id: `${rec.id}-1`, name: '스쿼트' },
-        { id: `${rec.id}-2`, name: '푸쉬업' },
-        { id: `${rec.id}-3`, name: '플랭크' },
-      ].slice(0, Math.max(1, rec.exerciseCount)),
+      exercises: rec.exercises ?? [],
     }));
-    return [...mapped, ...DEFAULT_ROUTINE_OPTIONS];
+    return mapped;
   }, [recommendedRoutines]);
 
   const handleBack = () => {
@@ -160,13 +116,23 @@ export default function WeeklyPlanEditScreen() {
     router.replace('/weekly-plan');
   };
 
-  const handleComplete = () => {
+  const [saving, setSaving] = useState(false);
+  const loadWeeklyPlan = useWeeklyPlanStore((state) => state.loadWeeklyPlan);
+  const handleComplete = async () => {
+    if (saving) return;
     const updatedList = weekDays
       .map((day) => draftByDate[day.date])
       .filter((item): item is WeeklyPlanDayItem => Boolean(item));
 
-    setPlanItems(updatedList);
-    handleBack();
+    setSaving(true);
+    try {
+      await saveWeeklyPlanChanges(planItems, updatedList);
+      setPlanItems(updatedList);
+      handleBack();
+    } catch {
+      await loadWeeklyPlan();
+      Alert.alert('저장 실패', '일부 계획이 저장되지 않았어요. 서버의 계획을 확인한 후 다시 시도해 주세요.');
+    } finally { setSaving(false); }
   };
 
   const swapOrMoveBetweenDays = (
@@ -294,6 +260,7 @@ export default function WeeklyPlanEditScreen() {
           accessibilityLabel="주간 계획 편집 완료"
           hitSlop={10}
           onPress={handleComplete}
+          disabled={saving}
           style={({ pressed }) => [
             styles.completeButton,
             pressed && styles.pressed,
@@ -371,7 +338,7 @@ export default function WeeklyPlanEditScreen() {
                             <FlameIcon color="#9CA3AF" size={13} />
                             <Text style={styles.metaText}>
                               <Text style={styles.metaValue}>
-                                {assignedPlan.calories}
+                                {assignedPlan.calories ?? '—'}
                               </Text>{' '}
                               kcal
                             </Text>
@@ -429,7 +396,7 @@ export default function WeeklyPlanEditScreen() {
                           <FlameIcon color="#9CA3AF" size={13} />
                           <Text style={styles.metaText}>
                             <Text style={styles.metaValue}>
-                              {assignedPlan.calories}
+                              {assignedPlan.calories ?? '—'}
                             </Text>{' '}
                             kcal
                           </Text>
@@ -528,7 +495,7 @@ export default function WeeklyPlanEditScreen() {
                     <View style={styles.metaItem}>
                       <FlameIcon color="#9CA3AF" size={13} />
                       <Text style={styles.metaText}>
-                        <Text style={styles.metaValue}>{option.calories}</Text>{' '}
+                        <Text style={styles.metaValue}>{option.calories ?? '—'}</Text>{' '}
                         kcal
                       </Text>
                     </View>

@@ -4,6 +4,7 @@
   "version": "1.0.0",
   "dependencies": {
     "@expo/ui": "~58.0.23",
+    "@react-native-async-storage/async-storage": "2.2.0",
     "expo": "^58.0.0",
     "expo-asset": "~58.0.18",
     "expo-audio": "~58.0.10",
@@ -20,6 +21,7 @@
     "expo-router": "~58.0.26",
     "expo-secure-store": "~58.0.2",
     "expo-sensors": "~58.0.4",
+    "expo-speech": "~58.0.3",
     "expo-splash-screen": "~58.0.11",
     "expo-status-bar": "~58.0.4",
     "expo-symbols": "~58.0.4",
@@ -47,7 +49,8 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "lint": "expo lint",
-    "typecheck": "expo customize tsconfig.json && tsc --noEmit"
+    "typecheck": "expo customize tsconfig.json && tsc --noEmit",
+    "test:workout": "node scripts/test-workout-integration.cjs"
   },
   "private": true
 }

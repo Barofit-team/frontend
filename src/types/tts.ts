@@ -1,5 +1,6 @@
 export type CoachingEventType =
   | 'WORKOUT_START'
+  | 'EXERCISE_START'
   | 'REP_FEEDBACK'
   | 'SET_FEEDBACK'
   | 'WORKOUT_FINISH';
@@ -24,3 +25,17 @@ export interface CoachMessage {
 }
 
 export type SocketConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
+
+/** 세션 인증 후 모델 또는 운동 화면에서 발생한 코칭 이벤트. */
+export interface CoachingEvent {
+  eventType: CoachingEventType;
+  exerciseId?: string;
+  feedbackCode?: string;
+  actualReps?: number;
+  actualDurationSeconds?: number;
+}
+
+export interface CoachingAuthentication {
+  accessToken: string;
+  sessionId: string;
+}

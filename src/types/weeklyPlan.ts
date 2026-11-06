@@ -1,6 +1,7 @@
 export type RoutineCategoryCode = 'FULL_BODY' | 'LOWER_BODY' | 'CORE';
 export type RoutineDifficultyCode = 'BEGINNER' | 'INTERMEDIATE' | 'ADVANCED';
 export type MeasurementTypeCode = 'REPS' | 'DURATION';
+export type AssessmentStatus = 'READY' | 'IN_PROGRESS' | 'PLANNED';
 
 export interface PlannedExerciseItem {
   id: string;
@@ -23,7 +24,7 @@ export interface WeeklyPlanDayItem {
   title: string;
   exerciseCount: number;
   durationMinutes: number;
-  calories: number;
+  calories: number | null;
   exercises: PlannedExerciseItem[];
 }
 
@@ -43,11 +44,12 @@ export interface WeeklyCalendarDay {
 export interface RecommendedRoutineItem {
   id: string;
   templateId?: string;
+  exercises?: PlannedExerciseItem[];
   category: string;
   title: string;
   exerciseCount: number;
   durationMinutes: number;
-  calories: number;
+  calories: number | null;
 }
 
 /**
@@ -67,6 +69,7 @@ export interface BackendRoutineExerciseDetail {
   exerciseId: string;
   name: string;
   measurementType: MeasurementTypeCode;
+  assessmentStatus?: AssessmentStatus;
   order: number;
   preparation: string;
   instructions: string;

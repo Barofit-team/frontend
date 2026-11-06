@@ -63,6 +63,7 @@ export const useAuthStore = create<AuthState>((set) => ({
       body: JSON.stringify({ provider, code, redirectUri, nonce }),
     });
     await tokenStorage.save(response);
+    await tokenStorage.saveCachedAccount(JSON.stringify({ ...response.user, isOnboarded: response.isOnboarded, profile: null }));
     set({
       user: response.user,
       isOnboarded: response.isOnboarded,
@@ -73,6 +74,7 @@ export const useAuthStore = create<AuthState>((set) => ({
 
   loadMyAccount: async () => {
     const me = await fetchMyAccount();
+    await tokenStorage.saveCachedAccount(JSON.stringify(me));
     set({
       user: {
         id: me.id,
@@ -86,7 +88,8 @@ export const useAuthStore = create<AuthState>((set) => ({
     return me;
   },
 
-  applyMeResponse: (me) =>
+  applyMeResponse: (me) => {
+    void tokenStorage.saveCachedAccount(JSON.stringify(me));
     set({
       user: {
         id: me.id,
@@ -96,7 +99,8 @@ export const useAuthStore = create<AuthState>((set) => ({
       },
       isOnboarded: me.isOnboarded,
       profile: me.profile,
-    }),
+    });
+  },
 
   completeOnboarding: (nickname, profile) =>
     set((state) => {
