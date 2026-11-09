@@ -5,6 +5,7 @@ import {
   getTodayWorkoutPlan,
   getUserRoutineDetail,
 } from '@/services/routineService';
+import { toIsoDateString } from '@/services/weeklyPlanService';
 import type { RoutineDetail } from '@/types/routine';
 import type { AssessmentStatus, BackendRoutineDetail } from '@/types/weeklyPlan';
 
@@ -36,6 +37,8 @@ interface TodayRoutineState {
     title?: string;
     routineId?: string;
     isTemplate?: boolean;
+    snapshot?: BackendRoutineDetail;
+    date?: string;
   }) => Promise<void>;
   loadFromRoutineDetail: (routine: RoutineDetail) => void;
   loadTodayRoutine: () => Promise<void>;
@@ -92,7 +95,14 @@ export const useTodayRoutineStore = create<TodayRoutineState>((set, get) => ({
     }),
 
   prepareRoutine: async (options) => {
-    const { title, routineId, isTemplate = false } = options ?? {};
+    const { title, routineId, isTemplate = false, snapshot, date } = options ?? {};
+    const targetDate = date ?? toIsoDateString(new Date());
+
+    if (snapshot) {
+      get().setPlan(snapshot, targetDate);
+      return;
+    }
+
     if (title) {
       set({ routineTitle: title });
     }
@@ -115,11 +125,11 @@ export const useTodayRoutineStore = create<TodayRoutineState>((set, get) => ({
           Array.isArray(detail.exercises) &&
           detail.exercises.length > 0
         ) {
-          get().setPlan(detail, new Date().toISOString().slice(0, 10));
+          get().setPlan(detail, targetDate);
           return;
         }
-      } catch {
-        // 비정상 응답 시 무시
+      } catch (e) {
+        console.warn('[prepareRoutine] 루틴 상세 조회 실패:', e);
       }
     } else if (!routineId) {
       try {
@@ -128,14 +138,14 @@ export const useTodayRoutineStore = create<TodayRoutineState>((set, get) => ({
           get().setPlan(todayPlan.routine, todayPlan.date);
           return;
         }
-      } catch {
-        // 미배정 시 무시
+      } catch (e) {
+        console.warn('[prepareRoutine] 오늘 운동 계획 조회 실패:', e);
       }
     }
   },
 
   loadFromRoutineDetail: (routine: RoutineDetail) => {
-    get().setPlan(routine, new Date().toISOString().slice(0, 10));
+    get().setPlan(routine, toIsoDateString(new Date()));
   },
 
   loadTodayRoutine: async () => {

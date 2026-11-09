@@ -21,11 +21,13 @@ import {
   getRoutineTemplateDetail,
   getUserRoutineDetail,
 } from '@/services/routineService';
+import { toIsoDateString } from '@/services/weeklyPlanService';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useOnboardingStore } from '@/stores/useOnboardingStore';
 import { useTodayRoutineStore } from '@/stores/useTodayRoutineStore';
 import { useWeeklyPlanStore } from '@/stores/useWeeklyPlanStore';
 import type { ExerciseGoal } from '@/types/onboarding';
+import type { BackendRoutineDetail } from '@/types/weeklyPlan';
 
 const GOAL_LABEL_MAP: Record<ExerciseGoal, string> = {
   WEIGHT_LOSS: '체중 감량',
@@ -83,6 +85,7 @@ export default function HomeScreen() {
     : '체중 감량';
   const goalPhrase = withObjectParticle(goalLabel);
 
+  const todayIso = toIsoDateString(new Date());
   const selectedDayPlan = planItems.find((item) => item.date === selectedDate);
   const setRoutineTitle = useTodayRoutineStore(
     (state) => state.setRoutineTitle,
@@ -93,12 +96,22 @@ export default function HomeScreen() {
     title?: string,
     routineId?: string,
     isTemplate: boolean = false,
+    snapshot?: BackendRoutineDetail,
+    date?: string,
   ) => {
-    void useTodayRoutineStore.getState().prepareRoutine({
-      title: title || selectedDayPlan?.title,
-      routineId,
-      isTemplate,
-    });
+    const targetSnapshot = snapshot ?? selectedDayPlan?.routineSnapshot;
+    const targetDate = date ?? selectedDate ?? todayIso;
+
+    if (targetSnapshot) {
+      useTodayRoutineStore.getState().setPlan(targetSnapshot, targetDate);
+    } else {
+      void useTodayRoutineStore.getState().prepareRoutine({
+        title: title || selectedDayPlan?.title,
+        routineId: routineId || selectedDayPlan?.routineId,
+        isTemplate,
+        date: targetDate,
+      });
+    }
     router.push('/today-routine', { dangerouslySingular: true });
   };
 
@@ -266,6 +279,9 @@ export default function HomeScreen() {
                   openTodayRoutine(
                     selectedDayPlan.title,
                     selectedDayPlan.routineId,
+                    false,
+                    selectedDayPlan.routineSnapshot,
+                    selectedDayPlan.date,
                   )
                 }
                 style={({ pressed }) => [
@@ -273,7 +289,9 @@ export default function HomeScreen() {
                   pressed && styles.pressed,
                 ]}>
                 <Text style={styles.startWorkoutButtonText}>
-                  오늘의 운동 확인
+                  {selectedDate === todayIso
+                    ? '오늘의 운동 확인'
+                    : `${selectedDayPlan.dayLabel}요일 운동 확인`}
                 </Text>
               </Pressable>
             </>
@@ -287,14 +305,14 @@ export default function HomeScreen() {
               </Text>
               <Pressable
                 accessibilityRole="button"
-                onPress={() => openTodayRoutine()}
+                onPress={openWeeklyPlan}
                 style={({ pressed }) => [
                   styles.startWorkoutButton,
                   styles.fullWidthButton,
                   pressed && styles.pressed,
                 ]}>
                 <Text style={styles.startWorkoutButtonText}>
-                  오늘의 운동 확인
+                  운동 계획 배정하기
                 </Text>
               </Pressable>
             </View>

@@ -52,6 +52,7 @@ export interface WeeklyPlanDayItem {
   durationMinutes: number;
   calories: number | null;
   exercises: PlannedExerciseItem[];
+  routineSnapshot?: BackendRoutineDetail;
 }
 
 export interface WeeklyCalendarDay {

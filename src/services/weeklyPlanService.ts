@@ -141,6 +141,7 @@ export function mapRoutineToWeeklyPlanDayItem(
       exerciseId: exercise.exerciseId,
       name: exercise.name,
     })),
+    routineSnapshot: routine,
   };
 }
 
