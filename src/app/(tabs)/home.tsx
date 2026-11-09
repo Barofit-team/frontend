@@ -1,6 +1,6 @@
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import React, { useEffect } from 'react';
+import React, { useCallback, useEffect } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -17,11 +17,17 @@ import {
   FlameIcon,
   StopwatchIcon,
 } from '@/components/home/HomeIcons';
+import {
+  getRoutineTemplateDetail,
+  getUserRoutineDetail,
+} from '@/services/routineService';
+import { toIsoDateString } from '@/services/weeklyPlanService';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useOnboardingStore } from '@/stores/useOnboardingStore';
 import { useTodayRoutineStore } from '@/stores/useTodayRoutineStore';
 import { useWeeklyPlanStore } from '@/stores/useWeeklyPlanStore';
 import type { ExerciseGoal } from '@/types/onboarding';
+import type { BackendRoutineDetail } from '@/types/weeklyPlan';
 
 const GOAL_LABEL_MAP: Record<ExerciseGoal, string> = {
   WEIGHT_LOSS: '체중 감량',
@@ -58,14 +64,15 @@ export default function HomeScreen() {
   );
   const isLoading = useWeeklyPlanStore((state) => state.isLoading);
   const hasLoaded = useWeeklyPlanStore((state) => state.hasLoaded);
+  const error = useWeeklyPlanStore((state) => state.error);
   const setSelectedDate = useWeeklyPlanStore((state) => state.setSelectedDate);
   const loadWeeklyPlan = useWeeklyPlanStore((state) => state.loadWeeklyPlan);
 
-  useEffect(() => {
-    if (!hasLoaded) {
+  useFocusEffect(
+    useCallback(() => {
       void loadWeeklyPlan();
-    }
-  }, [hasLoaded, loadWeeklyPlan]);
+    }, [loadWeeklyPlan]),
+  );
 
   const displayName =
     authUser?.nickname?.trim() ||
@@ -78,16 +85,33 @@ export default function HomeScreen() {
     : '체중 감량';
   const goalPhrase = withObjectParticle(goalLabel);
 
+  const todayIso = toIsoDateString(new Date());
   const selectedDayPlan = planItems.find((item) => item.date === selectedDate);
   const setRoutineTitle = useTodayRoutineStore(
     (state) => state.setRoutineTitle,
   );
 
   // dangerouslySingular: 버튼을 연달아 눌러도 오늘의 운동 루틴 화면이 스택에 중복으로 쌓이지 않게 함
-  const openTodayRoutine = (title?: string) => {
-    setRoutineTitle(
-      title || selectedDayPlan?.title || '가볍게 시작할 수 있는 기초 루틴',
-    );
+  const openTodayRoutine = (
+    title?: string,
+    routineId?: string,
+    isTemplate: boolean = false,
+    snapshot?: BackendRoutineDetail,
+    date?: string,
+  ) => {
+    const targetSnapshot = snapshot ?? selectedDayPlan?.routineSnapshot;
+    const targetDate = date ?? selectedDate ?? todayIso;
+
+    if (targetSnapshot) {
+      useTodayRoutineStore.getState().setPlan(targetSnapshot, targetDate);
+    } else {
+      void useTodayRoutineStore.getState().prepareRoutine({
+        title: title || selectedDayPlan?.title,
+        routineId: routineId || selectedDayPlan?.routineId,
+        isTemplate,
+        date: targetDate,
+      });
+    }
     router.push('/today-routine', { dangerouslySingular: true });
   };
 
@@ -176,6 +200,23 @@ export default function HomeScreen() {
                 운동 계획 데이터를 불러오는 중입니다...
               </Text>
             </View>
+          ) : error ? (
+            <View style={styles.emptyRoutineContainer}>
+              <Text style={styles.emptyRoutineTitle}>
+                운동 계획을 불러오지 못했습니다
+              </Text>
+              <Text style={styles.emptyRoutineDesc}>{error}</Text>
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => void loadWeeklyPlan()}
+                style={({ pressed }) => [
+                  styles.startWorkoutButton,
+                  styles.fullWidthButton,
+                  pressed && styles.pressed,
+                ]}>
+                <Text style={styles.startWorkoutButtonText}>다시 시도</Text>
+              </Pressable>
+            </View>
           ) : selectedDayPlan ? (
             <>
               <Text style={styles.routineTitle}>{selectedDayPlan.title}</Text>
@@ -234,13 +275,23 @@ export default function HomeScreen() {
               {/* 오늘의 운동 확인 CTA 버튼 */}
               <Pressable
                 accessibilityRole="button"
-                onPress={() => openTodayRoutine(selectedDayPlan.title)}
+                onPress={() =>
+                  openTodayRoutine(
+                    selectedDayPlan.title,
+                    selectedDayPlan.routineId,
+                    false,
+                    selectedDayPlan.routineSnapshot,
+                    selectedDayPlan.date,
+                  )
+                }
                 style={({ pressed }) => [
                   styles.startWorkoutButton,
                   pressed && styles.pressed,
                 ]}>
                 <Text style={styles.startWorkoutButtonText}>
-                  오늘의 운동 확인
+                  {selectedDate === todayIso
+                    ? '오늘의 운동 확인'
+                    : `${selectedDayPlan.dayLabel}요일 운동 확인`}
                 </Text>
               </Pressable>
             </>
@@ -254,14 +305,14 @@ export default function HomeScreen() {
               </Text>
               <Pressable
                 accessibilityRole="button"
-                onPress={() => openTodayRoutine()}
+                onPress={openWeeklyPlan}
                 style={({ pressed }) => [
                   styles.startWorkoutButton,
                   styles.fullWidthButton,
                   pressed && styles.pressed,
                 ]}>
                 <Text style={styles.startWorkoutButtonText}>
-                  오늘의 운동 확인
+                  운동 계획 배정하기
                 </Text>
               </Pressable>
             </View>
@@ -276,11 +327,17 @@ export default function HomeScreen() {
 
           {recommendedRoutines.length > 0 ? (
             <View style={styles.recommendList}>
-              {recommendedRoutines.map((item) => (
+              {recommendedRoutines.slice(0, 3).map((item) => (
                 <Pressable
                   key={item.id}
                   accessibilityRole="button"
-                  onPress={() => openTodayRoutine(item.title)}
+                  onPress={() =>
+                    openTodayRoutine(
+                      item.title,
+                      item.templateId ?? item.id,
+                      true,
+                    )
+                  }
                   style={({ pressed }) => [
                     styles.recommendCard,
                     pressed && styles.pressed,

@@ -71,11 +71,12 @@ export const useWeeklyPlanStore = create<WeeklyPlanState>((set, get) => ({
       let errorMessage: string | null = null;
       if (planResult.status === 'rejected') {
         const reason = planResult.reason;
-        // 서버 미연결이나 미인증 상태에서도 빈 데이터 상태(데이터 없음)로 자연스럽게 표기하고 에러 메시지를 보관
         errorMessage =
           reason instanceof ApiError
             ? reason.message
-            : '운동 계획 데이터를 불러오지 못했습니다.';
+            : typeof reason?.message === 'string'
+              ? reason.message
+              : '운동 계획 데이터를 불러오지 못했습니다.';
       }
 
       set({

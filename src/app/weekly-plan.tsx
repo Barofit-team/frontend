@@ -1,8 +1,9 @@
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import React, { useEffect } from 'react';
+import React, { useCallback } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -18,19 +19,23 @@ import {
   PencilIcon,
   StopwatchIcon,
 } from '@/components/home/HomeIcons';
+import { clearLocalWorkout } from '@/services/offlineWorkout';
+import { useAuthStore } from '@/stores/useAuthStore';
 import { useWeeklyPlanStore } from '@/stores/useWeeklyPlanStore';
+import { useWorkoutDraftStore } from '@/stores/useWorkoutDraftStore';
 
 export default function WeeklyPlanScreen() {
   const planItems = useWeeklyPlanStore((state) => state.planItems);
   const isLoading = useWeeklyPlanStore((state) => state.isLoading);
   const hasLoaded = useWeeklyPlanStore((state) => state.hasLoaded);
+  const error = useWeeklyPlanStore((state) => state.error);
   const loadWeeklyPlan = useWeeklyPlanStore((state) => state.loadWeeklyPlan);
 
-  useEffect(() => {
-    if (!hasLoaded) {
+  useFocusEffect(
+    useCallback(() => {
       void loadWeeklyPlan();
-    }
-  }, [hasLoaded, loadWeeklyPlan]);
+    }, [loadWeeklyPlan]),
+  );
 
   const handleBack = () => {
     if (router.canGoBack()) {
@@ -41,6 +46,29 @@ export default function WeeklyPlanScreen() {
   };
 
   const openEditScreen = () => {
+    const draft = useWorkoutDraftStore.getState().draft;
+    if (draft) {
+      Alert.alert(
+        '진행 중인 운동 초기화',
+        '중단 중 주간 계획 변경을 시도하면 기존의 진행도는 저장되지 않습니다. 당일의 운동 계획을 초기화하고 계속 진행하시겠습니까?',
+        [
+          { text: '취소', style: 'cancel' },
+          {
+            text: '초기화 후 변경',
+            style: 'destructive',
+            onPress: async () => {
+              const owner = useAuthStore.getState().user?.id;
+              useWorkoutDraftStore.getState().clearDraft();
+              if (owner) {
+                await clearLocalWorkout(owner, draft.sessionId).catch(() => {});
+              }
+              router.push('/weekly-plan-edit', { dangerouslySingular: true });
+            },
+          },
+        ],
+      );
+      return;
+    }
     router.push('/weekly-plan-edit', { dangerouslySingular: true });
   };
 
@@ -90,8 +118,29 @@ export default function WeeklyPlanScreen() {
               이번 주 운동 계획을 불러오는 중입니다...
             </Text>
           </View>
+        ) : error ? (
+          /* 2. 에러 발생 상태 */
+          <View style={styles.stateCard}>
+            <View style={styles.emptyIconCircle}>
+              <DumbbellIcon color="#EF4444" size={22} />
+            </View>
+            <Text style={styles.emptyTitle}>
+              운동 계획을 불러오지 못했습니다
+            </Text>
+            <Text style={styles.stateDescription}>{error}</Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="운동 계획 다시 시도"
+              onPress={() => void loadWeeklyPlan()}
+              style={({ pressed }) => [
+                styles.retryButton,
+                pressed && styles.pressed,
+              ]}>
+              <Text style={styles.retryButtonText}>다시 시도</Text>
+            </Pressable>
+          </View>
         ) : planItems.length === 0 ? (
-          /* 2. 데이터 없음(Empty State) 상태 */
+          /* 3. 데이터 없음(Empty State) 상태 */
           <View style={styles.stateCard}>
             <View style={styles.emptyIconCircle}>
               <DumbbellIcon color="#71717A" size={22} />
@@ -105,13 +154,13 @@ export default function WeeklyPlanScreen() {
             </Text>
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="운동 계획 다시 불러오기"
-              onPress={() => void loadWeeklyPlan()}
+              accessibilityLabel="운동 계획 배정하기"
+              onPress={openEditScreen}
               style={({ pressed }) => [
                 styles.retryButton,
                 pressed && styles.pressed,
               ]}>
-              <Text style={styles.retryButtonText}>다시 불러오기</Text>
+              <Text style={styles.retryButtonText}>운동 계획 배정하기</Text>
             </Pressable>
           </View>
         ) : (

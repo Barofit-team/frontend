@@ -1,12 +1,18 @@
-import { apiFetch } from '@/services/api';
+import {
+  assignWorkoutPlan,
+  getRecommendedRoutineTemplates,
+  getRoutineTemplates,
+  getWorkoutPlanWeek,
+  removeWorkoutPlan,
+} from '@/services/routineService';
 import { tokenStorage } from '@/services/tokenStorage';
 import type {
   BackendRoutineDetail,
-  BackendRoutinePage,
   RecommendedRoutineItem,
   RoutineCategoryCode,
   WeeklyCalendarDay,
   WeeklyPlanDayItem,
+  WorkoutPlanWeek,
 } from '@/types/weeklyPlan';
 
 const DAY_LABELS = ['월', '화', '수', '목', '금', '토', '일'] as const;
@@ -14,7 +20,10 @@ const DAY_LABELS = ['월', '화', '수', '목', '금', '토', '일'] as const;
 const CATEGORY_LABEL_MAP: Record<RoutineCategoryCode, string> = {
   FULL_BODY: '전신',
   LOWER_BODY: '하체',
+  UPPER_BODY: '상체',
+  BACK: '등',
   CORE: '코어',
+  CARDIO: '심폐',
 };
 
 function padTwo(value: number): string {
@@ -29,34 +38,30 @@ export function toIsoDateString(date: Date): string {
 }
 
 /**
- * 기준 날짜가 속한 주의 월요일 Date를 반환합니다.
+ * 주어진 날짜가 포함된 주의 월요일 Date 객체를 계산합니다. (Asia/Seoul 기준 날짜 기반)
  */
-export function getMondayOfWeek(baseDate: Date = new Date()): Date {
+export function getMondayOfWeek(baseDate: Date): Date {
   const date = new Date(baseDate);
-  date.setHours(0, 0, 0, 0);
   const day = date.getDay(); // 0(일) ~ 6(토)
   const diffToMonday = day === 0 ? -6 : 1 - day;
   date.setDate(date.getDate() + diffToMonday);
+  date.setHours(0, 0, 0, 0);
   return date;
 }
 
 /**
- * 기준 날짜의 'M월 N주차' 타이틀을 계산합니다.
- * 대한민국 국가표준(KS X ISO 8601)에 따라 한 주(월~일)의 기준 월과 주차는
- * 해당 주의 '목요일'이 속한 달의 몇 번째 목요일인지로 산정합니다.
+ * 'YYYY년 M월 N주차' 형식의 주차 타이틀 문자열을 생성합니다.
  */
-export function formatWeekTitle(baseDate: Date = new Date()): string {
+export function formatWeekTitle(baseDate: Date): string {
   const monday = getMondayOfWeek(baseDate);
-  const thursday = new Date(monday);
-  thursday.setDate(monday.getDate() + 3);
-
-  const month = thursday.getMonth() + 1;
-  const weekOfMonth = Math.floor((thursday.getDate() - 1) / 7) + 1;
-  return `${month}월 ${weekOfMonth}주차`;
+  const year = monday.getFullYear();
+  const month = monday.getMonth() + 1;
+  const weekNumber = Math.ceil(monday.getDate() / 7);
+  return `${year}년 ${month}월 ${weekNumber}주차`;
 }
 
 /**
- * 이번 주 월~일 7일간의 캘린더 메타 정보를 생성합니다.
+ * 월요일부터 일요일까지 7일간의 주간 캘린더 요일 배열을 구성합니다.
  */
 export function buildWeekCalendarDays(
   planItems: WeeklyPlanDayItem[],
@@ -65,13 +70,14 @@ export function buildWeekCalendarDays(
   const monday = getMondayOfWeek(baseDate);
   const plannedDateSet = new Set(planItems.map((item) => item.date));
 
-  return DAY_LABELS.map((dayLabel, index) => {
+  return Array.from({ length: 7 }, (_, index) => {
     const current = new Date(monday);
     current.setDate(monday.getDate() + index);
 
+    const isoDate = toIsoDateString(current);
     const month = padTwo(current.getMonth() + 1);
     const dateNumber = current.getDate();
-    const isoDate = toIsoDateString(current);
+    const dayLabel = DAY_LABELS[index];
 
     return {
       date: isoDate,
@@ -86,17 +92,17 @@ export function buildWeekCalendarDays(
 /**
  * 템플릿 세트 목표로 예상 소요 시간을 계산합니다. 칼로리 근거가 없으면 null입니다.
  */
-function estimateRoutineMetrics(routine: BackendRoutineDetail): {
+export function estimateRoutineMetrics(routine: BackendRoutineDetail): {
   durationMinutes: number;
   calories: number | null;
 } {
   let totalSeconds = 0;
 
-  for (const exercise of routine.exercises) {
-    for (const set of exercise.sets) {
+  for (const exercise of routine?.exercises ?? []) {
+    for (const set of exercise?.sets ?? []) {
       const activeSeconds =
-        set.targetDurationSeconds ?? (set.targetReps ?? 10) * 3;
-      totalSeconds += activeSeconds + (set.restSeconds ?? 60);
+        set?.targetDurationSeconds ?? (set?.targetReps ?? 10) * 3;
+      totalSeconds += activeSeconds + (set?.restSeconds ?? 60);
     }
   }
 
@@ -135,6 +141,7 @@ export function mapRoutineToWeeklyPlanDayItem(
       exerciseId: exercise.exerciseId,
       name: exercise.name,
     })),
+    routineSnapshot: routine,
   };
 }
 
@@ -146,7 +153,7 @@ export function mapTemplateToRecommendedRoutine(
 ): RecommendedRoutineItem {
   const { durationMinutes, calories } = estimateRoutineMetrics(template);
   const categoryLabel = template.category
-    ? CATEGORY_LABEL_MAP[template.category]
+    ? CATEGORY_LABEL_MAP[template.category] ?? '전신'
     : '전신';
 
   return {
@@ -154,10 +161,15 @@ export function mapTemplateToRecommendedRoutine(
     templateId: template.id,
     category: categoryLabel,
     title: template.name,
-    exerciseCount: template.exercises.length,
-    exercises: template.exercises.map(exercise => ({ id: exercise.id, exerciseId: exercise.exerciseId, name: exercise.name })),
+    exerciseCount: template.exercises?.length ?? 0,
     durationMinutes,
     calories,
+    exercises:
+      template.exercises?.map((exercise) => ({
+        id: exercise.id,
+        exerciseId: exercise.exerciseId,
+        name: exercise.name,
+      })) ?? [],
   };
 }
 
@@ -173,41 +185,94 @@ export async function fetchWeeklyPlanItems(
   }
 
   const monday = getMondayOfWeek(baseDate);
-  const week = await apiFetch<{ days: { date: string; routine: BackendRoutineDetail | null;
-      estimatedMinutes: number | null; estimatedKcal: number | null }[] }>(
-    `/api/v1/workout-plans?weekStart=${toIsoDateString(monday)}`, { auth: true },
-  );
-  return week.days.filter(day => day.routine !== null).map(day => {
-    const item = mapRoutineToWeeklyPlanDayItem(day.routine!, new Date(`${day.date}T12:00:00`));
-    return { ...item, durationMinutes: day.estimatedMinutes ?? item.durationMinutes,
-      calories: day.estimatedKcal };
-  });
+  const weekStartIso = toIsoDateString(monday);
+
+  const weekPlan: WorkoutPlanWeek = await getWorkoutPlanWeek(weekStartIso);
+  if (weekPlan && Array.isArray(weekPlan.days)) {
+    const assignedDays = weekPlan.days.filter((day) => day.routine !== null);
+    return assignedDays.map((day) => {
+      const routine = day.routine!;
+      const item = mapRoutineToWeeklyPlanDayItem(
+        routine,
+        new Date(`${day.date}T12:00:00`),
+      );
+      if (day.estimatedMinutes != null) {
+        item.durationMinutes = day.estimatedMinutes;
+      }
+      if (day.estimatedKcal != null) {
+        item.calories = day.estimatedKcal;
+      }
+      return item;
+    });
+  }
+
+  return [];
 }
 
 /**
  * 맞춤형 추천 루틴 템플릿 목록을 서버에서 조회합니다.
+ * - 로그인된 경우 프로필 기반 개인화 추천(/recommendations)을 우선 시도하고,
+ * - 온보딩 미완료(409)나 미인증 시 전체 기본 템플릿 목록으로 fallback합니다.
  */
 export async function fetchRecommendedRoutineItems(): Promise<
   RecommendedRoutineItem[]
 > {
-  const templates = await apiFetch<BackendRoutineDetail[]>(
-    '/api/v1/routine-templates',
-  );
-  if (!Array.isArray(templates) || templates.length === 0) {
-    return [];
+  const accessToken = await tokenStorage.getAccessToken();
+  let recommendedList: BackendRoutineDetail[] = [];
+
+  if (accessToken) {
+    try {
+      const recommended = await getRecommendedRoutineTemplates();
+      if (Array.isArray(recommended)) {
+        recommendedList = recommended;
+      }
+    } catch {
+      // 추천 API 409(온보딩 미완료) 등 발생 시 기본 템플릿 조회로 진행
+    }
   }
-  return templates.map(mapTemplateToRecommendedRoutine);
+
+  // 전체 유효 템플릿 목록 조회 (레거시 Mock 제외된 정규 템플릿 목록)
+  const allTemplates = await getRoutineTemplates().catch(() => []);
+
+  // 추천 루틴을 우선 배치하고, 나머지 템플릿을 중복 없이 병합
+  const seenIds = new Set<string>();
+  const combined: BackendRoutineDetail[] = [];
+
+  for (const item of recommendedList) {
+    if (item && !seenIds.has(item.id)) {
+      seenIds.add(item.id);
+      combined.push(item);
+    }
+  }
+
+  for (const item of allTemplates) {
+    if (item && !seenIds.has(item.id)) {
+      seenIds.add(item.id);
+      combined.push(item);
+    }
+  }
+
+  return combined.map(mapTemplateToRecommendedRoutine);
 }
 
-/** 변경된 날짜만 동기화합니다. 일부 요청 실패 시 호출자가 서버 계획을 다시 조회해야 합니다. */
-export async function saveWeeklyPlanChanges(previous: WeeklyPlanDayItem[], next: WeeklyPlanDayItem[]): Promise<void> {
-  const oldByDate = new Map(previous.map(item => [item.date, item.routineId]));
-  const newByDate = new Map(next.map(item => [item.date, item.routineId]));
+/**
+ * 변경된 날짜만 동기화합니다.
+ */
+export async function saveWeeklyPlanChanges(
+  previous: WeeklyPlanDayItem[],
+  next: WeeklyPlanDayItem[],
+): Promise<void> {
+  const oldByDate = new Map(previous.map((item) => [item.date, item.routineId]));
+  const newByDate = new Map(next.map((item) => [item.date, item.routineId]));
   const dates = new Set([...oldByDate.keys(), ...newByDate.keys()]);
   for (const date of dates) {
-    const before = oldByDate.get(date), after = newByDate.get(date);
+    const before = oldByDate.get(date);
+    const after = newByDate.get(date);
     if (before === after) continue;
-    if (after) await apiFetch(`/api/v1/workout-plans/${date}`, { method: 'PUT', auth: true, body: JSON.stringify({ routineId: after }) });
-    else await apiFetch(`/api/v1/workout-plans/${date}`, { method: 'DELETE', auth: true });
+    if (after) {
+      await assignWorkoutPlan(date, after);
+    } else {
+      await removeWorkoutPlan(date);
+    }
   }
 }

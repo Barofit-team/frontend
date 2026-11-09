@@ -1,7 +1,8 @@
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
   Modal,
   Pressable,
@@ -23,6 +24,7 @@ import {
 import { apiFetch } from '@/services/api';
 import { getTodayWorkoutPlan } from '@/services/workoutSessionService';
 import { cachePlan, clearLocalWorkout, getCachedPlan, getLocalWorkout, isOffline, pendingCount } from '@/services/offlineWorkout';
+import { toIsoDateString } from '@/services/weeklyPlanService';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useWorkoutDraftStore } from '@/stores/useWorkoutDraftStore';
 import type { BackendRoutineDetail } from '@/types/weeklyPlan';
@@ -47,6 +49,7 @@ export default function TodayRoutineScreen() {
   const routineSnapshot = useTodayRoutineStore((state) => state.routineSnapshot);
   const planDate = useTodayRoutineStore((state) => state.planDate);
   const setPlan = useTodayRoutineStore((state) => state.setPlan);
+  const updateSession = useTodayRoutineStore((state) => state.updateSession);
   const [pending, setPending] = useState(0);
   const [loading, setLoading] = useState(true);
   useEffect(() => {
@@ -60,35 +63,70 @@ export default function TodayRoutineScreen() {
   const [saving, setSaving] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  useEffect(() => {
-    let mounted = true;
-    if (!owner) return;
-    setLoading(true);
-    void (async () => {
-      const local = await getLocalWorkout(owner);
-      if (local && (local.session.status === 'COMPLETED' || local.session.status === 'ABANDONED')) {
-        await clearLocalWorkout(owner, local.sessionId);
-        if (mounted) useWorkoutDraftStore.getState().clearDraft();
-      } else if (mounted && local) useWorkoutDraftStore.getState().saveDraft(local.draft);
-      try {
-        const day = await getTodayWorkoutPlan();
-        await cachePlan(owner, day);
-        if (mounted) { setPlan(day.routine, day.date); setLoadError(null); }
-      } catch (error) {
-        const cached = isOffline(error) ? await getCachedPlan(owner) : null;
-        const today = new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10);
-        if (mounted && cached?.date === today) {
-          setPlan(cached.routine, cached.date);
-          setLoadError('오프라인: 저장된 오늘의 계획을 보여드려요.');
-        } else if (mounted) {
-          setPlan(null, '');
-          setLoadError('오늘의 계획을 불러오지 못했어요. 온라인에서 계획을 먼저 확인해 주세요.');
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+
+      // 이미 스토어에 루틴 스냅샷과 세션 데이터가 준비되어 있다면 그대로 사용하고 불필요한 재조회를 생략합니다.
+      if (routineSnapshot && sessions.length > 0) {
+        setLoading(false);
+        setLoadError(null);
+        if (owner) {
+          void getLocalWorkout(owner).then((local) => {
+            if (!active) return;
+            if (local && (local.session.status === 'COMPLETED' || local.session.status === 'ABANDONED')) {
+              void clearLocalWorkout(owner, local.sessionId);
+              useWorkoutDraftStore.getState().clearDraft();
+            } else if (local) {
+              useWorkoutDraftStore.getState().saveDraft(local.draft);
+            }
+          }).catch(() => {});
         }
+        return () => {
+          active = false;
+        };
       }
-    })().catch(() => { if (mounted) setLoadError('기기에 저장된 운동을 읽지 못했어요.'); })
-      .finally(() => { if (mounted) setLoading(false); });
-    return () => { mounted = false; };
-  }, [owner, setPlan]);
+
+      setLoading(true);
+      void (async () => {
+        if (owner) {
+          const local = await getLocalWorkout(owner);
+          if (local && (local.session.status === 'COMPLETED' || local.session.status === 'ABANDONED')) {
+            await clearLocalWorkout(owner, local.sessionId);
+            if (active) useWorkoutDraftStore.getState().clearDraft();
+          } else if (active && local) {
+            useWorkoutDraftStore.getState().saveDraft(local.draft);
+          }
+        }
+        try {
+          const day = await getTodayWorkoutPlan();
+          if (owner && day) await cachePlan(owner, day);
+          if (active) {
+            setPlan(day.routine, day.date);
+            setLoadError(null);
+          }
+        } catch (error) {
+          const cached = (owner && isOffline(error)) ? await getCachedPlan(owner) : null;
+          const today = toIsoDateString(new Date());
+          if (active && cached?.date === today) {
+            setPlan(cached.routine, cached.date);
+            setLoadError('오프라인: 저장된 오늘의 계획을 보여드려요.');
+          } else if (active) {
+            setPlan(null, today);
+            setLoadError('오늘의 계획을 불러오지 못했어요. 온라인에서 계획을 먼저 확인해 주세요.');
+          }
+        } finally {
+          if (active) setLoading(false);
+        }
+      })().catch(() => {
+        if (active) setLoadError('기기에 저장된 운동을 읽지 못했어요.');
+      });
+
+      return () => {
+        active = false;
+      };
+    }, [owner, routineSnapshot, sessions.length, setPlan]),
+  );
 
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [draftSets, setDraftSets] = useState<number>(3);
@@ -106,6 +144,13 @@ export default function TodayRoutineScreen() {
   };
 
   const handleOpenSessionSheet = (session: TodayRoutineSession) => {
+    if (savedWorkout) {
+      Alert.alert(
+        '운동 진행 중',
+        '운동이 중단된 상태에서는 당일 루틴의 상세 설정을 변경할 수 없습니다.',
+      );
+      return;
+    }
     setEditingSessionId(session.id);
     setDraftSets(session.sets);
     setDraftReps(session.reps);
@@ -165,6 +210,34 @@ export default function TodayRoutineScreen() {
     } finally { setSaving(false); }
   };
 
+  const handleResetProgress = () => {
+    if (!savedWorkout || saving) return;
+    Alert.alert(
+      '진행도 초기화',
+      '저장된 운동 진행도를 초기화하시겠습니까? 이전 운동 기록은 삭제되며 처음부터 다시 시작합니다.',
+      [
+        { text: '취소', style: 'cancel' },
+        {
+          text: '초기화',
+          style: 'destructive',
+          onPress: async () => {
+            setSaving(true);
+            try {
+              if (owner && savedWorkout.sessionId) {
+                await clearLocalWorkout(owner, savedWorkout.sessionId).catch(() => {});
+              }
+              useWorkoutDraftStore.getState().clearDraft();
+            } catch {
+              Alert.alert('초기화 실패', '운동 진행도를 초기화하지 못했어요.');
+            } finally {
+              setSaving(false);
+            }
+          },
+        },
+      ],
+    );
+  };
+
   const handleStartWorkout = () => {
     if (savedWorkout) { Alert.alert('진행 중인 운동', '저장된 운동을 먼저 이어서 진행해 주세요.'); return; }
     if (!routineSnapshot || loading || saving) { Alert.alert('운동 계획 없음', '오늘의 운동을 먼저 계획해 주세요.'); return; }
@@ -214,81 +287,137 @@ export default function TodayRoutineScreen() {
         </View>
 
         {savedWorkout && (
-          <Pressable accessibilityRole="button" disabled={saving} onPress={handleResumeWorkout} style={styles.adjustButton}>
-            <Text style={styles.adjustButtonText}>저장한 운동 이어하기</Text>
-          </Pressable>
+          <View style={styles.resumeActionRow}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="저장한 운동 이어하기"
+              disabled={saving}
+              onPress={handleResumeWorkout}
+              style={({ pressed }) => [
+                styles.resumeButton,
+                pressed && styles.pressed,
+              ]}>
+              <Text style={styles.resumeButtonText}>저장한 운동 이어하기</Text>
+            </Pressable>
+
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="진행도 초기화"
+              disabled={saving}
+              onPress={handleResetProgress}
+              style={({ pressed }) => [
+                styles.resetProgressButton,
+                pressed && styles.pressed,
+              ]}>
+              <Text style={styles.resetProgressButtonText}>진행도 초기화</Text>
+            </Pressable>
+          </View>
         )}
 
-        {/* 운동 세션 및 휴식 타임라인 리스트 */}
-        <View style={styles.sessionList}>
-          {sessions.map((session, index) => (
-            <React.Fragment key={session.id}>
-              {/* 운동 종목 카드 */}
-              <View style={styles.exerciseCard}>
-                <Text style={styles.exerciseTitle}>{session.name}</Text>
-                <Text style={styles.assessmentStatus}>
-                  {session.assessmentStatus === 'READY' ? '판정 로직 준비' : session.assessmentStatus ? '판정 로직 준비 중' : '판정 상태 확인 중'}
-                </Text>
-
-                <View style={styles.exerciseMetaGroup}>
-                  <Text style={styles.exerciseVolumeText}>
-                    {`${session.reps}${session.measurementType === 'DURATION' ? '초' : '회'} × ${session.sets}세트`}
-                  </Text>
-                  <Text style={styles.exerciseRestText}>
-                    {`세트 간 ${session.restSeconds}초 휴식`}
-                  </Text>
-                </View>
-
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel={`${session.name} 세트·횟수 조절`}
-                  onPress={() => handleOpenSessionSheet(session)}
-                  style={({ pressed }) => [
-                    styles.adjustButton,
-                    pressed && styles.pressed,
-                  ]}>
-                  <Text style={styles.adjustButtonText}>세트·횟수 조절</Text>
-                </Pressable>
-              </View>
-
-              {/* 종목 간 휴식 카드 */}
-              {index < sessions.length - 1 ? (
-                <View style={styles.restCard}>
-                  <Text style={styles.restTitle}>휴식</Text>
-                  <Text style={styles.restDesc}>
-                    {`종목 간 ${routineSnapshot?.exercises[index]?.sets.at(-1)?.restSeconds ?? session.restSeconds}초 휴식`}
-                  </Text>
-                </View>
-              ) : null}
-            </React.Fragment>
-          ))}
-
-          {/* 마무리 카드 */}
-          <View style={styles.restCard}>
-            <Text style={styles.restTitle}>마무리</Text>
-            <Text style={styles.restDesc}>스트레칭 및 호흡 정리</Text>
+        {/* 로딩 / 빈 상태 / 운동 세션 리스트 */}
+        {loading ? (
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator size="small" color="#059669" />
+            <Text style={styles.loadingText}>운동 계획을 불러오는 중이에요...</Text>
           </View>
-        </View>
+        ) : sessions.length === 0 ? (
+          <View style={styles.emptyContainer}>
+            <Text style={styles.emptyTitle}>오늘 배정된 운동이 없어요</Text>
+            <Text style={styles.emptyDesc}>
+              주간 계획에서 원하는 운동을 배정해 보세요.
+            </Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="운동 계획 배정하기"
+              onPress={() => router.push('/weekly-plan-edit', { dangerouslySingular: true })}
+              style={({ pressed }) => [
+                styles.emptyActionButton,
+                pressed && styles.pressed,
+              ]}>
+              <Text style={styles.emptyActionButtonText}>운동 계획 배정하기</Text>
+            </Pressable>
+          </View>
+        ) : (
+          <View style={styles.sessionList}>
+            {sessions.map((session, index) => (
+              <React.Fragment key={session.id}>
+                {/* 운동 종목 카드 */}
+                <View style={styles.exerciseCard}>
+                  <Text style={styles.exerciseTitle}>{session.name}</Text>
+                  <Text style={styles.assessmentStatus}>
+                    {session.assessmentStatus === 'READY' ? '판정 로직 준비' : session.assessmentStatus ? '판정 로직 준비 중' : '판정 상태 확인 중'}
+                  </Text>
+
+                  <View style={styles.exerciseMetaGroup}>
+                    <Text style={styles.exerciseVolumeText}>
+                      {`${session.reps}${session.measurementType === 'DURATION' ? '초' : '회'} × ${session.sets}세트`}
+                    </Text>
+                    <Text style={styles.exerciseRestText}>
+                      {`세트 간 ${session.restSeconds}초 휴식`}
+                    </Text>
+                  </View>
+
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`${session.name} 세트·횟수 조절`}
+                    disabled={Boolean(savedWorkout) || saving}
+                    onPress={() => handleOpenSessionSheet(session)}
+                    style={({ pressed }) => [
+                      styles.adjustButton,
+                      Boolean(savedWorkout) && styles.disabledAdjustButton,
+                      pressed && !savedWorkout && styles.pressed,
+                    ]}>
+                    <Text
+                      style={[
+                        styles.adjustButtonText,
+                        Boolean(savedWorkout) && styles.disabledAdjustButtonText,
+                      ]}>
+                      {savedWorkout ? '조절 불가 (운동 진행 중)' : '세트·횟수 조절'}
+                    </Text>
+                  </Pressable>
+                </View>
+
+                {/* 종목 간 휴식 카드 */}
+                {index < sessions.length - 1 ? (
+                  <View style={styles.restCard}>
+                    <Text style={styles.restTitle}>휴식</Text>
+                    <Text style={styles.restDesc}>
+                      {`종목 간 ${routineSnapshot?.exercises[index]?.sets.at(-1)?.restSeconds ?? session.restSeconds}초 휴식`}
+                    </Text>
+                  </View>
+                ) : null}
+              </React.Fragment>
+            ))}
+
+            {/* 마무리 카드 */}
+            <View style={styles.restCard}>
+              <Text style={styles.restTitle}>마무리</Text>
+              <Text style={styles.restDesc}>스트레칭 및 호흡 정리</Text>
+            </View>
+          </View>
+        )}
       </ScrollView>
 
-      {/* 하단 고정 '운동 시작하기' CTA 버튼 */}
-      <View
-        pointerEvents="box-none"
-        style={[
-          styles.footer,
-          { bottom: Math.max(insets.bottom, 16) },
-        ]}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="운동 시작하기"
-          onPress={handleStartWorkout}
-          style={({ pressed }) => [
-            styles.startButton,
-            pressed && styles.pressed,
+      {/* 하단 고정 '운동 시작하기' CTA 버튼 (세션이 있을 때만 표시) */}
+      {!loading && sessions.length > 0 && (
+        <View
+          pointerEvents="box-none"
+          style={[
+            styles.footer,
+            { bottom: Math.max(insets.bottom, 16) },
           ]}>
-          <Text style={styles.startButtonText}>운동 시작하기</Text>
-        </Pressable>
-      </View>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="운동 시작하기"
+            onPress={handleStartWorkout}
+            style={({ pressed }) => [
+              styles.startButton,
+              pressed && styles.pressed,
+            ]}>
+            <Text style={styles.startButtonText}>운동 시작하기</Text>
+          </Pressable>
+        </View>
+      )}
 
       {/* 세트·횟수 조절 바텀시트 모달 */}
       <Modal
@@ -481,6 +610,49 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 14,
   },
+  loadingContainer: {
+    paddingVertical: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+  },
+  loadingText: {
+    fontSize: 14,
+    color: '#6B7280',
+    fontWeight: '500',
+  },
+  emptyContainer: {
+    backgroundColor: '#F9FAFB',
+    borderRadius: 16,
+    paddingVertical: 36,
+    paddingHorizontal: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 8,
+  },
+  emptyTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: '#111827',
+    marginBottom: 6,
+  },
+  emptyDesc: {
+    fontSize: 14,
+    color: '#6B7280',
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  emptyActionButton: {
+    backgroundColor: '#111827',
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 24,
+  },
+  emptyActionButtonText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
   titleSection: {
     marginBottom: 22,
   },
@@ -557,6 +729,41 @@ const styles = StyleSheet.create({
     color: '#71717A',
     letterSpacing: -0.2,
   },
+  resumeActionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 4,
+    marginBottom: 20,
+  },
+  resumeButton: {
+    flex: 1.2,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: '#111111',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  resumeButtonText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#FFFFFF',
+    letterSpacing: -0.2,
+  },
+  resetProgressButton: {
+    flex: 0.9,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: '#FEE2E2',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  resetProgressButtonText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#DC2626',
+    letterSpacing: -0.2,
+  },
   adjustButton: {
     marginTop: 16,
     height: 46,
@@ -565,11 +772,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  disabledAdjustButton: {
+    backgroundColor: '#E4E4E7',
+    opacity: 0.6,
+  },
   adjustButtonText: {
     fontSize: 14,
     fontWeight: '700',
     color: '#111111',
     letterSpacing: -0.2,
+  },
+  disabledAdjustButtonText: {
+    color: '#9CA3AF',
   },
   restCard: {
     backgroundColor: '#F3F4F6',
