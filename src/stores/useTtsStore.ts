@@ -3,6 +3,7 @@ import {
   AudioSource,
   createAudioPlayer,
   setAudioModeAsync,
+  setIsAudioActiveAsync,
 } from 'expo-audio';
 import { create } from 'zustand';
 import * as Speech from 'expo-speech';
@@ -17,25 +18,42 @@ import {
 
 let wsInstance: WebSocket | null = null;
 let activePlayer: AudioPlayer | null = null;
-let audioModeReady = false;
+let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
 let speechGeneration = 0;
 
 async function ensureAudioMode(): Promise<void> {
-  if (audioModeReady) return;
   try {
     await setAudioModeAsync({
       playsInSilentMode: true,
-      interruptionMode: 'duckOthers',
+      interruptionMode: 'mixWithOthers',
       allowsRecording: false,
       shouldPlayInBackground: false,
     });
-    audioModeReady = true;
+    if (typeof setIsAudioActiveAsync === 'function') {
+      await setIsAudioActiveAsync(true);
+    }
   } catch {
     // 오디오 모드 설정 실패 시 기본 모드로 동작
   }
 }
 
+async function cleanupSpeech(): Promise<void> {
+  try {
+    await Speech.stop();
+  } catch {
+    // 무시
+  }
+}
+
+function clearFallbackTimer(): void {
+  if (fallbackTimer) {
+    clearTimeout(fallbackTimer);
+    fallbackTimer = null;
+  }
+}
+
 function releaseActivePlayer(): void {
+  clearFallbackTimer();
   if (!activePlayer) return;
   const player = activePlayer;
   activePlayer = null;
@@ -180,25 +198,57 @@ export const useTtsStore = create<TtsState>((set, get) => ({
     });
 
     try {
-      const player = createAudioPlayer(source);
+      const player = createAudioPlayer(source, {
+        downloadFirst: true,
+        keepAudioSessionActive: true,
+      });
       activePlayer = player;
+      let started = false;
 
       player.addListener('playbackStatusUpdate', (status) => {
+        const statusWithError = status as typeof status & { error?: string | null };
+        if (statusWithError.error) {
+          clearFallbackTimer();
+          if (activePlayer === player && !started && text) {
+            get().playSpeech(text, type);
+          }
+          return;
+        }
+        if (status.currentTime > 0.05) {
+          started = true;
+          clearFallbackTimer();
+        }
         if (status.didJustFinish) {
-          set({ isPlaying: false, currentText: '' });
-          if (activePlayer === player) {
-            releaseActivePlayer();
-          } else {
-            try {
-              player.remove();
-            } catch {
-              // 무시
+          if (status.duration > 0 || started) {
+            started = true;
+            clearFallbackTimer();
+            set({ isPlaying: false, currentText: '' });
+            if (activePlayer === player) {
+              releaseActivePlayer();
+            } else {
+              try {
+                player.remove();
+              } catch {
+                // 무시
+              }
             }
+          } else if (activePlayer === player && text) {
+            clearFallbackTimer();
+            get().playSpeech(text, type);
           }
         }
       });
 
       player.play();
+
+      if (text) {
+        fallbackTimer = setTimeout(() => {
+          fallbackTimer = null;
+          if (activePlayer === player && !started) {
+            get().playSpeech(text, type);
+          }
+        }, 900);
+      }
     } catch {
       if (text) get().playSpeech(text, type);
       else set({ isPlaying: false, currentText: '' });
@@ -212,19 +262,21 @@ export const useTtsStore = create<TtsState>((set, get) => ({
     const msg: CoachMessage = { id: `${Date.now()}`, text, type,
       timestamp: new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) };
     set({ isPlaying: true, currentText: text, lastMessage: msg });
-    void Speech.stop().then(() => {
+    void ensureAudioMode();
+    const speakNow = () => {
       if (speechGeneration !== generation) return;
       Speech.speak(text, { language: 'ko-KR',
         onDone: () => { if (speechGeneration === generation) set({ isPlaying: false, currentText: '' }); },
         onStopped: () => { if (speechGeneration === generation) set({ isPlaying: false, currentText: '' }); },
         onError: () => { if (speechGeneration === generation) set({ isPlaying: false }); },
       });
-    }).catch(() => { if (speechGeneration === generation) set({ isPlaying: false }); });
+    };
+    void Speech.stop().then(speakNow, speakNow);
   },
 
   stop: () => {
     speechGeneration++;
-    void Speech.stop().catch(() => {});
+    void cleanupSpeech();
     releaseActivePlayer();
     set({ isPlaying: false, currentText: '' });
   },

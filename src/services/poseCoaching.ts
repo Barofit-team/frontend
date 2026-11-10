@@ -9,6 +9,9 @@ const FEEDBACK: Record<string, { code: string; text: string }> = {
 };
 export interface PoseFrameResult {
   type: 'frame.result'; exercise: string; ignored: boolean; tracking: string;
+  side?: 'left' | 'right' | null;
+  count?: number | null;
+  holdSeconds?: number | null;
   currentCodes: string[]; lastRepetition: { number: number | null; codes: string[] } | null;
 }
 /** Ignore unsupported codes and tracking loss; one utterance per interval across all codes. */

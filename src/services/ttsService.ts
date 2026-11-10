@@ -1,3 +1,4 @@
+import { Asset } from 'expo-asset';
 import { AudioSource } from 'expo-audio';
 
 import { useTtsStore } from '@/stores/useTtsStore';
@@ -11,7 +12,22 @@ export async function playLocalMp3(
   assetModule: AudioSource,
   text = '로컬 샘플 MP3 출력'
 ): Promise<void> {
-  await useTtsStore.getState().playAudio(assetModule, text, 'LOCAL_MP3');
+  try {
+    if (typeof assetModule === 'number') {
+      const asset = Asset.fromModule(assetModule);
+      if (!asset.localUri) {
+        await asset.downloadAsync();
+      }
+      const resolvedUri = asset.localUri || asset.uri;
+      if (resolvedUri) {
+        await useTtsStore.getState().playAudio({ uri: resolvedUri }, text, 'LOCAL_MP3');
+        return;
+      }
+    }
+    await useTtsStore.getState().playAudio(assetModule, text, 'LOCAL_MP3');
+  } catch {
+    useTtsStore.getState().playSpeech(text, 'LOCAL_MP3');
+  }
 }
 
 /** Workout 세션 저장 성공 후 호출합니다. 인증 응답을 받은 뒤에만 이벤트를 보낼 수 있습니다. */

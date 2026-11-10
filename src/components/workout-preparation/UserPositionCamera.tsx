@@ -12,13 +12,17 @@
  *    CameraView 인스턴스가 그대로 유지됩니다(카메라 재시작 없음).
  *  - 이전 단계로 이동 / 화면 닫기 / 백그라운드 → 언마운트되어 카메라 세션 종료.
  */
+import type { PoseFrame } from '@barofit/pose';
+import { isPoseCameraAvailable, PoseCameraView } from 'barofit-pose-camera';
 import { CameraView, useCameraPermissions, type CameraMountError } from 'expo-camera';
 import { useIsFocused } from 'expo-router';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { AppState, Linking, StyleSheet, Text, View, type AppStateStatus } from 'react-native';
 
+import { PoseSkeletonOverlay } from '@/components/pose/PoseSkeletonOverlay';
 import { Button } from '@/components/ui/Button';
 import { FontSize, Spacing } from '@/constants/theme';
+import { usePoseLandmarks } from '@/hooks/usePoseLandmarks';
 
 import { PrepColors } from './palette';
 
@@ -51,11 +55,20 @@ type UserPositionCameraProps = {
   children?: ReactNode;
   /** 권한 요청 안내 문구. 다른 화면(예: 운동 진행)에서 재사용할 때 화면에 맞는 문구로 교체 */
   permissionDescription?: string;
+  /** 카메라 준비 완료 이벤트 */
+  onCameraReady?: () => void;
+  /** MediaPipe 실시간 관절 프레임 수신 콜백 */
+  onPoseFrame?: (frame: PoseFrame, meta: { frameId: number; inferenceMs: number }) => void;
+  /** 스켈레톤 오버레이 표시 기준 방향 ('left' | 'right' | 'both' | null) */
+  selectedSide?: 'left' | 'right' | 'both' | null;
 };
 
 export function UserPositionCamera({
   children,
   permissionDescription = DEFAULT_PERMISSION_DESCRIPTION,
+  onCameraReady,
+  onPoseFrame,
+  selectedSide = null,
 }: UserPositionCameraProps) {
   const [permission, requestPermission, getPermission] = useCameraPermissions();
   const isFocused = useIsFocused();
@@ -63,6 +76,7 @@ export function UserPositionCamera({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [mountKey, setMountKey] = useState(0);
   const autoRequested = useRef(false);
+  const pose = usePoseLandmarks({ onFrame: onPoseFrame });
 
   // 앱 활성 상태 추적. 복귀 시 설정 앱에서 바꾼 권한을 다시 읽음
   useEffect(() => {
@@ -119,22 +133,54 @@ export function UserPositionCamera({
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
       {shouldMount && state !== 'error' && (
-        <CameraView
-          key={mountKey}
-          style={StyleSheet.absoluteFill}
-          facing="front"
-          mode="picture"
-          animateShutter={false}
-          onCameraReady={() => {
-            if (__DEV__) console.log(LOG, 'camera ready');
-            setReadyFor(sessionKey);
-          }}
-          onMountError={(e: CameraMountError) => {
-            if (__DEV__) console.warn(LOG, 'mount error', e?.message);
-            setErrorMessage(e?.message ?? null);
-            setErrorFor(sessionKey);
-          }}
-        />
+        isPoseCameraAvailable() ? (
+          <>
+            <PoseCameraView
+              key={mountKey}
+              style={StyleSheet.absoluteFill}
+              active={shouldMount}
+              frontCamera
+              onPoseFrame={pose.handlePoseFrame}
+              onCameraStatus={(ev) => {
+                if (ev.status === 'ready') {
+                  if (__DEV__) console.log(LOG, 'pose camera ready');
+                  setReadyFor(sessionKey);
+                  onCameraReady?.();
+                } else if (ev.status === 'error' || ev.status === 'permission_denied') {
+                  if (__DEV__) console.warn(LOG, 'pose camera status error', ev.message);
+                  setErrorMessage(ev.message ?? null);
+                  setErrorFor(sessionKey);
+                }
+              }}
+              onPoseError={(err) => {
+                if (__DEV__) console.warn(LOG, 'pose error', err.code, err.message);
+                if (err.code === 'CAMERA_START_FAILED' || err.code === 'MODEL_INIT_FAILED') {
+                  setErrorMessage(err.message);
+                  setErrorFor(sessionKey);
+                }
+              }}
+            />
+            <PoseSkeletonOverlay frame={pose.frame} selectedSide={selectedSide} mirrorX />
+          </>
+        ) : (
+          <CameraView
+            key={mountKey}
+            style={StyleSheet.absoluteFill}
+            facing="front"
+            mode="picture"
+            animateShutter={false}
+            onCameraReady={() => {
+              if (__DEV__) console.log(LOG, 'camera ready');
+              setReadyFor(sessionKey);
+              onCameraReady?.();
+            }}
+            onMountError={(e: CameraMountError) => {
+              if (__DEV__) console.warn(LOG, 'mount error', e?.message);
+              setErrorMessage(e?.message ?? null);
+              setErrorFor(sessionKey);
+            }}
+          />
+        )
       )}
 
       {children}
@@ -185,6 +231,12 @@ export function UserPositionCamera({
           />
         )}
         {shouldMount && state === 'starting' && <Notice title="카메라를 준비하고 있어요" />}
+        {shouldMount && state === 'ready' && !isPoseCameraAvailable() && (
+          <Notice
+            title="네이티브 자세 인식 모듈 재빌드 필요"
+            body={'MediaPipe 관절 인식 모듈(BarofitPoseCamera)이 현재 앱 빌드에 포함되지 않았습니다.\nnpx expo run:ios (또는 run:android)로 앱을 다시 빌드해 주세요.'}
+          />
+        )}
         {shouldMount && state === 'error' && (
           <Notice
             title="카메라를 시작할 수 없어요"

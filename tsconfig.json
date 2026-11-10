@@ -9,6 +9,9 @@
       ],
       "@/assets/*": [
         "./assets/*"
+      ],
+      "barofit-pose-camera": [
+        "./modules/barofit-pose-camera/src/index.ts"
       ]
     }
   },
