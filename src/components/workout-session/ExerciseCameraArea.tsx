@@ -6,6 +6,7 @@
  *  - children: 카메라 영상 위에 겹칠 레이어 자리(추후 AI 스켈레톤·자세 피드백 Overlay).
  *    현재 단계에서는 전달하지 않습니다.
  */
+import type { PoseFrame } from '@barofit/pose';
 import type { ReactNode } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -19,16 +20,28 @@ const CAMERA_PERMISSION_DESCRIPTION = '운동 중 자세를 확인할 수 있도
 type ExerciseCameraAreaProps = {
   onPressClose: () => void;
   onPressVoice?: () => void;
+  onPoseFrame?: (frame: PoseFrame, meta: { frameId: number; inferenceMs: number }) => void;
+  selectedSide?: 'left' | 'right' | 'both' | null;
   /** 카메라 영상 위 Overlay (AI 연동 시 사용) */
   children?: ReactNode;
 };
 
-export function ExerciseCameraArea({ onPressClose, onPressVoice, children }: ExerciseCameraAreaProps) {
+export function ExerciseCameraArea({
+  onPressClose,
+  onPressVoice,
+  onPoseFrame,
+  selectedSide = 'both',
+  children,
+}: ExerciseCameraAreaProps) {
   const insets = useSafeAreaInsets();
 
   return (
     <View style={styles.container}>
-      <UserPositionCamera permissionDescription={CAMERA_PERMISSION_DESCRIPTION}>
+      <UserPositionCamera
+        permissionDescription={CAMERA_PERMISSION_DESCRIPTION}
+        onPoseFrame={onPoseFrame}
+        selectedSide={selectedSide}
+      >
         {children ? (
           <View style={StyleSheet.absoluteFill} pointerEvents="none">
             {children}

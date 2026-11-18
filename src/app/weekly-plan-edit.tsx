@@ -24,12 +24,13 @@ import {
   StopwatchIcon,
 } from '@/components/home/HomeIcons';
 import { ApiError } from '@/services/api';
-import { clearLocalWorkout } from '@/services/offlineWorkout';
+import { clearLocalWorkout, getLocalWorkout } from '@/services/offlineWorkout';
 import {
   saveWeeklyPlanChanges,
   toIsoDateString,
 } from '@/services/weeklyPlanService';
 import { useAuthStore } from '@/stores/useAuthStore';
+import { useTodayRoutineStore } from '@/stores/useTodayRoutineStore';
 import { useWeeklyPlanStore } from '@/stores/useWeeklyPlanStore';
 import { useWorkoutDraftStore } from '@/stores/useWorkoutDraftStore';
 import type {
@@ -167,15 +168,21 @@ export default function WeeklyPlanEditScreen() {
     try {
       await saveWeeklyPlanChanges(planItems, updatedList);
 
+      const owner = useAuthStore.getState().user?.id;
       const draft = useWorkoutDraftStore.getState().draft;
       if (draft) {
         useWorkoutDraftStore.getState().clearDraft();
-        const owner = useAuthStore.getState().user?.id;
         if (owner) {
           await clearLocalWorkout(owner, draft.sessionId).catch(() => {});
         }
+      } else if (owner) {
+        const local = await getLocalWorkout(owner).catch(() => null);
+        if (local) {
+          await clearLocalWorkout(owner, local.sessionId).catch(() => {});
+        }
       }
 
+      useTodayRoutineStore.getState().resetAllSessions();
       await useWeeklyPlanStore.getState().loadWeeklyPlan();
       handleBack();
     } catch (e) {

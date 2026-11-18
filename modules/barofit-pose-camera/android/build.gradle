@@ -1,0 +1,40 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'com.barofit.posecamera'
+version = '1.0.0'
+
+android {
+  namespace "com.barofit.posecamera"
+  defaultConfig {
+    versionCode 1
+    versionName "1.0.0"
+  }
+}
+
+repositories {
+  google()
+  mavenCentral()
+}
+
+// CameraX requires listenablefuture:1.0 at compile time, while React Native Gradle plugin
+// pulls in full Guava with 9999.0-empty.
+configurations.configureEach {
+  resolutionStrategy.force "com.google.guava:listenablefuture:1.0"
+}
+
+dependencies {
+  def camerax_version = "1.6.0"
+
+  implementation "androidx.appcompat:appcompat:1.7.1"
+  implementation "androidx.core:core-ktx:1.18.0"
+
+  implementation "androidx.camera:camera-core:${camerax_version}"
+  implementation "androidx.camera:camera-camera2:${camerax_version}"
+  implementation "androidx.camera:camera-lifecycle:${camerax_version}"
+  implementation "androidx.camera:camera-view:${camerax_version}"
+
+  implementation "com.google.mediapipe:tasks-vision:1.0.0"
+}

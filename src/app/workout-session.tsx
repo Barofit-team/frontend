@@ -1,4 +1,6 @@
 /** 서버 운동 세션과 코칭 연결 화면. AI 측정 결과 연동 전에는 세트 완료를 추정하지 않습니다. */
+import type { PoseFrame } from '@barofit/pose';
+import { randomUUID } from 'expo-crypto';
 import { router, useLocalSearchParams } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -28,6 +30,7 @@ import { StopConfirmSheet } from '@/components/workout-session/StopConfirmSheet'
 import { WorkoutCompleteView } from '@/components/workout-session/WorkoutCompleteView';
 import { createWorkoutSessionDraft, type WorkoutSessionSync, type WorkoutStatus } from '@/services/workoutSessionService';
 import { clearLocalWorkout, flushWorkoutQueue, getLocalWorkout, pendingCount, queueSession, savePosition } from '@/services/offlineWorkout';
+import { createExerciseAnalyzer, createPosePipeline } from '@/services/posePipeline';
 import { useAuthStore } from '@/stores/useAuthStore';
 import type { WorkoutDraft } from '@/stores/useWorkoutDraftStore';
 import { connectSessionCoach } from '@/services/ttsService';
@@ -146,15 +149,23 @@ export default function WorkoutSessionScreen() {
         const draft = createWorkoutSessionDraft(snapshot);
         const first = snapshot.exercises[0];
         if (!first) { setSessionError('운동 종목이 없어요.'); return; }
+        const currentSessions = useTodayRoutineStore.getState().sessions;
         const position: WorkoutDraft = { sessionId: draft.sessionId, routineId: snapshot.id,
           exerciseIndex: 0, totalExercises: snapshot.exercises.length, exerciseId: first.exerciseId,
           exerciseName: first.name, phase: 'countdown', set: 1, totalSets: first.sets.length,
           reps: null, targetReps: first.sets[0]?.targetReps ?? 0,
-          remainingSeconds: phaseDurationSeconds(INITIAL_PHASE, sessions.map(s => ({ exerciseId: s.exerciseId, sets: s.sets }))) ?? 0,
+          remainingSeconds: phaseDurationSeconds(INITIAL_PHASE, currentSessions.map(s => ({ exerciseId: s.exerciseId, sets: s.sets }))) ?? 0,
           savedAt: new Date().toISOString(), activeDurationSeconds: 0, restDurationSeconds: 0 };
         positionRef.current = position;
         remainingRef.current = position.remainingSeconds;
-        startPromise.current = queueSession(owner, draft.sessionId, draft.session, position).then(() => draft);
+        startPromise.current = getLocalWorkout(owner)
+          .then(async (local) => {
+            if (local && local.sessionId !== draft.sessionId) {
+              await clearLocalWorkout(owner, local.sessionId);
+            }
+            await queueSession(owner, draft.sessionId, draft.session, position);
+            return draft;
+          });
       }
     }
     startPromise.current.then((draft) => {
@@ -182,7 +193,7 @@ export default function WorkoutSessionScreen() {
       }).finally(() => { coachAttempting.current = false; });
     }).catch(() => { if (!cancelled) setSessionError('운동 세션을 저장하지 못했어요. 연결을 확인한 후 다시 시작해 주세요.'); });
     return () => { cancelled = true; coachCleanup.current?.(); coachCleanup.current = null; };
-  }, [snapshot, owner, sessions]);
+  }, [snapshot, owner]);
 
   // Reconnect after an offline workout without interrupting local speech or delaying the session.
   useEffect(() => {
@@ -233,8 +244,24 @@ export default function WorkoutSessionScreen() {
   const [phase, setPhase] = useState<SessionPhase>(initialPhase);
   const [pause, setPause] = useState<PauseState>(resumeDraft.current ? 'paused' : 'none');
   const [exiting, setExiting] = useState(false);
+  const [currentReps, setCurrentReps] = useState<number | null>(null);
+  const [selectedSide, setSelectedSide] = useState<'left' | 'right' | 'both'>('both');
+  const poseSetRef = useRef<{
+    phaseId: number;
+    setNumber: number;
+    routineSetId: string;
+    exerciseId: string;
+    pipeline: ReturnType<typeof createPosePipeline>;
+    frameCount: number;
+    lastValue: number | null;
+    finishing: boolean;
+  } | null>(null);
 
-  useEffect(() => { phaseRef.current = phase; }, [phase]);
+  useEffect(() => {
+    phaseRef.current = phase;
+    setCurrentReps(null);
+    setSelectedSide('both');
+  }, [phase]);
   useEffect(() => {
     if (!sessionReady || pause !== 'none' || phase.kind === 'completed') return;
     const kind = phase.kind === 'exercising' ? 'active'
@@ -292,6 +319,108 @@ export default function WorkoutSessionScreen() {
     [activeRoutine],
   );
 
+  const finishCurrentPoseSet = useCallback(
+    (finishedPhaseId: number) => {
+      const activeSet = poseSetRef.current;
+      if (!activeSet || activeSet.phaseId !== finishedPhaseId || activeSet.finishing || !owner) return;
+      activeSet.finishing = true;
+      const operation = updateQueue.current.then(async () => {
+        const completed = await activeSet.pipeline.finish();
+        const local = await getLocalWorkout(owner);
+        if (local && serverSession.current && local.sessionId === serverSession.current.sessionId) {
+          serverSession.current = { sessionId: local.sessionId, session: local.session };
+        }
+        const summary = completed.summary as { count?: number | null; holdSeconds?: number | null } | undefined;
+        useTtsStore.getState().sendCoachEvent({
+          eventType: 'SET_FEEDBACK',
+          exerciseId: activeSet.exerciseId,
+          actualReps: typeof summary?.count === 'number' ? summary.count : undefined,
+          actualDurationSeconds:
+            typeof summary?.holdSeconds === 'number' ? Math.floor(summary.holdSeconds) : undefined,
+        });
+        completePhase(finishedPhaseId);
+      });
+      updateQueue.current = operation.catch((err) => {
+        activeSet.finishing = false;
+        if (__DEV__) console.warn('[WorkoutSession] finishCurrentPoseSet failed', err);
+      });
+    },
+    [owner, completePhase],
+  );
+
+  const handlePoseFrame = useCallback(
+    (frame: PoseFrame) => {
+      const currentPhase = phaseRef.current;
+      if (currentPhase.kind !== 'exercising' || pause !== 'none' || !owner || !serverSession.current || !snapshot) {
+        return;
+      }
+      let activeSet = poseSetRef.current;
+      if (!activeSet || activeSet.phaseId !== currentPhase.id) {
+        const routineExercise = snapshot.exercises[currentPhase.exerciseIndex];
+        const routineSet = routineExercise?.sets[currentPhase.set - 1];
+        if (!routineExercise || !routineSet) return;
+        const analyzer = createExerciseAnalyzer(routineExercise.exerciseId);
+        if (!analyzer) return;
+        const pipeline = createPosePipeline({
+          analyzer,
+          owner,
+          sessionId: serverSession.current.sessionId,
+          routineSetId: routineSet.id,
+          resultId: randomUUID(),
+          isOwner: () => useAuthStore.getState().user?.id === owner,
+          sendCoach: (event) => useTtsStore.getState().sendCoachEvent(event),
+          speak: (text) => useTtsStore.getState().playSpeech(text, 'REP_FEEDBACK'),
+        });
+        activeSet = {
+          phaseId: currentPhase.id,
+          setNumber: currentPhase.set,
+          routineSetId: routineSet.id,
+          exerciseId: routineExercise.exerciseId,
+          pipeline,
+          frameCount: 0,
+          lastValue: null,
+          finishing: false,
+        };
+        poseSetRef.current = activeSet;
+      }
+      if (activeSet.finishing) return;
+
+      try {
+        const output = activeSet.pipeline.pushFrame(frame);
+        activeSet.frameCount += 1;
+
+        const side = (output as { side?: string | null }).side;
+        if (side === 'left' || side === 'right' || side === 'both') {
+          setSelectedSide((prev) => (prev === side ? prev : side));
+        }
+
+        const measured =
+          typeof output.count === 'number'
+            ? output.count
+            : typeof output.holdSeconds === 'number'
+              ? Math.floor(output.holdSeconds)
+              : null;
+
+        if (measured !== null && measured !== activeSet.lastValue) {
+          activeSet.lastValue = measured;
+          setCurrentReps(measured);
+        }
+
+        const exercise = resolveExercise(currentPhase);
+        if (
+          typeof output.count === 'number' &&
+          exercise.targetReps > 0 &&
+          output.count >= exercise.targetReps
+        ) {
+          finishCurrentPoseSet(currentPhase.id);
+        }
+      } catch (err) {
+        if (__DEV__) console.warn('[WorkoutSession] pose frame error', err);
+      }
+    },
+    [owner, pause, snapshot, resolveExercise, finishCurrentPoseSet],
+  );
+
   if (__DEV__) console.log('[WorkoutSession]', phase, pause);
 
   const close = useCallback(() => {
@@ -302,6 +431,7 @@ export default function WorkoutSessionScreen() {
   // 상태 전환은 모두 "현재 상태가 기대한 값일 때만" 적용 → 연속 탭에도 한 번만 전환
   const requestPause = useCallback(() => {
     markPauseChange();
+    poseSetRef.current?.pipeline.pause();
     setPause(p => (p === 'none' || p === 'resuming' ? 'paused' : p));
     if (serverSession.current) void updateServerStatus('PAUSED').catch(() => Alert.alert('동기화 실패', '운동 일시 정지 상태를 저장하지 못했어요.'));
   }, [markPauseChange, updateServerStatus]);
@@ -427,10 +557,14 @@ export default function WorkoutSessionScreen() {
 
   const renderExercise = (exercise: (typeof EXERCISES)[keyof typeof EXERCISES], remainingSeconds: number) => (
     <View style={styles.screen}>
-      <ExerciseCameraArea onPressClose={handleClose} />
+      <ExerciseCameraArea
+        onPressClose={handleClose}
+        onPoseFrame={handlePoseFrame}
+        selectedSide={selectedSide}
+      />
       <ExerciseStatusPanel
         exerciseName={exercise.name}
-        currentReps={null}
+        currentReps={currentReps}
         targetReps={exercise.targetReps}
         measurementType={sessions[phase.kind === 'completed' ? 0 : phase.exerciseIndex]?.measurementType}
         remainingSeconds={remainingSeconds}
@@ -488,7 +622,7 @@ export default function WorkoutSessionScreen() {
         <PauseView
           subtitle={info.subtitle}
           statusText={info.statusText}
-          reps={null}
+          reps={currentReps}
           targetReps={exercise.targetReps}
           onPressStop={openStopConfirm}
           onPressResume={resume}
@@ -497,7 +631,7 @@ export default function WorkoutSessionScreen() {
         <StopConfirmSheet
           visible={pause === 'stop-confirm'}
           statusText={info.statusText}
-          reps={null}
+          reps={currentReps}
           targetReps={exercise.targetReps}
           busy={exiting}
           onConfirm={() => saveAndExit(remainingSeconds)}
@@ -529,6 +663,11 @@ export default function WorkoutSessionScreen() {
           onTick={checkpoint}
           onComplete={() => {
             if (phase.kind === 'exercising') {
+              const activeSet = poseSetRef.current;
+              if (activeSet && activeSet.phaseId === phase.id && activeSet.frameCount > 0) {
+                finishCurrentPoseSet(phase.id);
+                return;
+              }
               requestPause();
               Alert.alert('자세 측정 연결 대기', 'AI 모델이 연결되면 세트 수행 결과를 기록할 수 있어요.');
               return;

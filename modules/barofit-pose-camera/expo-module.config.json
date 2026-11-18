@@ -1,0 +1,10 @@
+{
+  "platforms": ["apple", "android"],
+  "apple": {
+    "modules": ["BarofitPoseCameraModule"],
+    "podspecPath": "ios/BarofitPoseCamera.podspec"
+  },
+  "android": {
+    "modules": ["com.barofit.posecamera.BarofitPoseCameraModule"]
+  }
+}

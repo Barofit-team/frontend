@@ -1,6 +1,26 @@
+import {
+  BirdDogAnalyzer,
+  BulgarianSplitSquatAnalyzer,
+  DeadBugAnalyzer,
+  GluteBridgeAnalyzer,
+  InclinePushupAnalyzer,
+  JumpingJackAnalyzer,
+  LegRaiseAnalyzer,
+  LungeAnalyzer,
+  MountainClimberAnalyzer,
+  PikePushupAnalyzer,
+  PlankAnalyzer,
+  PushupAnalyzer,
+  SideLegRaiseAnalyzer,
+  SplitSquatAnalyzer,
+  SquatAnalyzer,
+  StandingCalfRaiseAnalyzer,
+  SupermanAnalyzer,
+} from '@barofit/pose';
 import type { PoseFrameResult } from '@/services/poseCoaching';
 import { createPoseCoach } from '@/services/poseCoaching';
 import { flushWorkoutQueue, commitPoseSet } from '@/services/offlineWorkout';
+import { poseExerciseId } from '@/services/poseExerciseIds';
 import type { CoachingEvent } from '@/types/tts';
 
 type Completed = Record<string, unknown> & { schemaVersion: string; type: string; exercise: string };
@@ -8,6 +28,48 @@ export interface PoseAnalyzer {
   pushFrame(frame: unknown): PoseFrameResult;
   breakContinuity(reason: 'pause'): unknown;
   finish(): Completed[];
+}
+
+export function createExerciseAnalyzer(routineOrPoseId: string): PoseAnalyzer | null {
+  const id = poseExerciseId(routineOrPoseId) ?? routineOrPoseId;
+  switch (id) {
+    case 'pushup':
+      return new PushupAnalyzer() as unknown as PoseAnalyzer;
+    case 'plank':
+      return new PlankAnalyzer() as unknown as PoseAnalyzer;
+    case 'squat':
+      return new SquatAnalyzer() as unknown as PoseAnalyzer;
+    case 'bird_dog':
+      return new BirdDogAnalyzer() as unknown as PoseAnalyzer;
+    case 'jumping_jack':
+      return new JumpingJackAnalyzer() as unknown as PoseAnalyzer;
+    case 'leg_raise':
+      return new LegRaiseAnalyzer() as unknown as PoseAnalyzer;
+    case 'glute_bridge':
+      return new GluteBridgeAnalyzer() as unknown as PoseAnalyzer;
+    case 'superman':
+      return new SupermanAnalyzer() as unknown as PoseAnalyzer;
+    case 'pike_pushup':
+      return new PikePushupAnalyzer() as unknown as PoseAnalyzer;
+    case 'mountain_climber':
+      return new MountainClimberAnalyzer() as unknown as PoseAnalyzer;
+    case 'lunge':
+      return new LungeAnalyzer() as unknown as PoseAnalyzer;
+    case 'split_squat':
+      return new SplitSquatAnalyzer() as unknown as PoseAnalyzer;
+    case 'bulgarian_split_squat':
+      return new BulgarianSplitSquatAnalyzer() as unknown as PoseAnalyzer;
+    case 'incline_pushup':
+      return new InclinePushupAnalyzer() as unknown as PoseAnalyzer;
+    case 'standing_calf_raise':
+      return new StandingCalfRaiseAnalyzer() as unknown as PoseAnalyzer;
+    case 'side_lying_leg_raise':
+      return new SideLegRaiseAnalyzer() as unknown as PoseAnalyzer;
+    case 'dead_bug':
+      return new DeadBugAnalyzer() as unknown as PoseAnalyzer;
+    default:
+      return null;
+  }
 }
 /** One analyzer and one stable result ID for one planned set. Call only after camera frames are available. */
 export function createPosePipeline(options: {

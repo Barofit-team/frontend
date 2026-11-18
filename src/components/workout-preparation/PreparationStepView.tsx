@@ -3,6 +3,7 @@
  * 어떤 단계를 보여줄지는 부모(app/workout-preparation.tsx)가 결정하고,
  * 이 컴포넌트는 전달받은 step을 그리기만 합니다.
  */
+import type { PoseFrame } from '@barofit/pose';
 import { StyleSheet, Text, View, useWindowDimensions, type Animated } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -27,16 +28,35 @@ type PreparationStepViewProps = {
   onPressDone: () => void;
   onPressClose: () => void;
   onPressVoice?: () => void;
-  /**
-   * 실제 센서 모드일 때 전달. 있으면 Adjust Angle 단계의 표시를 step 대신 센서 상태로 결정합니다.
-   * 없으면 기존처럼 step(adjust-angle-1/2/3)으로 고정 화면을 표시합니다(수동 확인 모드).
-   */
-  liveAngle?: {
+  /** 헤더 중앙에 배치되는 소형 전후 과정 이동 컨트롤 */
+  stepNav?: {
+    current: number;
+    total: number;
+    canPrev: boolean;
+    canNext: boolean;
+    onPrev: () => void;
+    onNext: () => void;
+  };
+  /** 실제 기울기 센서 상태 */
+  liveAngle: {
     status: AngleStatus;
     sensor: SensorState;
     indicator: Animated.Value;
     onRetry: () => void;
   };
+  /** 실시간 관절 준비 상태 */
+  readiness?: {
+    status: 'no_person' | 'adjust_camera' | 'stabilizing' | 'ready';
+    message: string;
+    detailMessage?: string;
+    isReady: boolean;
+    selectedSide?: 'left' | 'right' | 'both' | null;
+    recognizedJointCount?: number;
+    requiredJointCount?: number;
+    stabilityProgress?: number;
+  };
+  onCameraReady?: () => void;
+  onPoseFrame?: (frame: PoseFrame) => void;
 };
 
 type AngleView = {
@@ -54,7 +74,6 @@ const UNAVAILABLE_REASON: Partial<Record<SensorState, string>> = {
   error: '기울기 센서를 시작하지 못했어요.\n다시 시도해주세요',
 };
 
-/** 센서 상태 → 기존 Adjust Angle 1·2·3 디자인 매핑 */
 function liveAngleView(status: AngleStatus, sensor: SensorState): AngleView {
   switch (status) {
     case 'needs-more-upright':
@@ -67,7 +86,7 @@ function liveAngleView(status: AngleStatus, sensor: SensorState): AngleView {
       return {
         indicator: 'above',
         kind: 'adjust',
-        hint: __DEV__ ? '목표 각도 미설정 · 개발 패널에서 지정해주세요' : '목표 각도를 준비하고 있어요',
+        hint: '목표 각도를 준비하고 있어요',
         dimmed: true,
       };
     case 'unavailable':
@@ -82,14 +101,8 @@ function liveAngleView(status: AngleStatus, sensor: SensorState): AngleView {
   }
 }
 
-const ANGLE_STEPS: Partial<Record<PreparationStep, { indicator: AngleIndicator; hint: string }>> = {
-  'adjust-angle-1': { indicator: 'above', hint: '기기를 조금 더 세워주세요' },
-  'adjust-angle-2': { indicator: 'below', hint: '기기를 조금 더 눕혀주세요' },
-};
-
-/** 회색(카메라/완료) 배경을 쓰는 단계 */
 export function isGrayStep(step: PreparationStep) {
-  return step === 'adjust-angle-3' || step === 'user-position' || step === 'user-position-complete';
+  return step === 'user-position' || step === 'user-position-complete';
 }
 
 export function PreparationStepView({
@@ -97,15 +110,24 @@ export function PreparationStepView({
   onPressDone,
   onPressClose,
   onPressVoice,
+  stepNav,
   liveAngle,
+  readiness,
+  onCameraReady,
+  onPoseFrame,
 }: PreparationStepViewProps) {
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
-  const isAdjust = step === 'adjust-angle-1' || step === 'adjust-angle-2' || step === 'adjust-angle-3';
-  const live = isAdjust && liveAngle ? liveAngleView(liveAngle.status, liveAngle.sensor) : null;
+  const isAdjust = step === 'adjust-angle-1';
+  const live = isAdjust ? liveAngleView(liveAngle.status, liveAngle.sensor) : null;
   const onGray = live ? live.kind === 'aligned' : isGrayStep(step);
   const header = (
-    <PreparationHeader onGray={onGray} onPressClose={onPressClose} onPressVoice={onPressVoice} />
+    <PreparationHeader
+      onGray={onGray}
+      onPressClose={onPressClose}
+      onPressVoice={onPressVoice}
+      stepNav={stepNav}
+    />
   );
 
   if (step === 'place-device') {
@@ -130,13 +152,7 @@ export function PreparationStepView({
     );
   }
 
-  if (isAdjust) {
-    const fixed = ANGLE_STEPS[step];
-    const view: AngleView =
-      live ??
-      (fixed
-        ? { indicator: fixed.indicator, kind: 'adjust', hint: fixed.hint }
-        : { indicator: 'aligned', kind: 'aligned', hint: '' });
+  if (isAdjust && live) {
     const frameWidth = Math.min(width * 0.44, 190);
     return (
       <View
@@ -148,34 +164,34 @@ export function PreparationStepView({
         {header}
         <View style={styles.angleCenter}>
           <AngleAdjustmentGuide
-            indicator={view.indicator}
+            indicator={live.indicator}
             onGray={onGray}
             width={frameWidth}
-            liveOffset={liveAngle?.indicator}
-            dimmed={view.dimmed}
+            liveOffset={liveAngle.indicator}
+            dimmed={live.dimmed}
           />
         </View>
         <View style={[styles.textBlock, styles.angleText]} accessibilityLiveRegion="polite">
-          {view.kind === 'unavailable' ? (
+          {live.kind === 'unavailable' ? (
             <>
               <Text style={styles.title} accessibilityRole="header">
                 {'기기 기울기를\n확인할 수 없어요'}
               </Text>
-              <Text style={styles.description}>{view.hint}</Text>
+              <Text style={styles.description}>{live.hint}</Text>
               <Button
                 title="다시 시도"
                 variant="outline"
-                onPress={liveAngle?.onRetry}
+                onPress={liveAngle.onRetry}
                 style={styles.retryButton}
               />
             </>
-          ) : view.kind === 'adjust' ? (
+          ) : live.kind === 'adjust' ? (
             <>
               <Text style={styles.title} accessibilityRole="header">
                 {'원과 점선이 겹치도록\n각도를 조절해주세요'}
               </Text>
               <View style={styles.chip}>
-                <Text style={styles.chipText}>{view.hint}</Text>
+                <Text style={styles.chipText}>{live.hint}</Text>
               </View>
             </>
           ) : (
@@ -192,28 +208,32 @@ export function PreparationStepView({
   }
 
   // user-position / user-position-complete
-  // ⚠️ 'user-position-complete'(자세 인식 완료)는 UI 시연용 수동 상태입니다.
-  //    카메라 영상을 분석하지 않으며, 스켈레톤은 고정 그림입니다. 자동으로 이 상태가 되지 않습니다.
-  const recognized = step === 'user-position-complete';
+  const recognized = Boolean(step === 'user-position-complete' || readiness?.isReady);
   return (
     <View style={[styles.screen, styles.grayScreen]}>
       <View style={styles.cameraArea}>
         {/* 대기·완료 두 상태에서 같은 위치에 렌더 → CameraView 인스턴스 유지(재시작 없음) */}
-        <UserPositionCamera>
+        <UserPositionCamera
+          onCameraReady={onCameraReady}
+          onPoseFrame={onPoseFrame}
+          selectedSide={readiness?.selectedSide ?? 'both'}
+        >
           <View style={[styles.cameraOverlay, { paddingTop: insets.top }]} pointerEvents="box-none">
             {header}
-            <UserPositionGuide recognized={recognized} />
-            {__DEV__ && recognized && (
-              <View pointerEvents="none" style={styles.demoBadge}>
-                <Text style={styles.demoBadgeText}>DEV · UI 시연용 수동 상태 (실제 인식 아님)</Text>
-              </View>
-            )}
+            <UserPositionGuide
+              recognized={recognized}
+              status={readiness?.status}
+              recognizedJointCount={readiness?.recognizedJointCount}
+              requiredJointCount={readiness?.requiredJointCount}
+              stabilityProgress={readiness?.stabilityProgress}
+              detailMessage={readiness?.detailMessage}
+            />
           </View>
         </UserPositionCamera>
       </View>
       <PreparationBottomPanel
         bottomInset={insets.bottom}
-        title={recognized ? '자세 인식 완료!' : '전신이 보이게\n영역 안에 서주세요'}
+        title={recognized ? '자세 인식 완료!' : (readiness?.message ?? '전신이 보이게\n영역 안에 서주세요')}
         icon={recognized ? <CheckCircle size={40} /> : undefined}
       />
     </View>
@@ -270,14 +290,4 @@ const styles = StyleSheet.create({
   retryButton: { borderRadius: 999, paddingVertical: Spacing.sm, paddingHorizontal: Spacing.xl },
   cameraArea: { flex: 1, overflow: 'hidden' },
   cameraOverlay: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 },
-  demoBadge: {
-    position: 'absolute',
-    bottom: Spacing.sm,
-    alignSelf: 'center',
-    backgroundColor: 'rgba(17,17,17,0.6)',
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 3,
-  },
-  demoBadgeText: { color: '#FFFFFF', fontSize: 10, fontWeight: '600' },
 });

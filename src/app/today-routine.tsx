@@ -66,9 +66,11 @@ export default function TodayRoutineScreen() {
   useFocusEffect(
     useCallback(() => {
       let active = true;
+      const { routineSnapshot: currentSnapshot, sessions: currentSessions } =
+        useTodayRoutineStore.getState();
 
       // 이미 스토어에 루틴 스냅샷과 세션 데이터가 준비되어 있다면 그대로 사용하고 불필요한 재조회를 생략합니다.
-      if (routineSnapshot && sessions.length > 0) {
+      if (currentSnapshot && currentSessions.length > 0) {
         setLoading(false);
         setLoadError(null);
         if (owner) {
@@ -125,7 +127,7 @@ export default function TodayRoutineScreen() {
       return () => {
         active = false;
       };
-    }, [owner, routineSnapshot, sessions.length, setPlan]),
+    }, [owner, setPlan]),
   );
 
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
