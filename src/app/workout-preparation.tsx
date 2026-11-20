@@ -22,7 +22,7 @@ import { playLocalMp3 } from '@/services/ttsService';
 import { useTodayRoutineStore } from '@/stores/useTodayRoutineStore';
 import { useTtsStore } from '@/stores/useTtsStore';
 
-const USER_POSITION_AUDIO = require('../../assets/audio/전신이_보이게_영역안에_서주세요.mp3');
+const USER_POSITION_AUDIO = require('../../assets/audio/user_position_guide.mp3');
 const USER_POSITION_TTS_TEXT = '전신이 보이게 영역 안에 서주세요';
 
 /**

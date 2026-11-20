@@ -198,8 +198,14 @@ export const useTtsStore = create<TtsState>((set, get) => ({
     });
 
     try {
+      const isRemoteHttp =
+        typeof source === 'object' &&
+        source !== null &&
+        'uri' in source &&
+        typeof source.uri === 'string' &&
+        /^https?:\/\//.test(source.uri);
       const player = createAudioPlayer(source, {
-        downloadFirst: true,
+        downloadFirst: isRemoteHttp,
         keepAudioSessionActive: true,
       });
       activePlayer = player;
@@ -208,6 +214,7 @@ export const useTtsStore = create<TtsState>((set, get) => ({
       player.addListener('playbackStatusUpdate', (status) => {
         const statusWithError = status as typeof status & { error?: string | null };
         if (statusWithError.error) {
+          if (__DEV__) console.warn('[TTS] player error:', statusWithError.error);
           clearFallbackTimer();
           if (activePlayer === player && !started && text) {
             get().playSpeech(text, type);
@@ -215,6 +222,7 @@ export const useTtsStore = create<TtsState>((set, get) => ({
           return;
         }
         if (status.currentTime > 0.05) {
+          if (!started && __DEV__) console.log('[TTS] MP3 playback started:', status.currentTime, status.duration);
           started = true;
           clearFallbackTimer();
         }

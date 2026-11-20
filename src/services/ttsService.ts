@@ -19,13 +19,15 @@ export async function playLocalMp3(
         await asset.downloadAsync();
       }
       const resolvedUri = asset.localUri || asset.uri;
+      if (__DEV__) console.log('[TTS] playLocalMp3 resolved:', { localUri: asset.localUri, uri: asset.uri });
       if (resolvedUri) {
         await useTtsStore.getState().playAudio({ uri: resolvedUri }, text, 'LOCAL_MP3');
         return;
       }
     }
     await useTtsStore.getState().playAudio(assetModule, text, 'LOCAL_MP3');
-  } catch {
+  } catch (err) {
+    if (__DEV__) console.warn('[TTS] playLocalMp3 error, fallback to Speech:', err);
     useTtsStore.getState().playSpeech(text, 'LOCAL_MP3');
   }
 }
