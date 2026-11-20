@@ -1,18 +1,32 @@
 /**
- * User Position 가이드 (카메라 영역 위 오버레이).
- *  - 전신이 들어올 점선 유도 박스 및 상단 인식 상태/진행률 배지만 표시합니다.
- *  - 유도 박스 내부 스켈레톤 모형은 표시하지 않습니다.
+ * User Position 가이드 (전체화면 카메라 위 오버레이). 표시 전용입니다.
+ *
+ * 1차 디자인(Figma 캡처 User Position 3·4):
+ *  - 인식 중: 상단 흰 안내 문구 + 신체 위치 점선 박스
+ *  - 인식 완료: 파란 체크 원 + '자세 인식 완료!' (점선 박스 숨김, 스켈레톤은 카메라 레이어가 그림)
+ *
+ * 시안에 없지만 기존 기능이라 유지한 것: 인식 상태 pill(주요 신체 점 n/m, 안정화 진행 바).
+ * → docs/F03-design-discussion.md
  */
-import { useState } from 'react';
-import { StyleSheet, Text, View, type LayoutChangeEvent } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { Animated, StyleSheet, Text, View, type LayoutChangeEvent } from 'react-native';
 
 import { DottedLine } from './DottedLine';
-import { PrepColors } from './palette';
+import { CheckCircle } from './PreparationIcons';
+import { F03Colors } from './palette';
 
 type Point = { x: number; y: number };
 
-const BOX_RATIO = 2.4; // 세로 / 가로
-const CORNER_DOT = 7;
+/** 점선 박스: 가로 = 영역 너비 42%, 세로/가로 2.3, 영역 31% 지점에서 시작 (캡처 근삿값) */
+const BOX_WIDTH_RATIO = 0.42;
+const BOX_ASPECT = 2.3;
+const BOX_TOP_RATIO = 0.31;
+const BOX_MAX_HEIGHT_RATIO = 0.55;
+const CORNER_DOT = 6;
+const COMPLETE_FADE_MS = 250;
+
+export const USER_POSITION_HEADLINE = '전신이 보이게\n뒤로 물러나 주세요';
+export const USER_POSITION_COMPLETE_HEADLINE = '자세 인식 완료!';
 
 type UserPositionGuideProps = {
   recognized: boolean;
@@ -37,25 +51,29 @@ export function UserPositionGuide({
     setArea({ width, height });
   };
 
-  const isStabilizing = status === 'stabilizing';
   const isReady = recognized || status === 'ready';
+  const isStabilizing = status === 'stabilizing';
 
-  // 가이드 박스 색상: 준비 완료(초록) / 안정화 중(연초록) / 일부 누락(주황) / 미확보(검정)
-  const guideColor = isReady
-    ? '#22C55E'
-    : isStabilizing
-      ? '#4ADE80'
-      : status === 'adjust_camera'
-        ? '#F59E0B'
-        : PrepColors.black;
+  // 완료 표현 페이드인 (대기로 돌아가면 즉시 숨김)
+  const completeOpacity = useRef(new Animated.Value(isReady ? 1 : 0)).current;
+  useEffect(() => {
+    if (!isReady) {
+      completeOpacity.setValue(0);
+      return;
+    }
+    const animation = Animated.timing(completeOpacity, {
+      toValue: 1,
+      duration: COMPLETE_FADE_MS,
+      useNativeDriver: true,
+    });
+    animation.start();
+    return () => animation.stop();
+  }, [isReady, completeOpacity]);
 
-  // 영역 안에 1:2.4 박스를 최대한 크게 (가로는 최대 46%).
-  const heightRatio = 0.78;
-  const boxHeight = Math.min(area.height * heightRatio, area.width * 0.46 * BOX_RATIO);
-  const boxWidth = boxHeight / BOX_RATIO;
+  const boxWidth = area.width * BOX_WIDTH_RATIO;
+  const boxHeight = Math.min(boxWidth * BOX_ASPECT, area.height * BOX_MAX_HEIGHT_RATIO);
   const left = (area.width - boxWidth) / 2;
-  const top = (area.height - boxHeight) / 2 + boxWidth * 0.12;
-
+  const top = area.height * BOX_TOP_RATIO;
   const corners: Point[] = [
     { x: left, y: top },
     { x: left + boxWidth, y: top },
@@ -63,53 +81,47 @@ export function UserPositionGuide({
     { x: left, y: top + boxHeight },
   ];
 
+  const dotColor = isReady
+    ? '#22C55E'
+    : isStabilizing
+      ? '#4ADE80'
+      : status === 'adjust_camera'
+        ? '#F59E0B'
+        : '#9CA3AF';
+
   return (
-    <View
-      style={styles.container}
-      pointerEvents="none"
-      onLayout={onLayout}
-      accessibilityElementsHidden
-      importantForAccessibility="no-hide-descendants">
-      {area.width > 0 && (
-        <View style={styles.statusBannerWrapper}>
-          <View style={styles.statusPill}>
-            <View
-              style={[
-                styles.statusDot,
-                {
-                  backgroundColor: isReady
-                    ? '#22C55E'
-                    : isStabilizing
-                      ? '#4ADE80'
-                      : status === 'adjust_camera'
-                        ? '#F59E0B'
-                        : '#9CA3AF',
-                },
-              ]}
-            />
+    <View style={styles.container} pointerEvents="none" onLayout={onLayout}>
+      {isReady ? (
+        <Animated.View style={[styles.headlineBlock, { opacity: completeOpacity }]}>
+          <CheckCircle size={36} background={F03Colors.primary} />
+          <Text style={styles.headline} accessibilityRole="header" accessibilityLiveRegion="polite">
+            {USER_POSITION_COMPLETE_HEADLINE}
+          </Text>
+        </Animated.View>
+      ) : (
+        <View style={styles.headlineBlock}>
+          <Text style={styles.headline} accessibilityRole="header">
+            {USER_POSITION_HEADLINE}
+          </Text>
+          <View style={styles.statusPill} accessibilityLiveRegion="polite">
+            <View style={[styles.statusDot, { backgroundColor: dotColor }]} />
             <Text style={styles.statusPillText} numberOfLines={1}>
-              {detailMessage ??
-                `주요 신체 점 ${isReady ? requiredJointCount : recognizedJointCount}/${requiredJointCount} 인식`}
+              {detailMessage ?? `주요 신체 점 ${recognizedJointCount}/${requiredJointCount} 인식`}
             </Text>
           </View>
-          {(isStabilizing || isReady) && (
+          {isStabilizing && (
             <View style={styles.progressTrack}>
-              <View
-                style={[
-                  styles.progressFill,
-                  {
-                    width: `${Math.round((isReady ? 1 : stabilityProgress) * 100)}%`,
-                    backgroundColor: '#22C55E',
-                  },
-                ]}
-              />
+              <View style={[styles.progressFill, { width: `${Math.round(stabilityProgress * 100)}%` }]} />
             </View>
           )}
         </View>
       )}
 
-      {area.width > 0 && (
-        <>
+      {area.width > 0 && !isReady && (
+        <View
+          style={StyleSheet.absoluteFill}
+          accessibilityElementsHidden
+          importantForAccessibility="no-hide-descendants">
           {corners.map((c, i) => (
             <DottedLine
               key={`edge-${i}`}
@@ -117,16 +129,13 @@ export function UserPositionGuide({
               to={corners[(i + 1) % 4]}
               dotSize={2}
               gap={4}
-              color={guideColor}
+              color={F03Colors.onCamera}
             />
           ))}
           {corners.map((c, i) => (
-            <View
-              key={`corner-${i}`}
-              style={[styles.dot, dot(c, CORNER_DOT), { backgroundColor: guideColor }]}
-            />
+            <View key={`corner-${i}`} style={[styles.dot, dot(c, CORNER_DOT)]} />
           ))}
-        </>
+        </View>
       )}
     </View>
   );
@@ -138,42 +147,39 @@ function dot(p: Point, size: number) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, alignSelf: 'stretch' },
-  dot: { position: 'absolute' },
-  statusBannerWrapper: {
+  dot: { position: 'absolute', backgroundColor: F03Colors.onCamera },
+  headlineBlock: {
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingTop: 4,
-    gap: 6,
+    gap: 12,
+    paddingHorizontal: 24,
+    paddingTop: 8,
+  },
+  headline: {
+    fontSize: 24,
+    lineHeight: 34,
+    fontWeight: '700',
+    color: F03Colors.onCamera,
+    textAlign: 'center',
+    letterSpacing: -0.4,
   },
   statusPill: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    backgroundColor: 'rgba(17, 17, 17, 0.72)',
+    backgroundColor: 'rgba(0,0,0,0.45)',
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 999,
     maxWidth: '92%',
   },
-  statusDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-  },
-  statusPillText: {
-    color: '#FFFFFF',
-    fontSize: 12,
-    fontWeight: '600',
-  },
+  statusDot: { width: 7, height: 7, borderRadius: 3.5 },
+  statusPillText: { color: 'rgba(255,255,255,0.9)', fontSize: 12, fontWeight: '600' },
   progressTrack: {
-    width: 160,
-    height: 4,
+    width: 140,
+    height: 3,
     borderRadius: 999,
-    backgroundColor: 'rgba(255, 255, 255, 0.35)',
+    backgroundColor: 'rgba(255,255,255,0.3)',
     overflow: 'hidden',
   },
-  progressFill: {
-    height: '100%',
-    borderRadius: 999,
-  },
+  progressFill: { height: '100%', borderRadius: 999, backgroundColor: F03Colors.onCamera },
 });

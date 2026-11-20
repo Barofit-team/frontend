@@ -1,20 +1,22 @@
 /**
  * Adjust Angle 그래픽: 스마트폰 프레임 + 가운데 기준 점선 + 각도 표시 원.
- * indicator 값만 바꾸면 Adjust Angle 1·2·3 상태를 모두 표현합니다.
+ * indicator 값만 바꾸면 조절 중(위/아래)·정렬 완료 상태를 모두 표현합니다.
  * liveOffset(Animated.Value, -1~1)을 주면 원이 센서값을 따라 움직입니다(리렌더 없이 이동).
+ *
+ * 1차 디자인(Figma 캡처 Adjust Angle 4·5·6):
+ *  - 조절 중: 연한 파란 외곽선 스마트폰 + 점선 + 파란 원
+ *  - 정렬 완료: 원 대신 점선 위 파란 체크 원
  */
 import { Animated, StyleSheet, View } from 'react-native';
 
 import { DottedLine } from './DottedLine';
 import { CheckMark } from './PreparationIcons';
-import { PrepColors } from './palette';
+import { F03Colors } from './palette';
 
 export type AngleIndicator = 'above' | 'below' | 'aligned';
 
 type AngleAdjustmentGuideProps = {
   indicator: AngleIndicator;
-  /** 회색 배경(완료 상태) 위에 그릴 때 */
-  onGray?: boolean;
   /** 프레임 너비(px). 기본은 화면 너비 비율로 부모가 지정 */
   width: number;
   /**
@@ -33,21 +35,16 @@ const INDICATOR_POSITION: Record<AngleIndicator, number> = {
   aligned: 0.5,
 };
 
-const BORDER = 4;
+const BORDER = 3;
 /** liveOffset ±1일 때 이동 거리 (내부 높이 대비) */
 const LIVE_RANGE = 0.3;
 
-export function AngleAdjustmentGuide({
-  indicator,
-  onGray = false,
-  width,
-  liveOffset,
-  dimmed = false,
-}: AngleAdjustmentGuideProps) {
-  const height = width * 2.05;
+export function AngleAdjustmentGuide({ indicator, width, liveOffset, dimmed = false }: AngleAdjustmentGuideProps) {
+  const height = width * 2.1;
   const innerWidth = width - BORDER * 2;
   const innerHeight = height - BORDER * 2;
-  const circle = indicator === 'aligned' ? width * 0.27 : width * 0.31;
+  const aligned = indicator === 'aligned';
+  const circle = width * (aligned ? 0.29 : 0.31);
   const lineY = innerHeight / 2;
   const translateY = liveOffset
     ? liveOffset.interpolate({
@@ -59,23 +56,15 @@ export function AngleAdjustmentGuide({
 
   return (
     <View
-      style={[
-        styles.frame,
-        {
-          width,
-          height,
-          borderRadius: width * 0.22,
-          backgroundColor: onGray ? PrepColors.deviceScreenOnGray : PrepColors.deviceScreen,
-        },
-      ]}
+      style={[styles.frame, { width, height, borderRadius: width * 0.2 }]}
       accessibilityElementsHidden
       importantForAccessibility="no-hide-descendants">
       <DottedLine
-        from={{ x: 6, y: innerHeight / 2 }}
-        to={{ x: innerWidth - 6, y: innerHeight / 2 }}
-        color={PrepColors.line}
-        dotSize={2}
-        gap={3}
+        from={{ x: 4, y: lineY }}
+        to={{ x: innerWidth - 4, y: lineY }}
+        color={F03Colors.guideLine}
+        dotSize={1.5}
+        gap={2.5}
       />
       <Animated.View
         style={[
@@ -86,12 +75,12 @@ export function AngleAdjustmentGuide({
             borderRadius: circle / 2,
             left: (innerWidth - circle) / 2,
             top: lineY - circle / 2,
-            backgroundColor: indicator === 'aligned' ? PrepColors.success : PrepColors.device,
+            backgroundColor: aligned ? F03Colors.primary : F03Colors.indicator,
             transform: [{ translateY }],
-            opacity: dimmed ? 0.25 : 1,
+            opacity: dimmed ? 0.3 : 1,
           },
         ]}>
-        {indicator === 'aligned' && <CheckMark size={circle * 0.4} />}
+        {aligned && <CheckMark size={circle * 0.4} />}
       </Animated.View>
     </View>
   );
@@ -100,7 +89,8 @@ export function AngleAdjustmentGuide({
 const styles = StyleSheet.create({
   frame: {
     borderWidth: BORDER,
-    borderColor: PrepColors.device,
+    borderColor: F03Colors.deviceOutline,
+    backgroundColor: F03Colors.deviceFill,
     overflow: 'hidden',
   },
   circle: {

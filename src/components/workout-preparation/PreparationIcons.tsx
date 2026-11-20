@@ -78,6 +78,31 @@ export function CloseIcon({ color = PrepColors.text, size = 14 }: IconProps) {
   );
 }
 
+/** 뒤로가기(←) 아이콘 */
+export function BackArrowIcon({ color = PrepColors.text, size = 16 }: IconProps) {
+  const stroke = Math.max(1.5, size / 9);
+  const head = size * 0.42;
+  return (
+    <View style={[styles.center, { width: size, height: size }]}>
+      <View
+        style={{ position: 'absolute', width: size * 0.78, height: stroke, borderRadius: stroke / 2, backgroundColor: color, left: size * 0.14 }}
+      />
+      <View
+        style={{
+          position: 'absolute',
+          left: size * 0.16,
+          width: head,
+          height: head,
+          borderLeftWidth: stroke,
+          borderBottomWidth: stroke,
+          borderColor: color,
+          transform: [{ rotate: '45deg' }],
+        }}
+      />
+    </View>
+  );
+}
+
 /** 체크 표시 */
 export function CheckMark({ color = PrepColors.white, size = 14 }: IconProps) {
   const stroke = Math.max(2, size / 6);

@@ -41,6 +41,10 @@ export interface PoseSkeletonOverlayProps {
   /** 전면 카메라 거울 반전 여부 (기본 true) */
   mirrorX?: boolean;
   minVisibility?: number;
+  /** 뼈대 선 색 (기본: 기존 초록). 운동 준비(F03)는 밝은 색을 넘깁니다 */
+  boneColor?: string;
+  /** 관절 점 색 (기본: 기존 빨강) */
+  jointColor?: string;
 }
 
 /**
@@ -53,6 +57,8 @@ export function PoseSkeletonOverlay({
   visible = true,
   mirrorX = true,
   minVisibility = 0.5,
+  boneColor,
+  jointColor,
 }: PoseSkeletonOverlayProps) {
   const [size, setSize] = useState({ width: 0, height: 0 });
 
@@ -129,6 +135,7 @@ export function PoseSkeletonOverlay({
             key={`bone-${a}-${b}`}
             style={[
               styles.bone,
+              boneColor ? { backgroundColor: boneColor } : null,
               {
                 width: length,
                 left: cx - length / 2,
@@ -151,6 +158,7 @@ export function PoseSkeletonOverlay({
             key={`joint-${idx}`}
             style={[
               styles.joint,
+              jointColor ? { backgroundColor: jointColor } : null,
               {
                 left: x - 5,
                 top: y - 5,
