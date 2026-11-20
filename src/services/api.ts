@@ -5,7 +5,7 @@ import type { TokenResponse } from '@/types/auth';
  * API 호출 공통 함수입니다.
  * 서버 주소는 .env 의 EXPO_PUBLIC_API_URL 로 설정합니다. (.env.example 참고)
  */
-const BASE_URL = process.env.EXPO_PUBLIC_API_URL ?? '';
+const BASE_URL = (process.env.EXPO_PUBLIC_API_URL ?? '').replace(/\/+$/, '');
 
 /** 400 INVALID_INPUT 응답의 필드별 오류 */
 export interface ApiFieldError {

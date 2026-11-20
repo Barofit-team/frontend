@@ -66,7 +66,7 @@ function releaseActivePlayer(): void {
 }
 
 const getDefaultWsUrl = () => {
-  const apiUrl = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:3002';
+  const apiUrl = (process.env.EXPO_PUBLIC_API_URL || 'http://localhost:3002').replace(/\/+$/, '');
   const wsBase = apiUrl.replace(/^http/, 'ws');
   return `${wsBase}/ws/coaching`;
 };
