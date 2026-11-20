@@ -2,8 +2,8 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { Spacing } from '@/constants/theme';
 
-import { CloseIcon, SpeakerIcon } from './PreparationIcons';
-import { PrepColors } from './palette';
+import { BackArrowIcon, CloseIcon, SpeakerIcon } from './PreparationIcons';
+import { F03Colors, PrepColors } from './palette';
 
 type PreparationHeaderProps = {
   /** 회색(카메라) 배경 위에서는 버튼 배경을 흰색으로 */
@@ -19,10 +19,91 @@ type PreparationHeaderProps = {
     onPrev: () => void;
     onNext: () => void;
   };
+  /**
+   * 'f03': 운동 준비 1차 디자인 헤더(왼쪽 뒤로가기 · 오른쪽 닫기). 음성 버튼은 그리지 않습니다.
+   * 기본값 'legacy'는 기존 모양 그대로이며 운동 진행(F04) 화면들이 사용합니다.
+   */
+  variant?: 'legacy' | 'f03';
+  /** variant 'f03'에서 왼쪽 뒤로가기 버튼. 없으면 자리만 비워 둡니다 */
+  onPressBack?: () => void;
+  /** variant 'f03'에서 카메라(어두운) 화면 위인지 */
+  onCamera?: boolean;
 };
 
 /** 상단 음성 안내 버튼 + 중앙 소형 단계 이동 버튼 + 닫기 버튼 */
-export function PreparationHeader({
+export function PreparationHeader(props: PreparationHeaderProps) {
+  if (props.variant === 'f03') return <F03Header {...props} />;
+  return <LegacyHeader {...props} />;
+}
+
+function StepNavPill({ stepNav, onGray }: { stepNav: NonNullable<PreparationHeaderProps['stepNav']>; onGray: boolean }) {
+  return (
+    <View
+      style={[
+        styles.stepNavPill,
+        { backgroundColor: onGray ? 'rgba(255,255,255,0.88)' : PrepColors.surface },
+      ]}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="이전 과정"
+        disabled={!stepNav.canPrev}
+        hitSlop={8}
+        onPress={stepNav.onPrev}
+        style={({ pressed }) => [styles.navButton, !stepNav.canPrev && styles.disabled, pressed && styles.pressed]}>
+        <Text style={styles.navArrow}>‹</Text>
+      </Pressable>
+      <Text style={styles.navLabel}>
+        {stepNav.current}/{stepNav.total}
+      </Text>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="다음 과정"
+        disabled={!stepNav.canNext}
+        hitSlop={8}
+        onPress={stepNav.onNext}
+        style={({ pressed }) => [styles.navButton, !stepNav.canNext && styles.disabled, pressed && styles.pressed]}>
+        <Text style={styles.navArrow}>›</Text>
+      </Pressable>
+    </View>
+  );
+}
+
+/** F03 1차 디자인: [← 뒤로] ··· [✕ 닫기] (원형 40pt) */
+function F03Header({ onPressBack, onPressClose, onCamera = false, stepNav }: PreparationHeaderProps) {
+  const circle = [
+    styles.f03Button,
+    { backgroundColor: onCamera ? F03Colors.headerButtonOnCamera : F03Colors.headerButton },
+  ];
+  return (
+    <View style={styles.f03Container}>
+      {onPressBack ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="이전 단계"
+          hitSlop={8}
+          onPress={onPressBack}
+          style={({ pressed }) => [circle, pressed && styles.pressed]}>
+          <BackArrowIcon size={16} color={F03Colors.text} />
+        </Pressable>
+      ) : (
+        <View style={styles.f03Spacer} />
+      )}
+
+      {stepNav && <StepNavPill stepNav={stepNav} onGray={onCamera} />}
+
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="닫기"
+        hitSlop={8}
+        onPress={onPressClose}
+        style={({ pressed }) => [circle, pressed && styles.pressed]}>
+        <CloseIcon size={12} color={F03Colors.text} />
+      </Pressable>
+    </View>
+  );
+}
+
+function LegacyHeader({
   onGray = false,
   onPressVoice,
   onPressClose,
@@ -40,43 +121,7 @@ export function PreparationHeader({
         <SpeakerIcon size={16} />
       </Pressable>
 
-      {stepNav && (
-        <View
-          style={[
-            styles.stepNavPill,
-            { backgroundColor: onGray ? 'rgba(255,255,255,0.88)' : PrepColors.surface },
-          ]}>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="이전 과정"
-            disabled={!stepNav.canPrev}
-            hitSlop={8}
-            onPress={stepNav.onPrev}
-            style={({ pressed }) => [
-              styles.navButton,
-              !stepNav.canPrev && styles.disabled,
-              pressed && styles.pressed,
-            ]}>
-            <Text style={styles.navArrow}>‹</Text>
-          </Pressable>
-          <Text style={styles.navLabel}>
-            {stepNav.current}/{stepNav.total}
-          </Text>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="다음 과정"
-            disabled={!stepNav.canNext}
-            hitSlop={8}
-            onPress={stepNav.onNext}
-            style={({ pressed }) => [
-              styles.navButton,
-              !stepNav.canNext && styles.disabled,
-              pressed && styles.pressed,
-            ]}>
-            <Text style={styles.navArrow}>›</Text>
-          </Pressable>
-        </View>
-      )}
+      {stepNav && <StepNavPill stepNav={stepNav} onGray={onGray} />}
 
       <Pressable
         accessibilityRole="button"
@@ -134,6 +179,22 @@ const styles = StyleSheet.create({
     minWidth: 24,
     textAlign: 'center',
   },
+  f03Container: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: Spacing.md,
+    paddingTop: Spacing.sm,
+    paddingBottom: Spacing.sm,
+  },
+  f03Button: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  f03Spacer: { width: 40, height: 40 },
   disabled: { opacity: 0.28 },
   pressed: { opacity: 0.6 },
 });

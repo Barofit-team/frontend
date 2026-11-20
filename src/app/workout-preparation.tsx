@@ -6,7 +6,7 @@ import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BackHandler, StyleSheet, View } from 'react-native';
 
-import { PreparationStepView } from '@/components/workout-preparation/PreparationStepView';
+import { PreparationStepView, isGrayStep } from '@/components/workout-preparation/PreparationStepView';
 import {
   PREPARATION_STEPS,
   getAdjacentStep,
@@ -24,6 +24,12 @@ import { useTtsStore } from '@/stores/useTtsStore';
 
 const USER_POSITION_AUDIO = require('../../assets/audio/전신이_보이게_영역안에_서주세요.mp3');
 const USER_POSITION_TTS_TEXT = '전신이 보이게 영역 안에 서주세요';
+
+/**
+ * 개발용 단계 이동 pill(‹ 1/4 ›). 1차 디자인에 없어 기본 숨김.
+ * 개발 빌드에서 EXPO_PUBLIC_F03_STEP_NAV=1 일 때만 표시합니다.
+ */
+const SHOW_DEV_STEP_NAV = __DEV__ && process.env.EXPO_PUBLIC_F03_STEP_NAV === '1';
 
 /** '자세 인식 완료!' 화면을 보여준 뒤 운동 진행 화면으로 넘어가기까지의 시간 */
 const SESSION_ENTRY_DELAY_MS = 1500;
@@ -170,20 +176,25 @@ export default function WorkoutPreparationScreen() {
 
   return (
     <View style={styles.container}>
-      <StatusBar style="dark" />
+      <StatusBar style={isGrayStep(step) ? 'light' : 'dark'} />
       <PreparationStepView
         step={step}
         onPressDone={() => move(1)}
         onPressClose={close}
+        onPressBack={() => move(-1)}
         onPressVoice={handlePressVoice}
-        stepNav={{
-          current: idx + 1,
-          total: totalSteps,
-          canPrev: idx > 0,
-          canNext: idx < totalSteps - 1,
-          onPrev: () => move(-1),
-          onNext: () => move(1),
-        }}
+        stepNav={
+          SHOW_DEV_STEP_NAV
+            ? {
+                current: idx + 1,
+                total: totalSteps,
+                canPrev: idx > 0,
+                canNext: idx < totalSteps - 1,
+                onPrev: () => move(-1),
+                onNext: () => move(1),
+              }
+            : undefined
+        }
         onCameraReady={handleCameraReady}
         onPoseFrame={readiness.pushFrame}
         readiness={{

@@ -61,6 +61,8 @@ type UserPositionCameraProps = {
   onPoseFrame?: (frame: PoseFrame, meta: { frameId: number; inferenceMs: number }) => void;
   /** 스켈레톤 오버레이 표시 기준 방향 ('left' | 'right' | 'both' | null) */
   selectedSide?: 'left' | 'right' | 'both' | null;
+  /** 스켈레톤 색 (생략 시 PoseSkeletonOverlay 기본색). 운동 준비 화면 디자인용 */
+  skeletonColors?: { bone: string; joint: string };
 };
 
 export function UserPositionCamera({
@@ -69,6 +71,7 @@ export function UserPositionCamera({
   onCameraReady,
   onPoseFrame,
   selectedSide = null,
+  skeletonColors,
 }: UserPositionCameraProps) {
   const [permission, requestPermission, getPermission] = useCameraPermissions();
   const isFocused = useIsFocused();
@@ -160,7 +163,13 @@ export function UserPositionCamera({
                 }
               }}
             />
-            <PoseSkeletonOverlay frame={pose.frame} selectedSide={selectedSide} mirrorX />
+            <PoseSkeletonOverlay
+              frame={pose.frame}
+              selectedSide={selectedSide}
+              mirrorX
+              boneColor={skeletonColors?.bone}
+              jointColor={skeletonColors?.joint}
+            />
           </>
         ) : (
           <CameraView
