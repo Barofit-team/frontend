@@ -1,35 +1,22 @@
 /**
- * 운동 중단 확인 바텀시트 (일시 정지 화면 위). 표시 전용입니다.
- *  - 저장하고 나가기 → onConfirm
- *  - 계속 운동하기 / 배경 탭 / Android 뒤로가기 → onCancel (일시 정지 화면으로 복귀)
+ * 운동 종료 확인 바텀시트 (일시정지 화면 위). 표시 전용입니다.
+ *  - 운동 종료 → onConfirm (기존 '저장하고 나가기': 진행 상태를 임시저장하고 나감, 오늘 이어하기 가능)
+ *  - 돌아가기 / 배경 탭 / Android 뒤로가기 → onCancel (일시정지 화면으로 복귀)
  */
 import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { PrepColors } from '@/components/workout-preparation/palette';
-
-import { SessionProgressCard } from './SessionProgressCard';
+import { SessionColors } from './sessionPalette';
 
 type StopConfirmSheetProps = {
   visible: boolean;
-  statusText: string;
-  reps: number | null;
-  targetReps: number;
   onConfirm: () => void;
   onCancel: () => void;
   /** 저장·이동 처리 중이면 true → 버튼 비활성화(중복 탭 방지) */
   busy?: boolean;
 };
 
-export function StopConfirmSheet({
-  visible,
-  statusText,
-  reps,
-  targetReps,
-  onConfirm,
-  onCancel,
-  busy = false,
-}: StopConfirmSheetProps) {
+export function StopConfirmSheet({ visible, onConfirm, onCancel, busy = false }: StopConfirmSheetProps) {
   const insets = useSafeAreaInsets();
 
   return (
@@ -44,28 +31,26 @@ export function StopConfirmSheet({
         <Pressable
           style={StyleSheet.absoluteFill}
           accessibilityRole="button"
-          accessibilityLabel="계속 운동하기"
+          accessibilityLabel="돌아가기"
           disabled={busy}
           onPress={onCancel}
         />
-        <View style={[styles.sheet, { paddingBottom: 16 + insets.bottom }]} accessibilityViewIsModal>
-          <View style={styles.handle} />
+        <View style={[styles.sheet, { paddingBottom: 12 + insets.bottom }]} accessibilityViewIsModal>
           <Text style={styles.title} accessibilityRole="header">
-            운동을 중단할까요?
+            운동을 종료할까요?
           </Text>
           <Text style={styles.body}>
-            {'현재 운동 상태를 저장하고 나갑니다.'}
+            {'지금까지 운동한 기록은 임시저장됩니다.\n오늘 언제든 다시 시작할 수 있어요.'}
           </Text>
-          <SessionProgressCard statusText={statusText} reps={reps} targetReps={targetReps} style={styles.card} />
           <Pressable
             accessibilityRole="button"
             disabled={busy}
             onPress={onConfirm}
             style={({ pressed }) => [styles.confirmButton, (pressed || busy) && styles.pressed]}>
-            <Text style={styles.confirmText}>저장하고 나가기</Text>
+            <Text style={styles.confirmText}>운동 종료</Text>
           </Pressable>
           <Pressable accessibilityRole="button" disabled={busy} hitSlop={8} onPress={onCancel} style={styles.cancel}>
-            <Text style={styles.cancelText}>계속 운동하기</Text>
+            <Text style={styles.cancelText}>돌아가기</Text>
           </Pressable>
         </View>
       </View>
@@ -74,34 +59,26 @@ export function StopConfirmSheet({
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.4)' },
+  root: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.5)' },
   sheet: {
-    backgroundColor: PrepColors.white,
+    backgroundColor: SessionColors.sheet,
     borderTopLeftRadius: 16,
     borderTopRightRadius: 16,
     paddingHorizontal: 16,
-    paddingTop: 8,
+    paddingTop: 24,
   },
-  handle: {
-    alignSelf: 'center',
-    width: 36,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: '#E0E0E0',
-  },
-  title: { marginTop: 28, fontSize: 18, lineHeight: 24, fontWeight: '800', color: PrepColors.text },
-  body: { marginTop: 8, fontSize: 13, lineHeight: 22, color: PrepColors.textSecondary },
-  card: { marginTop: 24 },
+  title: { fontSize: 18, lineHeight: 26, fontWeight: '700', color: SessionColors.sheetText },
+  body: { marginTop: 8, fontSize: 13, lineHeight: 20, color: SessionColors.sheetSubText },
   confirmButton: {
-    marginTop: 40,
-    height: 44,
-    borderRadius: 999,
-    backgroundColor: PrepColors.black,
+    marginTop: 32,
+    height: 48,
+    borderRadius: 8,
+    backgroundColor: SessionColors.primary,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  confirmText: { fontSize: 14, fontWeight: '700', color: PrepColors.white },
-  cancel: { alignSelf: 'center', marginTop: 20, paddingVertical: 4 },
-  cancelText: { fontSize: 13, fontWeight: '600', color: PrepColors.textSecondary },
+  confirmText: { fontSize: 15, fontWeight: '700', color: SessionColors.onCamera },
+  cancel: { alignSelf: 'center', marginTop: 18, paddingVertical: 6 },
+  cancelText: { fontSize: 14, fontWeight: '600', color: SessionColors.sheetSubText },
   pressed: { opacity: 0.7 },
 });
