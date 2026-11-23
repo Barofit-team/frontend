@@ -8,14 +8,13 @@ import { Alert, AppState, BackHandler, Pressable, StyleSheet, Text, View } from 
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { PrepColors } from '@/components/workout-preparation/palette';
-import { CountdownView } from '@/components/workout-session/CountdownView';
 import { ExerciseCameraArea } from '@/components/workout-session/ExerciseCameraArea';
-import { ExerciseStatusPanel } from '@/components/workout-session/ExerciseStatusPanel';
-import { PauseView } from '@/components/workout-session/PauseView';
 import { PhaseTimer } from '@/components/workout-session/PhaseTimer';
+import { SessionStage } from '@/components/workout-session/SessionStage';
+import { SessionColors } from '@/components/workout-session/sessionPalette';
+import { countSets, estimateRemainingSeconds } from '@/components/workout-session/sessionProgress';
 import {
   EXERCISES,
-  RESUME_COUNTDOWN_SECONDS,
   type ExerciseConfig,
   type RoutineItem,
 } from '@/components/workout-session/sessionConfig';
@@ -26,7 +25,6 @@ import {
   type ActivePhase,
   type SessionPhase,
 } from '@/components/workout-session/sessionFlow';
-import { StopConfirmSheet } from '@/components/workout-session/StopConfirmSheet';
 import { WorkoutCompleteView } from '@/components/workout-session/WorkoutCompleteView';
 import { createWorkoutSessionDraft, type WorkoutSessionSync, type WorkoutStatus } from '@/services/workoutSessionService';
 import { clearLocalWorkout, flushWorkoutQueue, getLocalWorkout, pendingCount, queueSession, savePosition } from '@/services/offlineWorkout';
@@ -555,89 +553,44 @@ export default function WorkoutSessionScreen() {
     return () => sub.remove();
   }, [handleClose]);
 
-  const renderExercise = (exercise: (typeof EXERCISES)[keyof typeof EXERCISES], remainingSeconds: number) => (
-    <View style={styles.screen}>
-      <ExerciseCameraArea
-        onPressClose={handleClose}
-        onPoseFrame={handlePoseFrame}
-        selectedSide={selectedSide}
-      />
-      <ExerciseStatusPanel
-        exerciseName={exercise.name}
-        currentReps={currentReps}
-        targetReps={exercise.targetReps}
-        measurementType={sessions[phase.kind === 'completed' ? 0 : phase.exerciseIndex]?.measurementType}
-        remainingSeconds={remainingSeconds}
-        bottomInset={insets.bottom}
-      />
-    </View>
-  );
-
-  const renderPhase = (current: ActivePhase, remainingSeconds: number) => {
+  /** 화면 표시만 담당하는 SessionStage에 현재 상태를 넘깁니다. 타이머·단계 전환은 PhaseTimer/completePhase가 그대로 담당 */
+  const renderStage = (current: ActivePhase, remainingSeconds: number, phaseSeconds: number) => {
     const exercise = resolveExercise(current);
-    switch (current.kind) {
-      case 'countdown':
-        return (
-          <CountdownView
-            // 디자인: 종목의 첫 세트는 "세션 N"(종목 순서), 이후 세트는 "세트 N"
-            subtitle={current.set === 1 ? `세션 ${current.exerciseIndex + 1}` : `세트 ${current.set}`}
-            title={exercise.name}
-            remainingSeconds={remainingSeconds}
-            onPressClose={handleClose}
-          />
-        );
-      case 'resting':
-        return (
-          <CountdownView
-            subtitle={`세트 ${current.completedSet} 완료`}
-            title="휴식"
-            remainingSeconds={remainingSeconds}
-            onPressClose={handleClose}
-          />
-        );
-      case 'exercising':
-        return renderExercise(exercise, remainingSeconds);
-    }
-  };
-
-  const renderPaused = (current: ActivePhase, remainingSeconds: number) => {
-    const exercise = resolveExercise(current);
-    const info = describePause(current, exercise.name);
-    if (pause === 'resuming') {
-      return (
-        <PhaseTimer durationSeconds={RESUME_COUNTDOWN_SECONDS} onComplete={finishResumeCountdown}>
-          {resumeSeconds => (
-            <CountdownView
-              subtitle={info.subtitle}
-              title={exercise.name}
-              remainingSeconds={resumeSeconds}
-              onPressClose={handleClose}
-            />
-          )}
-        </PhaseTimer>
-      );
-    }
     return (
-      <>
-        <PauseView
-          subtitle={info.subtitle}
-          statusText={info.statusText}
-          reps={currentReps}
-          targetReps={exercise.targetReps}
-          onPressStop={openStopConfirm}
-          onPressResume={resume}
-          onPressClose={handleClose}
-        />
-        <StopConfirmSheet
-          visible={pause === 'stop-confirm'}
-          statusText={info.statusText}
-          reps={currentReps}
-          targetReps={exercise.targetReps}
-          busy={exiting}
-          onConfirm={() => saveAndExit(remainingSeconds)}
-          onCancel={cancelStop}
-        />
-      </>
+      <SessionStage
+        phase={current}
+        pause={pause}
+        remainingSeconds={remainingSeconds}
+        phaseSeconds={phaseSeconds}
+        exerciseName={exercise.name}
+        targetReps={exercise.targetReps}
+        currentReps={currentReps}
+        isDuration={sessions[current.exerciseIndex]?.measurementType === 'DURATION'}
+        resumeSubtitle={describePause(current, exercise.name).subtitle}
+        getPauseSummary={() => {
+          const sets = countSets(current, activeRoutine);
+          const spent = currentElapsed();
+          return {
+            completedSets: sets.completed,
+            totalSets: sets.total,
+            elapsedSeconds: Math.floor((spent.activeMs + spent.restMs) / 1000),
+            remainingSeconds: estimateRemainingSeconds(current, remainingSeconds, activeRoutine),
+            exercises: sessions.map((item, index) => ({
+              key: `${item.id}-${index}`,
+              name: item.name,
+              detail: `${item.sets}세트 · ${item.reps}${item.measurementType === 'DURATION' ? '초' : '개'}`,
+              current: index === current.exerciseIndex,
+            })),
+          };
+        }}
+        busy={exiting}
+        onPressMenu={handleClose}
+        onFinishResume={finishResumeCountdown}
+        onPressStop={openStopConfirm}
+        onPressResume={resume}
+        onConfirmStop={() => saveAndExit(remainingSeconds)}
+        onCancelStop={cancelStop}
+      />
     );
   };
 
@@ -646,7 +599,7 @@ export default function WorkoutSessionScreen() {
 
   return (
     <>
-      <StatusBar style="dark" />
+      <StatusBar style={sessionReady ? 'light' : 'dark'} />
       {!sessionReady ? (
         <View style={[styles.screen, { paddingTop: insets.top + 30, paddingHorizontal: 20 }]}>
           <Text>{sessionError ?? '운동 세션을 준비하고 있어요.'}</Text>
@@ -654,8 +607,11 @@ export default function WorkoutSessionScreen() {
         </View>
       ) : phase.kind === 'completed' || duration === null ? (
         // 카메라를 끄고 완료 화면만 표시 → RESULT_ENTRY_DELAY_MS 뒤 결과 화면으로 이동
-        <WorkoutCompleteView onPressClose={handleClose} />
+        <WorkoutCompleteView />
       ) : (
+        // 카메라는 세션 화면 동안 한 번만 마운트(단계·일시정지 전환 시 재시작 없음). 판정은 handlePoseFrame이 운동 단계에서만 수행
+        <View style={styles.stage}>
+          <ExerciseCameraArea onPoseFrame={handlePoseFrame} selectedSide={selectedSide} />
         <PhaseTimer
           key={phase.id}
           durationSeconds={duration}
@@ -674,10 +630,9 @@ export default function WorkoutSessionScreen() {
             }
             completePhase(phase.id);
           }}>
-          {remainingSeconds =>
-            pause === 'none' ? renderPhase(phase, remainingSeconds) : renderPaused(phase, remainingSeconds)
-          }
+          {remainingSeconds => renderStage(phase, remainingSeconds, duration)}
         </PhaseTimer>
+        </View>
       )}
     </>
   );
@@ -685,4 +640,5 @@ export default function WorkoutSessionScreen() {
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: PrepColors.cameraBackground },
+  stage: { flex: 1, backgroundColor: SessionColors.base },
 });
