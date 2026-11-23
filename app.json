@@ -9,14 +9,14 @@
     "userInterfaceStyle": "light",
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "com.4bujak.barofit",
+      "bundleIdentifier": "com.barofit.app",
       "icon": "./assets/expo.icon",
       "infoPlist": {
         "NSCameraUsageDescription": "운동 준비 및 세션 중 전신 자세를 실시간으로 분석하기 위해 카메라를 사용합니다."
       }
     },
     "android": {
-      "package": "com.4bujak.barofit",
+      "package": "com.barofit.app",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
