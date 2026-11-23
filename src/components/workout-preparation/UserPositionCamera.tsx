@@ -157,7 +157,11 @@ export function UserPositionCamera({
               }}
               onPoseError={(err) => {
                 if (__DEV__) console.warn(LOG, 'pose error', err.code, err.message);
-                if (err.code === 'CAMERA_START_FAILED' || err.code === 'MODEL_INIT_FAILED') {
+                if (
+                  err.code === 'CAMERA_START_FAILED' ||
+                  err.code === 'MODEL_INIT_FAILED' ||
+                  err.code === 'CAMERA_START_TIMEOUT'
+                ) {
                   setErrorMessage(err.message);
                   setErrorFor(sessionKey);
                 }

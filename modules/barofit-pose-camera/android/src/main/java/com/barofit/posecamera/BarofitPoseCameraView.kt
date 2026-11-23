@@ -15,6 +15,9 @@ import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
+import androidx.camera.core.resolutionselector.AspectRatioStrategy
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
@@ -38,6 +41,9 @@ class BarofitPoseCameraView(
 ) : ExpoView(context, appContext) {
   companion object {
     private const val TAG = "BarofitPoseCameraView"
+
+    /** bindToLifecycle이 이 시간 내에 ready/error를 emit하지 않으면 타임아웃 에러를 띄운다 */
+    private const val BIND_TIMEOUT_MS = 8000L
   }
 
   override val shouldUseAndroidLayout: Boolean = true
@@ -60,6 +66,13 @@ class BarofitPoseCameraView(
   private var isBinding = false
   private var frameCounter = 0
   private var lastAnalyzeMs = 0L
+  private var detectorLoading = false
+  private val bindTimeoutRunnable = Runnable {
+    Log.w(TAG, "bind timed out after ${BIND_TIMEOUT_MS}ms")
+    isBinding = false
+    emitError("CAMERA_START_TIMEOUT", "카메라 시작이 지연되고 있습니다 (${BIND_TIMEOUT_MS}ms)")
+    emitStatus("error", "timeout")
+  }
 
   init {
     setBackgroundColor(Color.BLACK)
@@ -107,40 +120,57 @@ class BarofitPoseCameraView(
     ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
       PackageManager.PERMISSION_GRANTED
 
-  private fun ensureDetector(): Boolean {
-    if (detector != null) return true
-    val assets = try {
-      context.assets.list("")?.toSet() ?: emptySet()
-    } catch (_: Throwable) {
-      emptySet()
-    }
-    if (!assets.contains("pose_landmarker_full.task")) {
-      emitError(
-        "MODEL_INIT_FAILED",
-        "pose_landmarker_full.task missing in assets."
-      )
-      return false
-    }
-    return try {
-      val base = BaseOptions.builder()
-        .setModelAssetPath("pose_landmarker_full.task")
-        .build()
-      val opts = PoseLandmarker.PoseLandmarkerOptions.builder()
-        .setBaseOptions(base)
-        .setRunningMode(RunningMode.VIDEO)
-        .setNumPoses(1)
-        .setMinPoseDetectionConfidence(0.5f)
-        .setMinPosePresenceConfidence(0.5f)
-        .setMinTrackingConfidence(0.5f)
-        .build()
-      detector = PoseLandmarker.createFromOptions(context, opts)
-      true
-    } catch (t: Throwable) {
-      Log.e(TAG, "Detector init failed", t)
-      emitError("MODEL_INIT_FAILED", t.message ?: "init failed")
-      false
+  /** 백그라운드 스레드에서 MediaPipe 모델을 로드한다. 카메라 프리뷰 바인딩을 막지 않는다. */
+  private fun loadDetectorAsync() {
+    if (detector != null || detectorLoading) return
+    detectorLoading = true
+    exec.execute {
+      val assets = try {
+        context.assets.list("")?.toSet() ?: emptySet()
+      } catch (_: Throwable) {
+        emptySet()
+      }
+      if (!assets.contains("pose_landmarker_full.task")) {
+        detectorLoading = false
+        emitError("MODEL_INIT_FAILED", "pose_landmarker_full.task missing in assets.")
+        return@execute
+      }
+      try {
+        val base = BaseOptions.builder()
+          .setModelAssetPath("pose_landmarker_full.task")
+          .build()
+        val opts = PoseLandmarker.PoseLandmarkerOptions.builder()
+          .setBaseOptions(base)
+          .setRunningMode(RunningMode.VIDEO)
+          .setNumPoses(1)
+          .setMinPoseDetectionConfidence(0.5f)
+          .setMinPosePresenceConfidence(0.5f)
+          .setMinTrackingConfidence(0.5f)
+          .build()
+        detector = PoseLandmarker.createFromOptions(context, opts)
+      } catch (t: Throwable) {
+        Log.e(TAG, "Detector init failed", t)
+        emitError("MODEL_INIT_FAILED", t.message ?: "init failed")
+      } finally {
+        detectorLoading = false
+      }
     }
   }
+
+  /** 추론용 작은 해상도. 정확히 지원되지 않으면 가까운 해상도로 자동 대체(FALLBACK)된다. */
+  private fun analysisResolutionSelector(): ResolutionSelector =
+    ResolutionSelector.Builder()
+      .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
+      .setResolutionStrategy(
+        ResolutionStrategy(Size(480, 640), ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER)
+      )
+      .build()
+
+  /** 프리뷰는 고정 해상도를 강제하지 않고 기기별 지원 해상도 중 4:3에 가까운 것을 고른다(태블릿 등 큰 화면 대비). */
+  private fun previewResolutionSelector(): ResolutionSelector =
+    ResolutionSelector.Builder()
+      .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
+      .build()
 
   private fun start() {
     if (isBinding) return
@@ -149,7 +179,6 @@ class BarofitPoseCameraView(
       emitError("CAMERA_PERMISSION_DENIED", "CAMERA permission is required")
       return
     }
-    if (!ensureDetector()) return
 
     val owner = (appContext.currentActivity as? LifecycleOwner)
     if (owner == null) {
@@ -157,8 +186,13 @@ class BarofitPoseCameraView(
       return
     }
 
+    // 모델 로드는 비동기로 병행 — 느리거나 실패해도 카메라 프리뷰는 먼저 뜬다.
+    loadDetectorAsync()
+
     isBinding = true
     emitStatus("starting", null)
+    mainHandler.removeCallbacks(bindTimeoutRunnable)
+    mainHandler.postDelayed(bindTimeoutRunnable, BIND_TIMEOUT_MS)
 
     val future = ProcessCameraProvider.getInstance(context)
     future.addListener({
@@ -169,6 +203,7 @@ class BarofitPoseCameraView(
 
         if (!isAttachedToWindow || !isActiveProp) {
           isBinding = false
+          mainHandler.removeCallbacks(bindTimeoutRunnable)
           return@addListener
         }
 
@@ -178,14 +213,16 @@ class BarofitPoseCameraView(
           CameraSelector.DEFAULT_BACK_CAMERA
         }
 
-        val preview = Preview.Builder().build().also {
-          it.setSurfaceProvider(previewView.surfaceProvider)
-        }
+        val preview = Preview.Builder()
+          .setResolutionSelector(previewResolutionSelector())
+          .build().also {
+            it.setSurfaceProvider(previewView.surfaceProvider)
+          }
 
         val imageAnalysis = ImageAnalysis.Builder()
           .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
           .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
-          .setTargetResolution(Size(480, 640))
+          .setResolutionSelector(analysisResolutionSelector())
           .build()
           .also { ia ->
             ia.setAnalyzer(exec) { proxy -> analyze(proxy) }
@@ -198,10 +235,12 @@ class BarofitPoseCameraView(
           previewView.requestLayout()
         }
         isBinding = false
+        mainHandler.removeCallbacks(bindTimeoutRunnable)
         emitStatus("ready", null)
       } catch (t: Throwable) {
         Log.e(TAG, "bind failed", t)
         isBinding = false
+        mainHandler.removeCallbacks(bindTimeoutRunnable)
         emitError("CAMERA_START_FAILED", t.message ?: "bind failed")
         emitStatus("error", t.message)
       }
@@ -210,6 +249,7 @@ class BarofitPoseCameraView(
 
   private fun stop() {
     isBinding = false
+    mainHandler.removeCallbacks(bindTimeoutRunnable)
     try {
       analysis?.clearAnalyzer()
       analysis = null
