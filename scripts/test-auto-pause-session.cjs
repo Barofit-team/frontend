@@ -1216,6 +1216,71 @@ describe('3-2 — 대표 운동 실제 분석기 연동 (스쿼트·플랭크·�
 });
 
 // ---------------------------------------------------------------------
+// 실제 분석기 REPS 통합 검증 공통 (3-3a·3-3b). 3-3a 본문을 옮긴 것이며 단언은 동일하다.
+// c: { routineId, poseId, cls, mode, view, make(t), mid, end, width?, height? }
+// ---------------------------------------------------------------------
+const { poseSupport, readinessAvailability, poseBodyView } = src('services/poseExerciseIds.ts');
+const events = [];
+let clock = 0;
+function resetRealReps() {
+  clock = 0; events.length = 0; testMeasure.value = null; testMeasure.summary = null;
+  stores.tts.setState({ sendCoachEvent: (e) => { events.push(e); return false; } });
+}
+/** 동작 시작부터의 경과 시간(ms)으로 합성 관절을 만들고 100ms마다 실제 프레임 + 시계 진행 */
+async function feedUntil(untilMs, make, width = 1000, height = 1000) {
+  while (clock < untilMs) {
+    await act(async () => {
+      clock += 100;
+      ui.camera.onPoseFrame({ timestampMs: 10000 + clock, width, height, landmarks: make(clock) }, { frameId: clock, inferenceMs: 1 });
+      mock.timers.tick(100);
+    });
+    if (clock % 500 === 0) await settle();
+  }
+  await settle();
+}
+async function verifyRealRepsExercise(c) {
+  const feedCase = (until) => feedUntil(until, c.make, c.width, c.height);
+  // 분석기·readiness·촬영 방향 연결
+  assert.deepEqual(poseSupport(c.routineId), { status: 'supported', poseId: c.poseId });
+  assert.ok(createExerciseAnalyzer(c.routineId) instanceof poseModule[c.cls], `${c.routineId} → ${c.cls}`);
+  const hasProfile = (id) => Object.prototype.hasOwnProperty.call(poseModule.READINESS_PROFILES, id);
+  assert.deepEqual(readinessAvailability(c.routineId, hasProfile), { availability: 'available', poseId: c.poseId });
+  assert.equal(poseModule.READINESS_PROFILES[c.poseId].mode, c.mode, 'AI readiness 프로필 연결');
+  assert.equal(poseBodyView(c.routineId), c.view);
+
+  const fx = routine({ exerciseId: c.routineId, measurementType: 'REPS', sets: [{ reps: 3 }, { reps: 3 }] });
+  const set1 = fx.exercise.sets[0].id;
+  const root = await startWith(fx);
+  await feedCase(c.mid);
+  assert.equal(ui.hud.kind, 'reps', '횟수 링');
+  assert.equal(ui.hud.target, 3, '링 진행률 기준 = 현재 세트 목표 3회');
+  assert.equal(ui.hud.reps, 1, '두 번째 동작 도중: 완료된 1회만 표시(동작 완료 시에만 증가)');
+  assert.equal(ui.hud.seconds, remaining(), '링 옆 잔여 시간 = PhaseTimer');
+  assert.equal(ui.stage.phase.kind, 'exercising');
+
+  // 목표 도달 후에도 프레임을 더 넣어 완료 처리 중 중복 종료·중복 저장이 없는지 확인
+  await feedCase(c.end + 1500);
+  assert.equal(ui.stage.phase.kind, 'resting', '목표 3회 도달 → 세트 종료');
+  const feedback = events.filter((e) => e.eventType === 'SET_FEEDBACK');
+  assert.equal(feedback.length, 1, 'SET_FEEDBACK 1회');
+  assert.equal(feedback[0].exerciseId, c.routineId);
+  assert.equal(feedback[0].actualReps, 3);
+  assert.equal(feedback[0].actualDurationSeconds, undefined);
+  const session = await localSession();
+  assert.equal(session.sets.length, 1, 'Workout 세트 결과 1건(중복 없음)');
+  assert.deepEqual([session.sets[0].routineSetId, session.sets[0].actualReps, session.sets[0].actualDurationSeconds], [set1, 3, null]);
+  const pose = (await storedQueue()).filter((i) => i.kind === 'pose');
+  assert.equal(pose.length, 1, 'AI 결과 큐 1건(중복 없음)');
+  const payload = pose[0].payload;
+  assert.deepEqual([payload.schemaVersion, payload.type, payload.exercise, payload.summary.exercise, payload.summary.count],
+    ['2.0', 'set.completed', c.poseId, c.poseId, 3], 'AI 원본 set.completed 보존');
+  assert.equal(typeof payload.engineVersion, 'string');
+  assert.ok(payload.summary.items && Object.keys(payload.summary.items).length > 0, 'AI 항목별 집계(items) 원본 유지');
+  assert.equal(pose[0].routineSetId, set1);
+  await unmount(root);
+}
+
+// ---------------------------------------------------------------------
 // 3-3a: 기존 안정 분석기 3종 실제 분석기 통합 (측정값·finish 주입 없음)
 // 프레임은 barofit-pose 자체 테스트(jumping_jack/leg_raise/pike_pushup)의 시간 기반 합성 관절 생성 방식을 따른다.
 // 실제 사람 관절 기록이 아니며 자세 인식 정확도·실기기 검증을 뜻하지 않는다.
@@ -1253,72 +1318,77 @@ describe('3-3a — 점핑잭·레그 레이즈·파이크 푸시업 실제 분�
     return lm;
   };
 
-  const { poseSupport, readinessAvailability, poseBodyView } = src('services/poseExerciseIds.ts');
-  const events = [];
-  let clock = 0;
-  beforeEach(() => {
-    clock = 0; events.length = 0; testMeasure.value = null; testMeasure.summary = null;
-    stores.tts.setState({ sendCoachEvent: (e) => { events.push(e); return false; } });
-  });
-  afterEach(() => { stores.tts.setState({ sendCoachEvent: () => false }); });
-  /** 동작 시작부터의 경과 시간(ms)으로 합성 관절을 만들고 100ms마다 실제 프레임 + 시계 진행 */
-  async function feedUntil(untilMs, make, width = 1000, height = 1000) {
-    while (clock < untilMs) {
-      await act(async () => {
-        clock += 100;
-        ui.camera.onPoseFrame({ timestampMs: 10000 + clock, width, height, landmarks: make(clock) }, { frameId: clock, inferenceMs: 1 });
-        mock.timers.tick(100);
-      });
-      if (clock % 500 === 0) await settle();
-    }
-    await settle();
-  }
-
   const CASES = [
     { routineId: 'jumping-jack', poseId: 'jumping_jack', cls: 'JumpingJackAnalyzer', mode: 'both', view: 'front', make: jumpingJack, mid: 1500, end: 3300 },
     { routineId: 'leg-raise', poseId: 'leg_raise', cls: 'LegRaiseAnalyzer', mode: 'either', view: 'side', make: legRaise, mid: 6000, end: 12300 },
     { routineId: 'pike-push-up', poseId: 'pike_pushup', cls: 'PikePushupAnalyzer', mode: 'either', view: 'side', make: pikePushup, mid: 6000, end: 12500 },
   ];
   for (const c of CASES) {
-    test(`${c.routineId}: 실제 분석기 → 횟수 링·목표 3회 종료 → SET_FEEDBACK·Workout·AI 원본 저장, 중복 없음`, async () => {
-      // 분석기·readiness·촬영 방향 연결
-      assert.deepEqual(poseSupport(c.routineId), { status: 'supported', poseId: c.poseId });
-      assert.ok(createExerciseAnalyzer(c.routineId) instanceof poseModule[c.cls], `${c.routineId} → ${c.cls}`);
-      const hasProfile = (id) => Object.prototype.hasOwnProperty.call(poseModule.READINESS_PROFILES, id);
-      assert.deepEqual(readinessAvailability(c.routineId, hasProfile), { availability: 'available', poseId: c.poseId });
-      assert.equal(poseModule.READINESS_PROFILES[c.poseId].mode, c.mode, 'AI readiness 프로필 연결');
-      assert.equal(poseBodyView(c.routineId), c.view);
-
-      const fx = routine({ exerciseId: c.routineId, measurementType: 'REPS', sets: [{ reps: 3 }, { reps: 3 }] });
-      const set1 = fx.exercise.sets[0].id;
-      const root = await startWith(fx);
-      await feedUntil(c.mid, c.make);
-      assert.equal(ui.hud.kind, 'reps', '횟수 링');
-      assert.equal(ui.hud.target, 3, '링 진행률 기준 = 현재 세트 목표 3회');
-      assert.equal(ui.hud.reps, 1, '두 번째 동작 도중: 완료된 1회만 표시(동작 완료 시에만 증가)');
-      assert.equal(ui.hud.seconds, remaining(), '링 옆 잔여 시간 = PhaseTimer');
-      assert.equal(ui.stage.phase.kind, 'exercising');
-
-      // 목표 도달 후에도 프레임을 더 넣어 완료 처리 중 중복 종료·중복 저장이 없는지 확인
-      await feedUntil(c.end + 1500, c.make);
-      assert.equal(ui.stage.phase.kind, 'resting', '목표 3회 도달 → 세트 종료');
-      const feedback = events.filter((e) => e.eventType === 'SET_FEEDBACK');
-      assert.equal(feedback.length, 1, 'SET_FEEDBACK 1회');
-      assert.equal(feedback[0].exerciseId, c.routineId);
-      assert.equal(feedback[0].actualReps, 3);
-      assert.equal(feedback[0].actualDurationSeconds, undefined);
-      const session = await localSession();
-      assert.equal(session.sets.length, 1, 'Workout 세트 결과 1건(중복 없음)');
-      assert.deepEqual([session.sets[0].routineSetId, session.sets[0].actualReps, session.sets[0].actualDurationSeconds], [set1, 3, null]);
-      const pose = (await storedQueue()).filter((i) => i.kind === 'pose');
-      assert.equal(pose.length, 1, 'AI 결과 큐 1건(중복 없음)');
-      const payload = pose[0].payload;
-      assert.deepEqual([payload.schemaVersion, payload.type, payload.exercise, payload.summary.exercise, payload.summary.count],
-        ['2.0', 'set.completed', c.poseId, c.poseId, 3], 'AI 원본 set.completed 보존');
-      assert.equal(typeof payload.engineVersion, 'string');
-      assert.ok(payload.summary.items && Object.keys(payload.summary.items).length > 0, 'AI 항목별 집계(items) 원본 유지');
-      assert.equal(pose[0].routineSetId, set1);
-      await unmount(root);
-    });
+    test(`${c.routineId}: 실제 분석기 → 횟수 링·목표 3회 종료 → SET_FEEDBACK·Workout·AI 원본 저장, 중복 없음`, () => verifyRealRepsExercise(c));
   }
+  beforeEach(resetRealReps);
+  afterEach(() => { stores.tts.setState({ sendCoachEvent: () => false }); });
+});
+
+// ---------------------------------------------------------------------
+// 3-3b: 실험 분석기 5종 실제 분석기 통합 (측정값·finish 주입 없음)
+// 프레임은 barofit-pose cycle_models.test.mjs의 합성 관절 생성 방식(동작 중/정지 자세)을 1초 주기로 반복한 것이다.
+// experimental-0.1 분석기의 FE 연동 검증이며 실제 자세 판정 정확도·실기기 검증을 뜻하지 않는다.
+// ---------------------------------------------------------------------
+describe('3-3b — 실험 분석기 5종 실제 분석기 연동', () => {
+  /** cycle_models.test.mjs frame(id, t, active) — 왼쪽 관절만 입력(분석기가 관측된 쪽을 선택) */
+  const cycleLandmarks = (id, active) => {
+    const points = Array.from({ length: 33 }, () => [null, null, null, null, null]);
+    const put = (i, x, y) => { points[i] = [x, y, 0, 1, 1]; };
+    put(11, 0.4, 0.2); put(23, 0.4, 0.4); put(25, 0.4, 0.6); put(27, active ? 0.62 : 0.4, active ? 0.6 : 0.85);
+    if (id === 'standing_calf_raise') { put(29, 0.4, active ? 0.80 : 0.89); put(31, 0.46, 0.90); }
+    if (id === 'incline_pushup') { put(11, 0.3, 0.3); put(13, 0.3, 0.5); put(15, active ? 0.5 : 0.3, active ? 0.5 : 0.70); put(23, 0.6, 0.5); }
+    if (id === 'side_lying_leg_raise') { put(11, 0.2, 0.55); put(23, 0.5, 0.55); put(25, 0.66, active ? 0.40 : 0.55); put(27, 0.82, active ? 0.25 : 0.55); }
+    return points;
+  };
+  /** 1초 주기: 0.4초 시작 자세 → 0.4초 동작 → 0.2초 복귀. AI는 복귀 시점(0.8·1.8·2.8초)에 1회 완료 */
+  const cycle = (id) => (t) => { const p = t % 1000; return cycleLandmarks(id, p >= 400 && p < 800); };
+  const CASES = [
+    { routineId: 'split-squat', poseId: 'split_squat', cls: 'SplitSquatAnalyzer', view: null },
+    { routineId: 'bulgarian-split-squat', poseId: 'bulgarian_split_squat', cls: 'BulgarianSplitSquatAnalyzer', view: null },
+    { routineId: 'incline-push-up', poseId: 'incline_pushup', cls: 'InclinePushupAnalyzer', view: 'side' },
+    { routineId: 'standing-calf-raise', poseId: 'standing_calf_raise', cls: 'StandingCalfRaiseAnalyzer', view: null },
+    { routineId: 'side-lying-leg-raise', poseId: 'side_lying_leg_raise', cls: 'SideLegRaiseAnalyzer', view: null },
+  ].map((c) => ({ ...c, mode: 'either', make: cycle(c.poseId), mid: 1600, end: 3000, width: 800, height: 800 }));
+
+  beforeEach(resetRealReps);
+  afterEach(() => { stores.tts.setState({ sendCoachEvent: () => false }); });
+  for (const c of CASES) {
+    test(`${c.routineId}: 실제 분석기 → 횟수 링·목표 3회 종료 → SET_FEEDBACK·Workout·AI 원본 저장, 중복 없음`, () => verifyRealRepsExercise(c));
+  }
+
+  test('readiness: 5종 모두 자기 AI 프로필로 준비 완료, 카프레이즈는 발뒤꿈치·발끝 관절이 필요', () => {
+    for (const c of CASES) {
+      const readiness = new poseModule.CameraReadiness({ exercise: c.poseId });
+      let r;
+      for (let t = 0; t <= 1500; t += 100) r = readiness.pushFrame({ timestampMs: t, width: 800, height: 800, landmarks: cycleLandmarks(c.poseId, false) });
+      assert.equal(r.ready, true, `${c.poseId} 준비 완료`);
+      assert.equal(r.exercise, c.poseId, '다른 운동 프로필로 대체하지 않음');
+    }
+    assert.deepEqual([...poseModule.READINESS_PROFILES.standing_calf_raise.joints], ['shoulder', 'hip', 'knee', 'ankle', 'heel', 'foot_index']);
+    for (const [index, name] of [[29, 'left_heel'], [31, 'left_foot_index']]) {
+      const readiness = new poseModule.CameraReadiness({ exercise: 'standing_calf_raise' });
+      let r;
+      for (let t = 0; t <= 1500; t += 100) {
+        const landmarks = cycleLandmarks('standing_calf_raise', false);
+        landmarks[index] = [null, null, null, null, null];
+        r = readiness.pushFrame({ timestampMs: t, width: 800, height: 800, landmarks });
+      }
+      assert.equal(r.ready, false, `${name} 없으면 준비 완료 아님`);
+      assert.deepEqual(r.missingLandmarks, [name]);
+    }
+  });
+
+  test('명시적 분석기 ID 유지: 스플릿·불가리안 분리, 인클라인 푸시업은 일반 푸시업 분석기로 대체하지 않음', () => {
+    assert.ok(createExerciseAnalyzer('split-squat') instanceof poseModule.SplitSquatAnalyzer);
+    assert.ok(!(createExerciseAnalyzer('split-squat') instanceof poseModule.BulgarianSplitSquatAnalyzer));
+    assert.ok(createExerciseAnalyzer('bulgarian-split-squat') instanceof poseModule.BulgarianSplitSquatAnalyzer);
+    assert.ok(createExerciseAnalyzer('incline-push-up') instanceof poseModule.InclinePushupAnalyzer);
+    assert.ok(!(createExerciseAnalyzer('incline-push-up') instanceof poseModule.PushupAnalyzer));
+  });
 });

@@ -61,7 +61,10 @@ assert.equal(poseBodyView('plank'), 'side', 'PD 구상도: 플랭크 측면');
 assert.equal(poseBodyView('jumping-jack'), 'front', 'AI 문서: 점핑잭 정면');
 assert.equal(poseBodyView('leg-raise'), 'side', 'AI 문서: 레그 레이즈 측면');
 assert.equal(poseBodyView('pike-push-up'), 'side', 'AI 문서: 파이크 푸시업 측면');
-for (const id of ['push-up', 'lunge', 'mountain-climber', 'side-plank', 'unknown', 'toString']) {
+// 3-3b: 인클라인 푸시업만 AI 근거(프로토타입 촬영 안내), 나머지 실험 4종은 근거 없음 → 미확정
+assert.equal(poseBodyView('incline-push-up'), 'side', 'AI 프로토타입: 인클라인 푸시업 측면');
+for (const id of ['push-up', 'lunge', 'mountain-climber', 'side-plank', 'unknown', 'toString',
+  'split-squat', 'bulgarian-split-squat', 'standing-calf-raise', 'side-lying-leg-raise']) {
   assert.equal(poseBodyView(id), null, `근거 없는 종목은 미확정: ${id}`);
 }
-console.log('PASS: 3-2/3-3a body view (squat/plank/leg-raise/pike side, jumping-jack front, others undecided)');
+console.log('PASS: 3-2/3-3a/3-3b body view (squat/plank/leg-raise/pike/incline side, jumping-jack front, others undecided)');

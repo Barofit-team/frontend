@@ -79,6 +79,7 @@ export function readinessAvailability(
  * 근거가 확인된 종목만 정의하고 그 외는 미확정(null)이며 기본값을 두지 않는다.
  *  - 스쿼트·플랭크: PD 운동 세션 구상도(측면)
  *  - 점핑잭(정면)·레그 레이즈(측면)·파이크 푸시업(측면): AI팀 기술 문서(JUMPING_JACK_V01, LEG_RAISE_V01, PIKE_PUSHUP_V01)
+ *  - 인클라인 푸시업(측면): AI팀 분석 프로토타입 촬영 안내(analysis/incline_pushup "측면에서 전신이 보이게 촬영")
  */
 export type BodyView = 'front' | 'side';
 const BODY_VIEWS: Readonly<Record<string, BodyView>> = {
@@ -87,6 +88,7 @@ const BODY_VIEWS: Readonly<Record<string, BodyView>> = {
   'jumping-jack': 'front',
   'leg-raise': 'side',
   'pike-push-up': 'side',
+  'incline-push-up': 'side',
 };
 
 export function poseBodyView(routineExerciseId: string): BodyView | null {
