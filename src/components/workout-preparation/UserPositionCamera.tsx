@@ -16,7 +16,7 @@ import type { PoseFrame } from '@barofit/pose';
 import { isPoseCameraAvailable, PoseCameraView } from 'barofit-pose-camera';
 import { CameraView, useCameraPermissions, type CameraMountError } from 'expo-camera';
 import { useIsFocused } from 'expo-router';
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { AppState, Linking, StyleSheet, Text, View, type AppStateStatus } from 'react-native';
 
 import { PoseSkeletonOverlay } from '@/components/pose/PoseSkeletonOverlay';
@@ -27,6 +27,11 @@ import { usePoseLandmarks } from '@/hooks/usePoseLandmarks';
 import { PrepColors } from './palette';
 
 const LOG = '[UserPositionCamera]';
+
+/** 네이티브가 'stopped'를 보낸 뒤 이 시간 동안 'ready'로 돌아오지 않으면 강제 재마운트 (일시적 카메라 경합/blip 흡수용 유예) */
+const STOPPED_GRACE_MS = 2000;
+/** 준비 완료 후 이 시간 동안 새 포즈 프레임이 전혀 없으면 카메라가 조용히 멈춘 것으로 보고 강제 재마운트 */
+const FRAME_STALL_MS = 4000;
 
 export type CameraPermissionState =
   | 'checking' // 권한 상태 확인 중
@@ -80,6 +85,24 @@ export function UserPositionCamera({
   const [mountKey, setMountKey] = useState(0);
   const autoRequested = useRef(false);
   const pose = usePoseLandmarks({ onFrame: onPoseFrame });
+  const lastFrameAtRef = useRef(0);
+  const stoppedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearStoppedTimer = () => {
+    if (stoppedTimerRef.current) {
+      clearTimeout(stoppedTimerRef.current);
+      stoppedTimerRef.current = null;
+    }
+  };
+
+  /** 카메라가 꺼지면 안 되는 상황(shouldMount=true)에서 조용히 멈췄을 때 쓰는 강제 재마운트 경로. '다시 시도' 버튼과 동일한 복구 경로를 재사용 */
+  const forceRemount = useCallback((reason: string) => {
+    if (__DEV__) console.warn(LOG, 'watchdog: force remount', reason);
+    clearStoppedTimer();
+    setMountKey((k) => k + 1);
+  }, []);
+
+  useEffect(() => clearStoppedTimer, []);
 
   // 앱 활성 상태 추적. 복귀 시 설정 앱에서 바꾼 권한을 다시 읽음
   useEffect(() => {
@@ -128,6 +151,20 @@ export function UserPositionCamera({
       });
   }, [shouldMount, permissionState, isFocused, appActive]);
 
+  // 프레임 워치독: mount 상태인데(shouldMount) 네이티브가 onCameraStatus 신호 없이 조용히
+  // 멈춰서 포즈 프레임이 끊긴 경우까지 잡기 위한 2중 안전망 (onCameraStatus('stopped') 처리와 별개)
+  useEffect(() => {
+    if (!shouldMount) return;
+    const interval = setInterval(() => {
+      if (readyFor !== sessionKey) return; // 아직 이번 세션이 준비되지 않았으면 대기
+      if (lastFrameAtRef.current === 0) return;
+      if (Date.now() - lastFrameAtRef.current > FRAME_STALL_MS) {
+        forceRemount('frame-stall');
+      }
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [shouldMount, sessionKey, readyFor, forceRemount]);
+
   const retryCamera = () => {
     setErrorMessage(null);
     setMountKey(k => k + 1);
@@ -143,16 +180,33 @@ export function UserPositionCamera({
               style={StyleSheet.absoluteFill}
               active={shouldMount}
               frontCamera
-              onPoseFrame={pose.handlePoseFrame}
+              onPoseFrame={(frame, meta) => {
+                lastFrameAtRef.current = Date.now();
+                pose.handlePoseFrame(frame, meta);
+              }}
               onCameraStatus={(ev) => {
                 if (ev.status === 'ready') {
+                  clearStoppedTimer();
+                  lastFrameAtRef.current = Date.now();
                   if (__DEV__) console.log(LOG, 'pose camera ready');
                   setReadyFor(sessionKey);
                   onCameraReady?.();
                 } else if (ev.status === 'error' || ev.status === 'permission_denied') {
+                  clearStoppedTimer();
                   if (__DEV__) console.warn(LOG, 'pose camera status error', ev.message);
                   setErrorMessage(ev.message ?? null);
                   setErrorFor(sessionKey);
+                } else if (ev.status === 'stopped') {
+                  // shouldMount가 여전히 true인데 네이티브가 스스로 멈춘 경우.
+                  // '준비 중'으로 되돌려 멈춘 화면을 그대로 보여주지 않게 하고, 유예 후에도
+                  // 'ready'로 복귀하지 않으면 강제 재마운트한다.
+                  if (__DEV__) console.warn(LOG, 'pose camera stopped unexpectedly');
+                  setReadyFor((prev) => (prev === sessionKey ? null : prev));
+                  clearStoppedTimer();
+                  stoppedTimerRef.current = setTimeout(() => {
+                    stoppedTimerRef.current = null;
+                    forceRemount('stopped-status-not-recovered');
+                  }, STOPPED_GRACE_MS);
                 }
               }}
               onPoseError={(err) => {

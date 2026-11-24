@@ -19,14 +19,17 @@ const CAMERA_PERMISSION_DESCRIPTION = '운동 중 자세를 확인할 수 있도
 type ExerciseCameraAreaProps = {
   onPoseFrame?: (frame: PoseFrame, meta: { frameId: number; inferenceMs: number }) => void;
   selectedSide?: 'left' | 'right' | 'both' | null;
+  /** 카메라가 처음 ready 상태가 됐을 때 알림 (예: 안내 음성을 카메라 바인딩과 겹치지 않게 미루는 용도) */
+  onCameraReady?: () => void;
 };
 
-export function ExerciseCameraArea({ onPoseFrame, selectedSide = 'both' }: ExerciseCameraAreaProps) {
+export function ExerciseCameraArea({ onPoseFrame, selectedSide = 'both', onCameraReady }: ExerciseCameraAreaProps) {
   return (
     <View style={styles.container}>
       <UserPositionCamera
         permissionDescription={CAMERA_PERMISSION_DESCRIPTION}
         onPoseFrame={onPoseFrame}
+        onCameraReady={onCameraReady}
         selectedSide={selectedSide}
         skeletonColors={{ bone: SessionColors.skeletonBone, joint: SessionColors.skeletonJoint }}
       />
