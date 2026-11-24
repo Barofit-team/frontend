@@ -1214,3 +1214,111 @@ describe('3-2 — 대표 운동 실제 분석기 연동 (스쿼트·플랭크·�
     await unmount(root);
   });
 });
+
+// ---------------------------------------------------------------------
+// 3-3a: 기존 안정 분석기 3종 실제 분석기 통합 (측정값·finish 주입 없음)
+// 프레임은 barofit-pose 자체 테스트(jumping_jack/leg_raise/pike_pushup)의 시간 기반 합성 관절 생성 방식을 따른다.
+// 실제 사람 관절 기록이 아니며 자세 인식 정확도·실기기 검증을 뜻하지 않는다.
+// ---------------------------------------------------------------------
+describe('3-3a — 점핑잭·레그 레이즈·파이크 푸시업 실제 분석기 연동', () => {
+  const blank = (fill) => Array.from({ length: 33 }, () => (fill ? [...fill] : [null, null, null, null, null]));
+  const jumpingJack = (t) => {
+    const phase = (t % 1000) / 1000, w = 0.4 + (2.1 - 0.4) * (1 - Math.cos(2 * Math.PI * phase)) / 2;
+    const h = (1 - Math.cos(2 * Math.PI * phase)) / 2, ang = ((10 + h * 165) * Math.PI) / 180;
+    const a = blank([0.5, 0.2, 0, 1, 1]);
+    a[11] = [0.4, 0.3, 0, 1, 1]; a[12] = [0.6, 0.3, 0, 1, 1]; a[23] = [0.43, 0.55, 0, 1, 1]; a[24] = [0.57, 0.55, 0, 1, 1];
+    a[27] = [0.5 - w * 0.1, 0.9, 0, 1, 1]; a[28] = [0.5 + w * 0.1, 0.9, 0, 1, 1];
+    a[15] = [a[11][0] - 0.23 * Math.sin(ang), 0.3 + 0.23 * Math.cos(ang), 0, 1, 1];
+    a[16] = [a[12][0] + 0.23 * Math.sin(ang), 0.3 + 0.23 * Math.cos(ang), 0, 1, 1];
+    return a;
+  };
+  const legRaise = (t) => {
+    const angle = 5 + 80 * (1 - Math.cos((2 * Math.PI * t) / 4000)) / 2, r = (angle * Math.PI) / 180;
+    const lm = blank();
+    for (const [s, h, k, a, dy] of [[11, 23, 25, 27, 0], [12, 24, 26, 28, 0.015]]) {
+      lm[s] = [0.2, 0.7 + dy, 0, 1, 1]; lm[h] = [0.45, 0.7 + dy, 0, 1, 1];
+      lm[k] = [0.45 + 0.22 * Math.cos(r), 0.7 + dy - 0.22 * Math.sin(r), 0, 1, 1];
+      lm[a] = [lm[k][0] + 0.22 * Math.cos(r), lm[k][1] - 0.22 * Math.sin(r), 0, 1, 1];
+    }
+    return lm;
+  };
+  const pikePushup = (t) => {
+    const progress = (1 - Math.cos((2 * Math.PI * t) / 4000)) / 2;
+    const top = [[350, 350], [275, 500], [200, 650], [500, 200], [650, 420], [800, 650], [300, 430]];
+    const bottom = [[180, 500], [250, 580], [200, 650], [500, 250], [650, 450], [800, 650], [100, 600]];
+    const pts = top.map((a, i) => a.map((v, j) => v + (bottom[i][j] - v) * progress));
+    const lm = blank();
+    for (const ids of [[11, 13, 15, 23, 25, 27], [12, 14, 16, 24, 26, 28]]) for (let j = 0; j < 6; j += 1) lm[ids[j]] = [pts[j][0] / 1000, pts[j][1] / 1000, 0, 1, 1];
+    lm[0] = [pts[6][0] / 1000, pts[6][1] / 1000, 0, 1, 1];
+    return lm;
+  };
+
+  const { poseSupport, readinessAvailability, poseBodyView } = src('services/poseExerciseIds.ts');
+  const events = [];
+  let clock = 0;
+  beforeEach(() => {
+    clock = 0; events.length = 0; testMeasure.value = null; testMeasure.summary = null;
+    stores.tts.setState({ sendCoachEvent: (e) => { events.push(e); return false; } });
+  });
+  afterEach(() => { stores.tts.setState({ sendCoachEvent: () => false }); });
+  /** 동작 시작부터의 경과 시간(ms)으로 합성 관절을 만들고 100ms마다 실제 프레임 + 시계 진행 */
+  async function feedUntil(untilMs, make, width = 1000, height = 1000) {
+    while (clock < untilMs) {
+      await act(async () => {
+        clock += 100;
+        ui.camera.onPoseFrame({ timestampMs: 10000 + clock, width, height, landmarks: make(clock) }, { frameId: clock, inferenceMs: 1 });
+        mock.timers.tick(100);
+      });
+      if (clock % 500 === 0) await settle();
+    }
+    await settle();
+  }
+
+  const CASES = [
+    { routineId: 'jumping-jack', poseId: 'jumping_jack', cls: 'JumpingJackAnalyzer', mode: 'both', view: 'front', make: jumpingJack, mid: 1500, end: 3300 },
+    { routineId: 'leg-raise', poseId: 'leg_raise', cls: 'LegRaiseAnalyzer', mode: 'either', view: 'side', make: legRaise, mid: 6000, end: 12300 },
+    { routineId: 'pike-push-up', poseId: 'pike_pushup', cls: 'PikePushupAnalyzer', mode: 'either', view: 'side', make: pikePushup, mid: 6000, end: 12500 },
+  ];
+  for (const c of CASES) {
+    test(`${c.routineId}: 실제 분석기 → 횟수 링·목표 3회 종료 → SET_FEEDBACK·Workout·AI 원본 저장, 중복 없음`, async () => {
+      // 분석기·readiness·촬영 방향 연결
+      assert.deepEqual(poseSupport(c.routineId), { status: 'supported', poseId: c.poseId });
+      assert.ok(createExerciseAnalyzer(c.routineId) instanceof poseModule[c.cls], `${c.routineId} → ${c.cls}`);
+      const hasProfile = (id) => Object.prototype.hasOwnProperty.call(poseModule.READINESS_PROFILES, id);
+      assert.deepEqual(readinessAvailability(c.routineId, hasProfile), { availability: 'available', poseId: c.poseId });
+      assert.equal(poseModule.READINESS_PROFILES[c.poseId].mode, c.mode, 'AI readiness 프로필 연결');
+      assert.equal(poseBodyView(c.routineId), c.view);
+
+      const fx = routine({ exerciseId: c.routineId, measurementType: 'REPS', sets: [{ reps: 3 }, { reps: 3 }] });
+      const set1 = fx.exercise.sets[0].id;
+      const root = await startWith(fx);
+      await feedUntil(c.mid, c.make);
+      assert.equal(ui.hud.kind, 'reps', '횟수 링');
+      assert.equal(ui.hud.target, 3, '링 진행률 기준 = 현재 세트 목표 3회');
+      assert.equal(ui.hud.reps, 1, '두 번째 동작 도중: 완료된 1회만 표시(동작 완료 시에만 증가)');
+      assert.equal(ui.hud.seconds, remaining(), '링 옆 잔여 시간 = PhaseTimer');
+      assert.equal(ui.stage.phase.kind, 'exercising');
+
+      // 목표 도달 후에도 프레임을 더 넣어 완료 처리 중 중복 종료·중복 저장이 없는지 확인
+      await feedUntil(c.end + 1500, c.make);
+      assert.equal(ui.stage.phase.kind, 'resting', '목표 3회 도달 → 세트 종료');
+      const feedback = events.filter((e) => e.eventType === 'SET_FEEDBACK');
+      assert.equal(feedback.length, 1, 'SET_FEEDBACK 1회');
+      assert.equal(feedback[0].exerciseId, c.routineId);
+      assert.equal(feedback[0].actualReps, 3);
+      assert.equal(feedback[0].actualDurationSeconds, undefined);
+      const session = await localSession();
+      assert.equal(session.sets.length, 1, 'Workout 세트 결과 1건(중복 없음)');
+      assert.deepEqual([session.sets[0].routineSetId, session.sets[0].actualReps, session.sets[0].actualDurationSeconds], [set1, 3, null]);
+      const pose = (await storedQueue()).filter((i) => i.kind === 'pose');
+      assert.equal(pose.length, 1, 'AI 결과 큐 1건(중복 없음)');
+      const payload = pose[0].payload;
+      assert.deepEqual([payload.schemaVersion, payload.type, payload.exercise, payload.summary.exercise, payload.summary.count],
+        ['2.0', 'set.completed', c.poseId, c.poseId, 3], 'AI 원본 set.completed 보존');
+      assert.equal(typeof payload.engineVersion, 'string');
+      assert.ok(payload.summary.items && Object.keys(payload.summary.items).length > 0, 'AI 항목별 집계(items) 원본 유지');
+      assert.equal(pose[0].routineSetId, set1);
+      await unmount(root);
+    });
+  }
+});

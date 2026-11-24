@@ -57,7 +57,11 @@ console.log('PASS: 3-1a support states (16 supported / conflict / incomplete / 5
 const { poseBodyView } = m.exports;
 assert.equal(poseBodyView('squat'), 'side', 'PD 구상도: 스쿼트 측면');
 assert.equal(poseBodyView('plank'), 'side', 'PD 구상도: 플랭크 측면');
-for (const id of ['push-up', 'jumping-jack', 'lunge', 'mountain-climber', 'side-plank', 'unknown', 'toString']) {
+// 3-3a: AI팀 기술 문서 근거 (이전에는 jumping-jack도 미확정 목록에 있었음)
+assert.equal(poseBodyView('jumping-jack'), 'front', 'AI 문서: 점핑잭 정면');
+assert.equal(poseBodyView('leg-raise'), 'side', 'AI 문서: 레그 레이즈 측면');
+assert.equal(poseBodyView('pike-push-up'), 'side', 'AI 문서: 파이크 푸시업 측면');
+for (const id of ['push-up', 'lunge', 'mountain-climber', 'side-plank', 'unknown', 'toString']) {
   assert.equal(poseBodyView(id), null, `근거 없는 종목은 미확정: ${id}`);
 }
-console.log('PASS: 3-2 body view (squat/plank side only, others undecided)');
+console.log('PASS: 3-2/3-3a body view (squat/plank/leg-raise/pike side, jumping-jack front, others undecided)');

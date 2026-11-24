@@ -76,12 +76,17 @@ export function readinessAvailability(
 
 /**
  * 사용자 몸 촬영 방향(정면/측면). 스마트폰 전면·후면 카메라 선택, AI readiness의 either/both 관절 조건과 별개다.
- * PD 운동 세션 구상도에서 확인된 종목만 정의한다(스쿼트·플랭크 = 측면). 그 외는 미확정(null)이며 기본값을 두지 않는다.
+ * 근거가 확인된 종목만 정의하고 그 외는 미확정(null)이며 기본값을 두지 않는다.
+ *  - 스쿼트·플랭크: PD 운동 세션 구상도(측면)
+ *  - 점핑잭(정면)·레그 레이즈(측면)·파이크 푸시업(측면): AI팀 기술 문서(JUMPING_JACK_V01, LEG_RAISE_V01, PIKE_PUSHUP_V01)
  */
 export type BodyView = 'front' | 'side';
 const BODY_VIEWS: Readonly<Record<string, BodyView>> = {
   'squat': 'side',
   'plank': 'side',
+  'jumping-jack': 'front',
+  'leg-raise': 'side',
+  'pike-push-up': 'side',
 };
 
 export function poseBodyView(routineExerciseId: string): BodyView | null {
