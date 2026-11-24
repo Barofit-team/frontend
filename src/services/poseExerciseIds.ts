@@ -80,6 +80,7 @@ export function readinessAvailability(
  *  - 스쿼트·플랭크: PD 운동 세션 구상도(측면)
  *  - 점핑잭(정면)·레그 레이즈(측면)·파이크 푸시업(측면): AI팀 기술 문서(JUMPING_JACK_V01, LEG_RAISE_V01, PIKE_PUSHUP_V01)
  *  - 인클라인 푸시업(측면): AI팀 분석 프로토타입 촬영 안내(analysis/incline_pushup "측면에서 전신이 보이게 촬영")
+ *  - 버드독(측면): AI팀 기술 문서(BIRD_DOG "측면에 가까운 고정 카메라"). 정확한 촬영 각도는 실기기 검증 항목
  */
 export type BodyView = 'front' | 'side';
 const BODY_VIEWS: Readonly<Record<string, BodyView>> = {
@@ -89,6 +90,7 @@ const BODY_VIEWS: Readonly<Record<string, BodyView>> = {
   'leg-raise': 'side',
   'pike-push-up': 'side',
   'incline-push-up': 'side',
+  'bird-dog': 'side',
 };
 
 export function poseBodyView(routineExerciseId: string): BodyView | null {

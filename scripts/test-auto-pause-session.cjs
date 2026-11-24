@@ -1392,3 +1392,93 @@ describe('3-3b — 실험 분석기 5종 실제 분석기 연동', () => {
     assert.ok(!(createExerciseAnalyzer('incline-push-up') instanceof poseModule.PushupAnalyzer));
   });
 });
+
+// ---------------------------------------------------------------------
+// 3-3c: 버드독·데드버그 실제 분석기 통합 (측정값·finish 주입 없음, 좌우 규칙은 AI 실제 동작을 따름)
+//  - 버드독: barofit-pose bird-dog-v1-parity.json.gz 'normal' 합성 시퀀스(오른다리 1회). 왼쪽 동작은 MediaPipe 좌우 관절 쌍을 교환해 만든다
+//  - 데드버그(experimental-0.1): cycle_models.test.mjs의 dead_bug 합성 관절(좌/우)
+// 합성 관절 기반 FE 연동 검증이며 실제 자세 판정 정확도·실기기 검증을 뜻하지 않는다.
+// ---------------------------------------------------------------------
+describe('3-3c — 버드독·데드버그 실제 분석기 연동', () => {
+  const zlib = require('node:zlib');
+  const birdRows = zlib.gunzipSync(fs.readFileSync(nm('@barofit/pose/tests/js/fixtures/bird-dog-v1-parity.json.gz'))).toString('utf8').trim().split('\n').map((l) => JSON.parse(l));
+  const birdNormal = birdRows.filter((r) => r.case === 'normal' && r.frame).map((r) => r.frame); // 0~5000ms, 50ms 간격, 1000x600
+  const PAIRS = [[1, 4], [2, 5], [3, 6], [7, 8], [9, 10]];
+  for (let i = 11; i <= 31; i += 2) PAIRS.push([i, i + 1]);
+  const swapSides = (landmarks) => { const l = landmarks.map((p) => [...p]); for (const [a, b] of PAIRS) [l[a], l[b]] = [l[b], l[a]]; return l; };
+  const SEQ_MS = 5100;
+  /** 오른다리 → 왼다리 → 오른다리 (각 5.1초). 시퀀스가 끝나면 마지막 자세 유지 */
+  const birdDog = (t) => {
+    const k = Math.min(2, Math.floor(t / SEQ_MS));
+    const rel = Math.min(5000, t - k * SEQ_MS);
+    const frame = birdNormal[Math.round(rel / 50)];
+    return k === 1 ? swapSides(frame.landmarks) : frame.landmarks;
+  };
+  const deadBugLandmarks = (active, side) => {
+    const points = Array.from({ length: 33 }, () => [null, null, null, null, null]);
+    const off = side === 'left' ? 0 : 1;
+    const put = (i, x, y) => { points[i + off] = [x, y, 0, 1, 1]; };
+    put(11, 0.2, 0.55); put(23, 0.5, 0.55); put(25, active ? 0.7 : 0.5, active ? 0.5 : 0.32); put(27, active ? 0.62 : 0.4, active ? 0.6 : 0.85);
+    return points;
+  };
+  /** 1초 주기 왼쪽 → 오른쪽 → 왼쪽 교대 (0.4초 동작). AI는 복귀 시점마다 쪽과 무관하게 1회 합산 */
+  const deadBug = (t) => { const p = t % 1000; const side = Math.floor(t / 1000) % 2 === 0 ? 'left' : 'right'; return deadBugLandmarks(p >= 400 && p < 800, side); };
+
+  beforeEach(resetRealReps);
+  afterEach(() => { stores.tts.setState({ sendCoachEvent: () => false }); });
+  const lastPose = async () => (await storedQueue()).filter((i) => i.kind === 'pose').at(-1);
+
+  test('bird-dog: 좌우 각 1회씩 합산(R·L·R = 3), sideCounts·holdSeconds는 AI 원본에만, Workout은 count만', async () => {
+    await verifyRealRepsExercise({ routineId: 'bird-dog', poseId: 'bird_dog', cls: 'BirdDogAnalyzer', mode: 'both', view: 'side',
+      make: birdDog, mid: SEQ_MS + 3000, end: SEQ_MS * 2 + 4200, width: 1000, height: 600 });
+    // mid(왼다리를 뻗어 유지 중): 1회만 표시 → 한쪽 동작 완료 전 증가 없음 (공통 함수에서 검증)
+    const payload = (await lastPose()).payload;
+    assert.deepEqual(payload.summary.details.sideCounts, { left: 1, right: 2 }, 'AI 실제 좌우 카운트 원본 보존');
+    assert.deepEqual(payload.summary.details.repetitions.map((r) => r.side), ['right', 'left', 'right']);
+    assert.equal(typeof payload.summary.holdSeconds, 'number');
+    assert.ok(payload.summary.holdSeconds > 0, 'AI가 count와 holdSeconds를 함께 반환');
+    const set = (await storedQueue()).filter((i) => i.kind !== 'pose').at(-1).session.sets[0];
+    assert.deepEqual([set.actualReps, set.actualDurationSeconds], [3, null], 'Workout: count만 actualReps, 보조 holdSeconds 미저장');
+    assert.equal(events.filter((e) => e.eventType === 'SET_FEEDBACK')[0].actualDurationSeconds, undefined);
+  });
+
+  test('dead-bug(experimental): 왼쪽·오른쪽 교대 동작을 AI가 쪽과 무관하게 1회씩 합산, FE는 count 그대로 사용', async () => {
+    await verifyRealRepsExercise({ routineId: 'dead-bug', poseId: 'dead_bug', cls: 'DeadBugAnalyzer', mode: 'both', view: null,
+      make: deadBug, mid: 1600, end: 3000, width: 800, height: 800 });
+    const payload = (await lastPose()).payload;
+    assert.deepEqual(payload.summary.details.repetitions.map((r) => r.metrics.side), ['left', 'right', 'left'], '좌·우·좌 각 1회');
+    assert.equal(payload.summary.count, 3, 'count 3을 두 배·절반으로 변환하지 않음');
+    const set = (await storedQueue()).filter((i) => i.kind !== 'pose').at(-1).session.sets[0];
+    assert.equal(set.actualReps, 3);
+  });
+
+  test('both readiness: 양쪽 필수 관절이 보이면 준비 완료, 한쪽 관절 하나라도 없으면 미완료, 다른 프로필로 대체 없음', () => {
+    const readyOf = (exercise, landmarks, width, height) => {
+      const r0 = new poseModule.CameraReadiness({ exercise });
+      let r;
+      for (let t = 0; t <= 1500; t += 100) r = r0.pushFrame({ timestampMs: t, width, height, landmarks });
+      return r;
+    };
+    assert.deepEqual([...poseModule.READINESS_PROFILES.bird_dog.joints], ['shoulder', 'elbow', 'wrist', 'hip', 'knee', 'ankle']);
+    assert.equal(poseModule.READINESS_PROFILES.bird_dog.mode, 'both');
+    assert.equal(poseModule.READINESS_PROFILES.dead_bug.mode, 'both');
+    const birdStart = birdNormal[0].landmarks;
+    let r = readyOf('bird_dog', birdStart, 1000, 600);
+    assert.deepEqual([r.ready, r.exercise, r.selectedSide], [true, 'bird_dog', 'both'], '버드독 시작 자세(양쪽 관절) 준비 완료');
+    const noLeftWrist = birdStart.map((p) => [...p]); noLeftWrist[15] = [null, null, null, null, null];
+    r = readyOf('bird_dog', noLeftWrist, 1000, 600);
+    assert.deepEqual([r.ready, r.missingLandmarks], [false, ['left_wrist']]);
+
+    const deadBugStart = Array.from({ length: 33 }, () => [null, null, null, null, null]);
+    for (const off of [0, 1]) {
+      const put = (i, x, y) => { deadBugStart[i + off] = [x, y + off * 0.02, 0, 1, 1]; };
+      put(11, 0.3, 0.6); put(13, 0.3, 0.4); put(15, 0.3, 0.25); put(23, 0.55, 0.6); put(25, 0.65, 0.4); put(27, 0.8, 0.42);
+    }
+    r = readyOf('dead_bug', deadBugStart, 800, 800);
+    assert.deepEqual([r.ready, r.selectedSide], [true, 'both'], '데드버그 양쪽 관절 준비 완료');
+    const noRightAnkle = deadBugStart.map((p) => [...p]); noRightAnkle[28] = [null, null, null, null, null];
+    r = readyOf('dead_bug', noRightAnkle, 800, 800);
+    assert.deepEqual([r.ready, r.missingLandmarks], [false, ['right_ankle']], '한쪽 발목 누락 → 미완료');
+    assert.equal(readyOf('pushup', noRightAnkle, 800, 800).ready, true, '참고: 한쪽(either) 프로필이었다면 통과 → both 프로필이 대체되지 않았음을 확인');
+  });
+});
