@@ -16,14 +16,6 @@ import type {
 } from '@/types/routine';
 
 /**
- * 개발 초기에 임시로 생성된 레거시 Mock 템플릿인지 판별합니다.
- * 백엔드 정규 카탈로그 템플릿만 서비스에 노출하도록 필터링합니다.
- */
-export function isLegacyMockTemplate(templateId: string): boolean {
-  return /^00000000-0000-0000-0000-00000000000[1-9]$/i.test(templateId);
-}
-
-/**
  * Routine Service & Workout Plan API 클라이언트
  *
  * 백엔드 마이크로서비스: routine-service (Gateway를 통해 /api/v1/... 로 중계)
@@ -121,9 +113,8 @@ export async function getRoutineTemplates(
     : '/api/v1/routine-templates';
 
   const list = await apiFetch<RoutineDetail[]>(path);
-  return Array.isArray(list)
-    ? list.filter((item) => !isLegacyMockTemplate(item.id))
-    : [];
+  // 공개 여부는 서버 카탈로그 검증을 따른다. 고정 ID만으로 실제 템플릿을 제외하지 않는다.
+  return Array.isArray(list) ? list : [];
 }
 
 /**
@@ -140,7 +131,7 @@ export async function getRoutineTemplateDetail(
  *
  * 백엔드 /api/v1/routine-templates/recommendations 응답의
  * { recommendations: [{ template, reason, assessmentReady }], notice } 구조를
- * 안전하게 파싱하고 레거시 Mock 템플릿을 배제합니다.
+ * 파싱합니다. 추천 대상의 공개 여부는 서버에서 검증합니다.
  */
 export async function getRecommendedRoutineTemplates(): Promise<
   RoutineDetail[]
@@ -158,7 +149,7 @@ export async function getRecommendedRoutineTemplates(): Promise<
     rawList = response.recommendations.map((item) => item.template);
   }
 
-  return rawList.filter((item) => !isLegacyMockTemplate(item.id));
+  return rawList;
 }
 
 // --------------------------------------------------------------------------

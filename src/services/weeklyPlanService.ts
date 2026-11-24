@@ -209,50 +209,17 @@ export async function fetchWeeklyPlanItems(
   return [];
 }
 
-/**
- * 맞춤형 추천 루틴 템플릿 목록을 서버에서 조회합니다.
- * - 로그인된 경우 프로필 기반 개인화 추천(/recommendations)을 우선 시도하고,
- * - 온보딩 미완료(409)나 미인증 시 전체 기본 템플릿 목록으로 fallback합니다.
- */
-export async function fetchRecommendedRoutineItems(): Promise<
-  RecommendedRoutineItem[]
-> {
+/** 서버가 선정한 오늘의 추천만 반환한다. 빈 결과나 실패를 전체 목록으로 채우지 않는다. */
+export async function fetchRecommendedRoutineItems(): Promise<RecommendedRoutineItem[]> {
   const accessToken = await tokenStorage.getAccessToken();
-  let recommendedList: BackendRoutineDetail[] = [];
+  if (!accessToken) return [];
+  const recommended = await getRecommendedRoutineTemplates();
+  return recommended.map(mapTemplateToRecommendedRoutine);
+}
 
-  if (accessToken) {
-    try {
-      const recommended = await getRecommendedRoutineTemplates();
-      if (Array.isArray(recommended)) {
-        recommendedList = recommended;
-      }
-    } catch {
-      // 추천 API 409(온보딩 미완료) 등 발생 시 기본 템플릿 조회로 진행
-    }
-  }
-
-  // 전체 유효 템플릿 목록 조회 (레거시 Mock 제외된 정규 템플릿 목록)
-  const allTemplates = await getRoutineTemplates().catch(() => []);
-
-  // 추천 루틴을 우선 배치하고, 나머지 템플릿을 중복 없이 병합
-  const seenIds = new Set<string>();
-  const combined: BackendRoutineDetail[] = [];
-
-  for (const item of recommendedList) {
-    if (item && !seenIds.has(item.id)) {
-      seenIds.add(item.id);
-      combined.push(item);
-    }
-  }
-
-  for (const item of allTemplates) {
-    if (item && !seenIds.has(item.id)) {
-      seenIds.add(item.id);
-      combined.push(item);
-    }
-  }
-
-  return combined.map(mapTemplateToRecommendedRoutine);
+/** 직접 루틴을 선택하는 목록에는 불편 부위 비율로 추천 제외된 템플릿도 노출한다. */
+export async function fetchAvailableRoutineItems(): Promise<RecommendedRoutineItem[]> {
+  return (await getRoutineTemplates()).map(mapTemplateToRecommendedRoutine);
 }
 
 /**

@@ -74,8 +74,8 @@ export default function WeeklyPlanEditScreen() {
   const insets = useSafeAreaInsets();
   const weekDays = useWeeklyPlanStore((state) => state.weekDays);
   const planItems = useWeeklyPlanStore((state) => state.planItems);
-  const recommendedRoutines = useWeeklyPlanStore(
-    (state) => state.recommendedRoutines,
+  const availableRoutines = useWeeklyPlanStore(
+    (state) => state.availableRoutines,
   );
   const setPlanItems = useWeeklyPlanStore((state) => state.setPlanItems);
 
@@ -112,7 +112,7 @@ export default function WeeklyPlanEditScreen() {
   }, [planItems]);
 
   const routineOptions = useMemo<RoutinePresetOption[]>(() => {
-    return recommendedRoutines.map((rec) => ({
+    return availableRoutines.map((rec) => ({
       id: rec.id,
       title: rec.title,
       exerciseCount: rec.exerciseCount,
@@ -120,7 +120,7 @@ export default function WeeklyPlanEditScreen() {
       calories: rec.calories,
       exercises: rec.exercises ?? [],
     }));
-  }, [recommendedRoutines]);
+  }, [availableRoutines]);
 
   const handleBack = () => {
     if (router.canGoBack()) {
