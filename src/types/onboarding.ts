@@ -9,7 +9,8 @@ export type ExerciseGoal =
   | 'WEIGHT_LOSS'
   | 'STRENGTH'
   | 'ENDURANCE'
-  | 'POSTURE';
+  | 'POSTURE'
+  | 'HABIT';
 
 /** 하위 호환용 별칭 */
 export type WorkoutGoal = ExerciseGoal;
@@ -75,7 +76,7 @@ export interface NicknameAvailabilityResponse {
 export interface OnboardingRequest {
   nickname: string;
   gender: Gender;
-  age: number;
+  birthDate: string;
   heightCm: number;
   weightKg: number;
   goal: ExerciseGoal;
@@ -89,10 +90,12 @@ export interface OnboardingRequest {
  * PATCH /api/v1/users/me/profile 요청 바디 (온보딩 후 프로필 수정)
  * 바꿀 항목만 보냅니다. 생략한 항목은 서버 값이 유지됩니다. 불편 부위 '해당 없음'은 빈 배열 []
  */
-export type ProfileUpdateRequest = Partial<OnboardingRequest>;
+export type ProfileUpdateRequest = Partial<OnboardingRequest> & { age?: number };
 
 /** GET /api/v1/users/me 및 POST /api/v1/users/me/onboarding 의 profile 필드 */
 export interface ProfileResponse {
+  /** 기존 나이 입력 계정 및 이전 캐시에서는 생년월일이 없을 수 있습니다. */
+  birthDate?: string | null;
   gender: Gender;
   age: number;
   heightCm: number;
@@ -116,7 +119,7 @@ export interface MeResponse {
 
 export interface OnboardingProfile {
   nickname: string;
-  gender: Gender;
+  gender: Gender | null;
   age: number | null;
   heightCm: number | null;
   weightKg: number | null;

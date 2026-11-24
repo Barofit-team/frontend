@@ -3,6 +3,7 @@ import { create } from 'zustand';
 import { ApiError } from '@/services/api';
 import {
   buildWeekCalendarDays,
+  fetchAvailableRoutineItems,
   fetchRecommendedRoutineItems,
   fetchWeeklyPlanItems,
   formatWeekTitle,
@@ -20,6 +21,7 @@ interface WeeklyPlanState {
   selectedDate: string;
   planItems: WeeklyPlanDayItem[];
   recommendedRoutines: RecommendedRoutineItem[];
+  availableRoutines: RecommendedRoutineItem[];
   isLoading: boolean;
   hasLoaded: boolean;
   error: string | null;
@@ -43,6 +45,7 @@ export const useWeeklyPlanStore = create<WeeklyPlanState>((set, get) => ({
   selectedDate: initialSelectedDate,
   planItems: [],
   recommendedRoutines: [],
+  availableRoutines: [],
   isLoading: false,
   hasLoaded: false,
   error: null,
@@ -54,15 +57,20 @@ export const useWeeklyPlanStore = create<WeeklyPlanState>((set, get) => ({
     set({ isLoading: true, error: null });
 
     try {
-      const [planResult, recommendResult] = await Promise.allSettled([
-        fetchWeeklyPlanItems(now),
-        fetchRecommendedRoutineItems(),
-      ]);
+      const [planResult, recommendResult, availableResult] =
+        await Promise.allSettled([
+          fetchWeeklyPlanItems(now),
+          fetchRecommendedRoutineItems(),
+          fetchAvailableRoutineItems(),
+        ]);
 
       const planItems =
         planResult.status === 'fulfilled' ? planResult.value : [];
       const recommendedRoutines =
         recommendResult.status === 'fulfilled' ? recommendResult.value : [];
+
+      const availableRoutines =
+        availableResult.status === 'fulfilled' ? availableResult.value : [];
 
       const weekDays = buildWeekCalendarDays(planItems, now);
       const currentSelected = get().selectedDate;
@@ -85,6 +93,7 @@ export const useWeeklyPlanStore = create<WeeklyPlanState>((set, get) => ({
         selectedDate: stillInWeek ? currentSelected : weekDays[0].date,
         planItems,
         recommendedRoutines,
+        availableRoutines,
         isLoading: false,
         hasLoaded: true,
         error: errorMessage,
@@ -96,6 +105,7 @@ export const useWeeklyPlanStore = create<WeeklyPlanState>((set, get) => ({
         weekDays: fallbackDays,
         planItems: [],
         recommendedRoutines: [],
+        availableRoutines: [],
         isLoading: false,
         hasLoaded: true,
         error: '운동 계획 데이터를 불러오지 못했습니다.',
@@ -126,6 +136,7 @@ export const useWeeklyPlanStore = create<WeeklyPlanState>((set, get) => ({
         days[0].date,
       planItems: [],
       recommendedRoutines: [],
+      availableRoutines: [],
       isLoading: false,
       hasLoaded: false,
       error: null,

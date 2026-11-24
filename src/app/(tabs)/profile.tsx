@@ -1,3 +1,4 @@
+import { ageFromBirthDate } from '@/utils/birthDate';
 import { router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import React, { useEffect, useState } from 'react';
@@ -44,7 +45,7 @@ import {
 type EditFieldType =
   | 'nickname'
   | 'gender'
-  | 'age'
+  | 'birthDate'
   | 'heightCm'
   | 'weightKg'
   | 'goal'
@@ -57,8 +58,7 @@ type EditFieldType =
 type EditableField = Exclude<EditFieldType, 'settings' | 'withdrawConfirm' | null>;
 
 /** 서버 검증 규칙(docs/onboarding-api.md 3장)과 같은 숫자 범위 */
-const NUMBER_RULES: Record<'age' | 'heightCm' | 'weightKg', { min: number; max: number; label: string }> = {
-  age: { min: 14, max: 100, label: '나이' },
+const NUMBER_RULES: Record<'heightCm' | 'weightKg', { min: number; max: number; label: string }> = {
   heightCm: { min: 100, max: 250, label: '키' },
   weightKg: { min: 20, max: 300, label: '몸무게' },
 };
@@ -91,6 +91,7 @@ const GOAL_OPTIONS: { value: ExerciseGoal; label: string }[] = [
   { value: 'STRENGTH', label: '근력 향상' },
   { value: 'ENDURANCE', label: '체력 증진' },
   { value: 'POSTURE', label: '자세 교정' },
+  { value: 'HABIT', label: '운동 습관 형성' },
 ];
 
 const GOAL_LABEL_MAP: Record<ExerciseGoal, string> = {
@@ -98,6 +99,7 @@ const GOAL_LABEL_MAP: Record<ExerciseGoal, string> = {
   STRENGTH: '근력 향상',
   ENDURANCE: '체력 증진',
   POSTURE: '자세 교정',
+  HABIT: '운동 습관 형성',
 };
 
 const FREQUENCY_OPTIONS: { value: WeeklyWorkoutDays; label: string }[] = [
@@ -243,8 +245,8 @@ export default function ProfileScreen() {
       case 'gender':
         setDraftGender(effectiveGender);
         break;
-      case 'age':
-        setDraftText(String(effectiveAge));
+      case 'birthDate':
+        setDraftText(profile?.birthDate ?? '');
         break;
       case 'heightCm':
         setDraftText(String(effectiveHeightCm));
@@ -314,7 +316,15 @@ export default function ProfileScreen() {
         }
         return { request: nickname === user?.nickname ? null : { nickname } };
       }
-      case 'age':
+      case 'birthDate': {
+        const birthDate = draftText.trim();
+        const parts = birthDate.split('-');
+        const age = ageFromBirthDate(parts[0] ?? '', parts[1] ?? '', parts[2] ?? '');
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(birthDate) || age === null || age < 14 || age > 100) {
+          return { error: '생년월일을 YYYY-MM-DD 형식으로 입력해주세요. 만 14~100세만 사용할 수 있어요.' };
+        }
+        return { request: birthDate === profile?.birthDate ? null : { birthDate } };
+      }
       case 'heightCm':
       case 'weightKg': {
         const rule = NUMBER_RULES[field];
@@ -322,7 +332,7 @@ export default function ProfileScreen() {
         if (!draftText || !Number.isInteger(value) || value < rule.min || value > rule.max) {
           return { error: `${rule.label}는 ${rule.min}~${rule.max} 사이로 입력해 주세요.` };
         }
-        const current = { age: effectiveAge, heightCm: effectiveHeightCm, weightKg: effectiveWeightKg }[field];
+        const current = { heightCm: effectiveHeightCm, weightKg: effectiveWeightKg }[field];
         return { request: value === current ? null : { [field]: value } };
       }
       case 'gender':
@@ -357,7 +367,15 @@ export default function ProfileScreen() {
       setOnboardingNickname(nickname);
     }
     if (Object.keys(profileFields).length > 0) {
-      updateProfile(profileFields);
+      const birth = profileFields.birthDate?.split('-');
+      const age = birth ? ageFromBirthDate(birth[0], birth[1], birth[2]) : null;
+      updateProfile({ ...profileFields, ...(age === null ? {} : { age }) });
+      if (birth) {
+        const store = useOnboardingStore.getState();
+        store.setBirthDatePart('birthYear', birth[0]);
+        store.setBirthDatePart('birthMonth', birth[1]);
+        store.setBirthDatePart('birthDay', birth[2]);
+      }
     }
     if (profileFields.gender) setOnboardingGender(profileFields.gender);
     if (profileFields.age) setOnboardingAgeInput(String(profileFields.age));
@@ -480,9 +498,9 @@ export default function ProfileScreen() {
       value: effectiveGender === 'MALE' ? '남성' : '여성',
     },
     {
-      key: 'age',
-      label: '나이',
-      value: String(effectiveAge),
+      key: 'birthDate',
+      label: '생년월일',
+      value: profile?.birthDate ?? `미등록 (만 ${effectiveAge}세)`,
     },
     {
       key: 'heightCm',
@@ -602,15 +620,15 @@ export default function ProfileScreen() {
 
               {/* 닉네임 / 나이 / 키 / 몸무게 텍스트 입력 모달 */}
               {(activeField === 'nickname' ||
-                activeField === 'age' ||
+                activeField === 'birthDate' ||
                 activeField === 'heightCm' ||
                 activeField === 'weightKg') && (
                 <>
                   <Text style={styles.sheetTitle}>
                     {activeField === 'nickname'
                       ? '닉네임 변경'
-                      : activeField === 'age'
-                        ? '나이 변경'
+                      : activeField === 'birthDate'
+                        ? '생년월일 변경'
                         : activeField === 'heightCm'
                           ? '키(cm) 변경'
                           : '몸무게(kg) 변경'}
@@ -622,18 +640,18 @@ export default function ProfileScreen() {
                       setDraftText(
                         activeField === 'nickname'
                           ? text
-                          : text.replace(/[^0-9]/g, ''),
+                          : text.replace(activeField === 'birthDate' ? /[^0-9-]/g : /[^0-9]/g, ''),
                       )
                     }
                     keyboardType={
-                      activeField === 'nickname' ? 'default' : 'number-pad'
+                      activeField === 'nickname' || activeField === 'birthDate' ? 'default' : 'number-pad'
                     }
-                    maxLength={activeField === 'nickname' ? 10 : 3}
+                    maxLength={activeField === 'nickname' || activeField === 'birthDate' ? 10 : 3}
                     autoFocus
                     placeholder={
                       activeField === 'nickname'
                         ? '닉네임을 입력해주세요'
-                        : '숫자를 입력해주세요'
+                        : activeField === 'birthDate' ? 'YYYY-MM-DD' : '숫자를 입력해주세요'
                     }
                     placeholderTextColor="#9CA3AF"
                     style={styles.sheetInput}
