@@ -9,7 +9,16 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { PrepColors } from '@/components/workout-preparation/palette';
 import { ExerciseCameraArea } from '@/components/workout-session/ExerciseCameraArea';
+import { AutoPauseOverlay } from '@/components/workout-session/AutoPauseOverlay';
 import { PhaseTimer } from '@/components/workout-session/PhaseTimer';
+import {
+  INITIAL_AUTO_PAUSE_STATE,
+  eventFromSignal,
+  isAutoPaused,
+  transitionAutoPause,
+  type AutoPauseEvent,
+  type AutoPauseState,
+} from '@/components/workout-session/autoPauseMachine';
 import { SessionStage } from '@/components/workout-session/SessionStage';
 import { SessionColors } from '@/components/workout-session/sessionPalette';
 import { countSets, estimateRemainingSeconds } from '@/components/workout-session/sessionProgress';
@@ -29,6 +38,7 @@ import { WorkoutCompleteView } from '@/components/workout-session/WorkoutComplet
 import { createWorkoutSessionDraft, type WorkoutSessionSync, type WorkoutStatus } from '@/services/workoutSessionService';
 import { clearLocalWorkout, flushWorkoutQueue, getLocalWorkout, pendingCount, queueSession, savePosition } from '@/services/offlineWorkout';
 import { createExerciseAnalyzer, createPosePipeline } from '@/services/posePipeline';
+import { createTrackingSignalAdapter, type TrackingSignalAdapter } from '@/services/trackingSignalAdapter';
 import { useAuthStore } from '@/stores/useAuthStore';
 import type { WorkoutDraft } from '@/stores/useWorkoutDraftStore';
 import { connectSessionCoach } from '@/services/ttsService';
@@ -241,6 +251,14 @@ export default function WorkoutSessionScreen() {
 
   const [phase, setPhase] = useState<SessionPhase>(initialPhase);
   const [pause, setPause] = useState<PauseState>(resumeDraft.current ? 'paused' : 'none');
+  /**
+   * 자동 일시정지(자세 인식 이탈). 사용자 수동 일시정지(pause)와 별개 상태이며 서버 상태는 바꾸지 않는다.
+   * LOST: AutoPauseOverlay / RECOVERING: SessionStage의 복귀 5초 카운트다운 화면을 표시용으로 재사용.
+   * AI 이탈 신호 계약 확정 전에는 기본 어댑터가 'unknown'만 반환하므로 실제 앱에서는 발생하지 않는다.
+   */
+  const [autoPause, setAutoPause] = useState<AutoPauseState>(INITIAL_AUTO_PAUSE_STATE);
+  const autoPauseRef = useRef<AutoPauseState>(INITIAL_AUTO_PAUSE_STATE);
+  const autoPaused = isAutoPaused(autoPause);
   const [exiting, setExiting] = useState(false);
   const [currentReps, setCurrentReps] = useState<number | null>(null);
   const [selectedSide, setSelectedSide] = useState<'left' | 'right' | 'both'>('both');
@@ -250,6 +268,7 @@ export default function WorkoutSessionScreen() {
     routineSetId: string;
     exerciseId: string;
     pipeline: ReturnType<typeof createPosePipeline>;
+    tracking: TrackingSignalAdapter;
     frameCount: number;
     lastValue: number | null;
     finishing: boolean;
@@ -259,9 +278,12 @@ export default function WorkoutSessionScreen() {
     phaseRef.current = phase;
     setCurrentReps(null);
     setSelectedSide('both');
+    // 단계가 바뀌면 이전 단계의 자동 일시정지를 이어받지 않는다
+    autoPauseRef.current = INITIAL_AUTO_PAUSE_STATE;
+    setAutoPause(INITIAL_AUTO_PAUSE_STATE);
   }, [phase]);
   useEffect(() => {
-    if (!sessionReady || pause !== 'none' || phase.kind === 'completed') return;
+    if (!sessionReady || pause !== 'none' || autoPaused || phase.kind === 'completed') return;
     const kind = phase.kind === 'exercising' ? 'active'
       : phase.kind === 'resting' || (phase.kind === 'countdown' && phase.exerciseIndex > 0 && phase.set === 1) ? 'rest' : null;
     if (!kind) return;
@@ -273,7 +295,7 @@ export default function WorkoutSessionScreen() {
       else elapsed.current.restMs += duration;
       running.current = null;
     };
-  }, [phase, pause, sessionReady]);
+  }, [phase, pause, autoPaused, sessionReady]);
 
   useEffect(() => {
     if (!sessionReady || pause !== 'none' || phase.kind !== 'countdown' || phase.set !== 1 || phase.exerciseIndex === 0) return;
@@ -298,6 +320,44 @@ export default function WorkoutSessionScreen() {
     void savePosition(owner, current.sessionId, position).catch(() => Alert.alert('저장 실패', '기기에 운동 진행 상태를 저장하지 못했어요.'));
   }, [owner, phase, resolveExercise, activeRoutine, currentElapsed]);
   const exitingRef = useRef(false);
+
+  /**
+   * M10: 측정 결과 없이 0초에 도달해 멈춘 운동 세트의 phase id. 사용자가 '운동 재개'를 눌러야만(명시적 선택) 같은 세트를 처음부터 다시 시작.
+   * 이어하기로 0초 운동 단계에 재진입한 경우도 같은 상태로 시작한다(첫 phase id는 0).
+   * 자동 일시정지(남은 시간 보존 후 5초 복귀)와는 별개 기능.
+   */
+  const stalledPhaseIdRef = useRef<number | null>(
+    resumeDraft.current?.phase === 'exercising' && resumeDraft.current.remainingSeconds <= 0 ? 0 : null);
+
+  /** 멈춘 세트를 같은 운동·세트 번호로 새 phase id에 다시 시작. 분석기 미지원 종목은 재시도해도 측정할 수 없어 하지 않는다 */
+  const restartStalledSet = useCallback((): boolean => {
+    const current = phaseRef.current;
+    if (current.kind !== 'exercising' || stalledPhaseIdRef.current !== current.id) return false;
+    const exerciseId = snapshot?.exercises[current.exerciseIndex]?.exerciseId;
+    if (!exerciseId || !createExerciseAnalyzer(exerciseId)) return false;
+    stalledPhaseIdRef.current = null; // 연속 입력 시 한 번만
+    poseSetRef.current = null; // 측정 결과 없는 이전 pipeline은 버림 (finish 호출 안 함 → AI 결과 없음)
+    // 새 id → PhaseTimer key 변경으로 타이머 remount(completedRef 초기화), 목표 시간 재적용. 이전 타이머의 늦은 완료는 id 불일치로 무시
+    setPhase(p => (p.id === current.id ? { ...current, id: current.id + 1 } : p));
+    return true;
+  }, [snapshot]);
+
+  /**
+   * 자동 일시정지 상태 전환. 상태 모델이 changed=false를 주면(중복·순서 오류 이벤트) 아무것도 하지 않는다.
+   * 진입 시: AI 연속성 끊기 + 기존 checkpoint로 남은 시간 저장. 타이머는 PhaseTimer paused로 정지.
+   * 서버 PAUSED는 보내지 않는다(ACTIVE 복귀 경로가 3단계 전까지 없음).
+   */
+  const applyAutoPauseEvent = useCallback((event: AutoPauseEvent) => {
+    const wasPaused = isAutoPaused(autoPauseRef.current);
+    const { state, changed } = transitionAutoPause(autoPauseRef.current, event);
+    if (!changed) return;
+    autoPauseRef.current = state;
+    setAutoPause(state);
+    if (!wasPaused && isAutoPaused(state)) {
+      poseSetRef.current?.pipeline.pause();
+      checkpoint(remainingRef.current);
+    }
+  }, [checkpoint]);
 
   // 일시 정지 상태를 바꾼 시각. 렌더·effect를 기다리지 않도록 전환을 요청하는 즉시 기록
   const pauseChangedAtRef = useRef(0);
@@ -375,6 +435,8 @@ export default function WorkoutSessionScreen() {
           routineSetId: routineSet.id,
           exerciseId: routineExercise.exerciseId,
           pipeline,
+          // 분석기가 있는 운동만 여기 도달. 미지원 종목은 위에서 return되어 자동 일시정지 대상이 아님
+          tracking: createTrackingSignalAdapter({ analyzerSupported: true }),
           frameCount: 0,
           lastValue: null,
           finishing: false,
@@ -383,9 +445,22 @@ export default function WorkoutSessionScreen() {
       }
       if (activeSet.finishing) return;
 
+      // 자동 일시정지 중: 운동 분석(횟수·유지시간·세트 완료·결과 저장)은 멈추고 tracking 신호만 처리
+      if (isAutoPaused(autoPauseRef.current)) {
+        const pausedEvent = eventFromSignal(activeSet.tracking.fromPausedFrame(frame));
+        if (pausedEvent) applyAutoPauseEvent(pausedEvent);
+        return;
+      }
+
       try {
         const output = activeSet.pipeline.pushFrame(frame);
         activeSet.frameCount += 1;
+
+        const trackingEvent = eventFromSignal(activeSet.tracking.fromFrameResult(output));
+        if (trackingEvent) {
+          applyAutoPauseEvent(trackingEvent);
+          if (isAutoPaused(autoPauseRef.current)) return;
+        }
 
         const side = (output as { side?: string | null }).side;
         if (side === 'left' || side === 'right' || side === 'both') {
@@ -416,7 +491,7 @@ export default function WorkoutSessionScreen() {
         if (__DEV__) console.warn('[WorkoutSession] pose frame error', err);
       }
     },
-    [owner, pause, snapshot, resolveExercise, finishCurrentPoseSet],
+    [owner, pause, snapshot, resolveExercise, finishCurrentPoseSet, applyAutoPauseEvent],
   );
 
   if (__DEV__) console.log('[WorkoutSession]', phase, pause);
@@ -429,21 +504,30 @@ export default function WorkoutSessionScreen() {
   // 상태 전환은 모두 "현재 상태가 기대한 값일 때만" 적용 → 연속 탭에도 한 번만 전환
   const requestPause = useCallback(() => {
     markPauseChange();
+    // 수동 일시정지·백그라운드: 진행 중이던 자동 복귀 카운트다운은 취소(LOST). 재개 후 새 재인식 신호가 있어야 복귀
+    applyAutoPauseEvent({ type: 'RECOVERY_CANCELLED' });
     poseSetRef.current?.pipeline.pause();
     setPause(p => (p === 'none' || p === 'resuming' ? 'paused' : p));
     if (serverSession.current) void updateServerStatus('PAUSED').catch(() => Alert.alert('동기화 실패', '운동 일시 정지 상태를 저장하지 못했어요.'));
-  }, [markPauseChange, updateServerStatus]);
+  }, [markPauseChange, updateServerStatus, applyAutoPauseEvent]);
   const resume = useCallback(() => {
     if (isTapLocked()) return;
     markPauseChange();
+    // M10: 0초에 멈춘 세트면 같은 세트를 처음부터 (재개 5초 카운트다운 동안 새 타이머는 정지 상태로 대기)
+    if (pause === 'paused') restartStalledSet();
     // 운동 중이었다면 재개 카운트다운, 시작·휴식 카운트다운 중이었다면 바로 이어서
     setPause(p => (p !== 'paused' ? p : phase.kind === 'exercising' ? 'resuming' : 'none'));
     void updateServerStatus('ACTIVE').catch(() => Alert.alert('동기화 실패', '운동 재개 상태를 저장하지 못했어요.'));
-  }, [phase.kind, isTapLocked, markPauseChange, updateServerStatus]);
+  }, [phase.kind, pause, isTapLocked, markPauseChange, updateServerStatus, restartStalledSet]);
   const finishResumeCountdown = useCallback(() => {
     markPauseChange();
     setPause(p => (p === 'resuming' ? 'none' : p));
   }, [markPauseChange]);
+  /** SessionStage 복귀 카운트다운 종료: 수동 재개 카운트다운이면 기존 처리, 아니면 자동 복귀 완료 */
+  const handleResumeCountdownFinished = useCallback(() => {
+    if (pause !== 'none') finishResumeCountdown();
+    else applyAutoPauseEvent({ type: 'RECOVERY_COMPLETED' });
+  }, [pause, finishResumeCountdown, applyAutoPauseEvent]);
   const openStopConfirm = useCallback(() => {
     if (isTapLocked()) return;
     markPauseChange();
@@ -556,16 +640,33 @@ export default function WorkoutSessionScreen() {
   /** 화면 표시만 담당하는 SessionStage에 현재 상태를 넘깁니다. 타이머·단계 전환은 PhaseTimer/completePhase가 그대로 담당 */
   const renderStage = (current: ActivePhase, remainingSeconds: number, phaseSeconds: number) => {
     const exercise = resolveExercise(current);
+    const isDuration = sessions[current.exerciseIndex]?.measurementType === 'DURATION';
+    // 수동 일시정지 화면이 항상 우선. 자동 일시정지는 pause === 'none'일 때만 표시
+    if (pause === 'none' && autoPause === 'LOST') {
+      return (
+        <AutoPauseOverlay
+          alternate={isDuration
+            ? { kind: 'duration', seconds: remainingSeconds, progress: phaseSeconds > 0 ? 1 - remainingSeconds / phaseSeconds : 0, holdSeconds: currentReps }
+            : { kind: 'reps', reps: currentReps, target: exercise.targetReps, seconds: remainingSeconds }}
+          exerciseName={exercise.name}
+          subtitle={describePause(current, exercise.name).subtitle}
+          onPressMenu={handleClose}
+        />
+      );
+    }
+    const stagePause = pause !== 'none' ? pause : autoPause === 'RECOVERING' ? 'resuming' : 'none';
     return (
       <SessionStage
+        // 자동 복귀 카운트다운은 수동 재개 카운트다운과 별도 인스턴스 (항상 5초부터 새로 시작)
+        key={pause === 'none' && autoPause === 'RECOVERING' ? 'auto-resume' : 'stage'}
         phase={current}
-        pause={pause}
+        pause={stagePause}
         remainingSeconds={remainingSeconds}
         phaseSeconds={phaseSeconds}
         exerciseName={exercise.name}
         targetReps={exercise.targetReps}
         currentReps={currentReps}
-        isDuration={sessions[current.exerciseIndex]?.measurementType === 'DURATION'}
+        isDuration={isDuration}
         resumeSubtitle={describePause(current, exercise.name).subtitle}
         getPauseSummary={() => {
           const sets = countSets(current, activeRoutine);
@@ -585,7 +686,7 @@ export default function WorkoutSessionScreen() {
         }}
         busy={exiting}
         onPressMenu={handleClose}
-        onFinishResume={finishResumeCountdown}
+        onFinishResume={handleResumeCountdownFinished}
         onPressStop={openStopConfirm}
         onPressResume={resume}
         onConfirmStop={() => saveAndExit(remainingSeconds)}
@@ -615,7 +716,7 @@ export default function WorkoutSessionScreen() {
         <PhaseTimer
           key={phase.id}
           durationSeconds={duration}
-          paused={pause !== 'none'}
+          paused={pause !== 'none' || autoPaused}
           onTick={checkpoint}
           onComplete={() => {
             if (phase.kind === 'exercising') {
@@ -624,6 +725,8 @@ export default function WorkoutSessionScreen() {
                 finishCurrentPoseSet(phase.id);
                 return;
               }
+              // 측정 결과 없는 세트는 완료 처리하지 않는다. '운동 재개'를 누르면 restartStalledSet으로 같은 세트 재시작
+              stalledPhaseIdRef.current = phase.id;
               requestPause();
               Alert.alert('자세 측정 연결 대기', 'AI 모델이 연결되면 세트 수행 결과를 기록할 수 있어요.');
               return;
