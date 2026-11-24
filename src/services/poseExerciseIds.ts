@@ -81,6 +81,8 @@ export function readinessAvailability(
  *  - 점핑잭(정면)·레그 레이즈(측면)·파이크 푸시업(측면): AI팀 기술 문서(JUMPING_JACK_V01, LEG_RAISE_V01, PIKE_PUSHUP_V01)
  *  - 인클라인 푸시업(측면): AI팀 분석 프로토타입 촬영 안내(analysis/incline_pushup "측면에서 전신이 보이게 촬영")
  *  - 버드독(측면): AI팀 기술 문서(BIRD_DOG "측면에 가까운 고정 카메라"). 정확한 촬영 각도는 실기기 검증 항목
+ *  - 수퍼맨(측면): AI팀 기술 문서(SUPERMAN_V01 "측면 또는 측면에 가까운 사선 촬영")
+ *  - 런지(측면): AI팀 분석 프로토타입(analysis/lunge "측면 전신 영상용", "측면·단독 인물 전제")
  */
 export type BodyView = 'front' | 'side';
 const BODY_VIEWS: Readonly<Record<string, BodyView>> = {
@@ -91,6 +93,8 @@ const BODY_VIEWS: Readonly<Record<string, BodyView>> = {
   'pike-push-up': 'side',
   'incline-push-up': 'side',
   'bird-dog': 'side',
+  'superman': 'side',
+  'lunge': 'side',
 };
 
 export function poseBodyView(routineExerciseId: string): BodyView | null {

@@ -1482,3 +1482,59 @@ describe('3-3c — 버드독·데드버그 실제 분석기 연동', () => {
     assert.equal(readyOf('pushup', noRightAnkle, 800, 800).ready, true, '참고: 한쪽(either) 프로필이었다면 통과 → both 프로필이 대체되지 않았음을 확인');
   });
 });
+
+// ---------------------------------------------------------------------
+// 3-3d: 런지·수퍼맨 실제 분석기 통합 (측정값·finish 주입 없음)
+//  - 런지(experimental-0.1): cycle_models.test.mjs 합성 관절(기본 하체 분기), 좌·우 교대
+//  - 수퍼맨: superman.test.mjs 합성 관절(엎드려 팔다리 들어 올렸다 내리기, 4초 주기)
+// 합성 관절 기반 FE 연동 검증이며 실제 자세 판정 정확도·실기기 검증을 뜻하지 않는다.
+// ---------------------------------------------------------------------
+describe('3-3d — 런지·수퍼맨 실제 분석기 연동', () => {
+  const lungeLandmarks = (active, side) => {
+    const points = Array.from({ length: 33 }, () => [null, null, null, null, null]);
+    const off = side === 'left' ? 0 : 1;
+    const put = (i, x, y) => { points[i + off] = [x, y, 0, 1, 1]; };
+    put(11, 0.4, 0.2); put(23, 0.4, 0.4); put(25, 0.4, 0.6); put(27, active ? 0.62 : 0.4, active ? 0.6 : 0.85);
+    return points;
+  };
+  /** 1초 주기 왼쪽 → 오른쪽 → 왼쪽 교대 (0.4초 동작) */
+  const lunge = (t) => { const p = t % 1000; const side = Math.floor(t / 1000) % 2 === 0 ? 'left' : 'right'; return lungeLandmarks(p >= 400 && p < 800, side); };
+  const superman = (t) => {
+    const r = ((25 * (1 - Math.cos((2 * Math.PI * t) / 4000))) / 2) * Math.PI / 360;
+    const h = [500, 550], s = [500 - 220 * Math.cos(r), 550 - 220 * Math.sin(r)], k = [500 + 190 * Math.cos(r), 550 - 190 * Math.sin(r)];
+    const a = [k[0] + 180 * Math.cos(r), k[1] - 180 * Math.sin(r)], e = [s[0] - 100 * Math.cos(r), s[1] - 100 * Math.sin(r)];
+    const w = [e[0] - 100 * Math.cos(r), e[1] - 100 * Math.sin(r)];
+    const lm = Array.from({ length: 33 }, () => [null, null, null, null, null]);
+    for (const ids of [[11, 13, 15, 23, 25, 27], [12, 14, 16, 24, 26, 28]]) for (let j = 0; j < 6; j += 1) { const [x, y] = [s, e, w, h, k, a][j]; lm[ids[j]] = [x / 1000, y / 1000, 0, 1, 1]; }
+    return lm;
+  };
+  beforeEach(resetRealReps);
+  afterEach(() => { stores.tts.setState({ sendCoachEvent: () => false }); });
+  const lastPose = async () => (await storedQueue()).filter((i) => i.kind === 'pose').at(-1);
+  const lastSet = async () => (await storedQueue()).filter((i) => i.kind !== 'pose').at(-1).session.sets[0];
+
+  test('lunge(experimental): 좌·우 교대 동작을 AI가 1회씩 합산, forward-lunge 등 별개 항목과 혼동 없음', async () => {
+    assert.deepEqual(poseSupport('forward-lunge'), { status: 'unknown', poseId: null }, '별개 카탈로그 항목은 분석기 연결 안 함');
+    assert.equal(createExerciseAnalyzer('forward-lunge'), null);
+    await verifyRealRepsExercise({ routineId: 'lunge', poseId: 'lunge', cls: 'LungeAnalyzer', mode: 'either', view: 'side',
+      make: lunge, mid: 1600, end: 3000, width: 800, height: 800 });
+    const payload = (await lastPose()).payload;
+    assert.deepEqual(payload.summary.details.repetitions.map((r) => r.metrics.side), ['left', 'right', 'left'], '좌·우·좌 각 1회');
+    assert.equal(payload.summary.count, 3, 'AI count 그대로 (FE 변환 없음)');
+    assert.equal((await lastSet()).actualReps, 3);
+  });
+
+  test('superman: count는 actualReps, 보조 holdSeconds·holdBasis는 AI 원본에만 (DURATION 처리 없음)', async () => {
+    await verifyRealRepsExercise({ routineId: 'superman', poseId: 'superman', cls: 'SupermanAnalyzer', mode: 'either', view: 'side',
+      make: superman, mid: 6000, end: 11400 });
+    const payload = (await lastPose()).payload;
+    assert.equal(typeof payload.summary.holdSeconds, 'number');
+    assert.ok(payload.summary.holdSeconds > 0, 'AI가 count와 holdSeconds를 함께 반환');
+    assert.ok('holdBasis' in payload.summary.details, 'AI 보조 측정 원본(holdBasis) 보존');
+    assert.equal(payload.summary.details.repetitions.length, 3);
+    const set = await lastSet();
+    assert.deepEqual([set.actualReps, set.actualDurationSeconds], [3, null], 'Workout: count만, 유지 시간 미저장');
+    const feedback = events.filter((e) => e.eventType === 'SET_FEEDBACK')[0];
+    assert.deepEqual([feedback.actualReps, feedback.actualDurationSeconds], [3, undefined]);
+  });
+});

@@ -65,8 +65,12 @@ assert.equal(poseBodyView('pike-push-up'), 'side', 'AI 문서: 파이크 푸시�
 assert.equal(poseBodyView('incline-push-up'), 'side', 'AI 프로토타입: 인클라인 푸시업 측면');
 // 3-3c: 버드독은 AI 문서 근거(측면에 가까운 구도), 데드버그는 근거 없음 → 미확정
 assert.equal(poseBodyView('bird-dog'), 'side', 'AI 문서: 버드독 측면에 가까운 구도');
-for (const id of ['push-up', 'lunge', 'mountain-climber', 'side-plank', 'unknown', 'toString',
+// 3-3d: 수퍼맨(AI 문서)·런지(AI 프로토타입) 측면. 별개 카탈로그 항목(forward-lunge 등)은 미확정 유지
+assert.equal(poseBodyView('superman'), 'side', 'AI 문서: 수퍼맨 측면·사선');
+assert.equal(poseBodyView('lunge'), 'side', 'AI 프로토타입: 런지 측면');
+for (const id of ['forward-lunge', 'reverse-lunge', 'jumping-lunge']) assert.equal(poseBodyView(id), null, `별개 항목 ${id}`);
+for (const id of ['push-up', 'mountain-climber', 'side-plank', 'unknown', 'toString',
   'split-squat', 'bulgarian-split-squat', 'standing-calf-raise', 'side-lying-leg-raise', 'dead-bug']) {
   assert.equal(poseBodyView(id), null, `근거 없는 종목은 미확정: ${id}`);
 }
-console.log('PASS: 3-2~3-3c body view (squat/plank/leg-raise/pike/incline/bird-dog side, jumping-jack front, others undecided)');
+console.log('PASS: 3-2~3-3d body view (squat/plank/leg-raise/pike/incline/bird-dog/superman/lunge side, jumping-jack front, others undecided)');
