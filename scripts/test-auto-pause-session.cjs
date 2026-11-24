@@ -1538,3 +1538,33 @@ describe('3-3d — 런지·수퍼맨 실제 분석기 연동', () => {
     assert.deepEqual([feedback.actualReps, feedback.actualDurationSeconds], [3, undefined]);
   });
 });
+
+// ---------------------------------------------------------------------
+// 3-4a: 글루트 브리지 실제 분석기 통합 (REPS 확정, 측정값·finish 주입 없음)
+// 프레임은 barofit-pose glute_bridge.test.mjs의 합성 관절(엉덩이 들어 올렸다 내리기, 4초 주기)을 따른다.
+// 합성 관절 기반 FE 연동 검증이며 실제 자세 판정 정확도·실기기 검증을 뜻하지 않는다.
+// ---------------------------------------------------------------------
+describe('3-4a — 글루트 브리지 실제 분석기 연동 (REPS)', () => {
+  const gluteBridge = (t) => {
+    const extension = 120 + 60 * (1 - Math.cos((2 * Math.PI * t) / 4000)) / 2;
+    const s = [200, 700], k = [700, 400], sk = Math.hypot(500, 300), offset = (sk / 2) * Math.tan(((180 - extension) * Math.PI) / 360);
+    const h = [450 + (300 / sk) * offset, 550 + (500 / sk) * offset], a = [780, 700];
+    const lm = Array.from({ length: 33 }, () => [null, null, null, null, null]);
+    for (const ids of [[11, 23, 25, 27], [12, 24, 26, 28]]) for (let j = 0; j < 4; j += 1) { const [x, y] = [s, h, k, a][j]; lm[ids[j]] = [x / 1000, y / 1000, 0, 1, 1]; }
+    return lm;
+  };
+  beforeEach(resetRealReps);
+  afterEach(() => { stores.tts.setState({ sendCoachEvent: () => false }); });
+
+  test('glute-bridge: 들어 올렸다 시작 높이로 복귀 시 1회, 횟수형 HUD, holdSeconds null이어도 REPS 결과 저장', async () => {
+    // mid 6000ms = 두 번째 동작의 최고점(들어 올린 상태): 완료된 1회만 표시 (공통 함수에서 검증)
+    await verifyRealRepsExercise({ routineId: 'glute-bridge', poseId: 'glute_bridge', cls: 'GluteBridgeAnalyzer', mode: 'either', view: 'side',
+      make: gluteBridge, mid: 6000, end: 11500 });
+    const payload = (await storedQueue()).filter((i) => i.kind === 'pose').at(-1).payload;
+    assert.equal(payload.summary.holdSeconds, null, 'AI는 반복 운동의 holdSeconds를 null로 반환');
+    assert.equal(payload.summary.details.repetitions.length, 3);
+    assert.ok(payload.summary.details.repetitions.every((r) => typeof r.metrics.tempo.topHoldMs === 'number'), '상단 정지 시간은 회차별 AI 원본(tempo.topHoldMs)에만');
+    const set = (await storedQueue()).filter((i) => i.kind !== 'pose').at(-1).session.sets[0];
+    assert.deepEqual([set.actualReps, set.actualDurationSeconds], [3, null], '유지 시간이 횟수·actualDurationSeconds로 저장되지 않음');
+  });
+});
