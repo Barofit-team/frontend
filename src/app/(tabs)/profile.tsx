@@ -1,8 +1,9 @@
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
+  Image,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -20,17 +21,15 @@ import {
 
 import {
   ChevronRightIcon,
-  GearIcon,
+  ProfileTabIcon,
   SolidPencilIcon,
 } from '@/components/home/HomeIcons';
-import { createMockWorkoutResult } from '@/mocks/workoutResult';
 import { ApiError } from '@/services/api';
 import { updateMyProfile } from '@/services/onboardingService';
-import { triggerManualInactivityAlarm } from '@/services/inactivityAlarmService';
+import { getReportCalendar } from '@/services/reportService';
 import { tokenStorage } from '@/services/tokenStorage';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useOnboardingStore } from '@/stores/useOnboardingStore';
-import { useWorkoutResultStore } from '@/stores/useWorkoutResultStore';
 import {
   NICKNAME_REGEX,
   type DiscomfortArea,
@@ -43,18 +42,14 @@ import {
 
 type EditFieldType =
   | 'nickname'
-  | 'gender'
-  | 'age'
-  | 'heightCm'
-  | 'weightKg'
+  | 'profileMeta'
+  | 'bodySpec'
   | 'goal'
   | 'weeklyWorkoutDays'
   | 'discomfort'
-  | 'settings'
-  | 'withdrawConfirm'
   | null;
 
-type EditableField = Exclude<EditFieldType, 'settings' | 'withdrawConfirm' | null>;
+type EditableField = Exclude<EditFieldType, null>;
 
 /** 서버 검증 규칙(docs/onboarding-api.md 3장)과 같은 숫자 범위 */
 const NUMBER_RULES: Record<'age' | 'heightCm' | 'weightKg', { min: number; max: number; label: string }> = {
@@ -136,7 +131,7 @@ function formatDiscomfortSummary(
   if (activeAreas.length > 0) {
     return activeAreas.map((area) => DISCOMFORT_LABEL_MAP[area]).join(', ');
   }
-  return '해당 없음';
+  return '없음';
 }
 
 export default function ProfileScreen() {
@@ -148,8 +143,6 @@ export default function ProfileScreen() {
   const updateUserNickname = useAuthStore((state) => state.updateUserNickname);
   const updateProfile = useAuthStore((state) => state.updateProfile);
   const applyMeResponse = useAuthStore((state) => state.applyMeResponse);
-  const logout = useAuthStore((state) => state.logout);
-  const withdraw = useAuthStore((state) => state.withdraw);
 
   const onboardingNickname = useOnboardingStore((state) => state.nickname);
   const onboardingGender = useOnboardingStore((state) => state.gender);
@@ -185,22 +178,31 @@ export default function ProfileScreen() {
     (state) => state.setDiscomfortSelections,
   );
 
-  useEffect(() => {
-    let mounted = true;
-    void (async () => {
-      const token = await tokenStorage.getAccessToken();
-      if (token && mounted && !profile) {
-        try {
-          await loadMyAccount();
-        } catch {
-          // 오프라인·dev 로그인 상태에서는 로컬 스토어 값 사용
-        }
-      }
-    })();
-    return () => {
-      mounted = false;
-    };
-  }, [loadMyAccount, profile]);
+  const [completedDays, setCompletedDays] = useState<number | null>(null);
+  const [streakDays, setStreakDays] = useState<number | null>(null);
+
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+      void (async () => {
+        const token = await tokenStorage.getAccessToken();
+        if (!token || !active) return;
+
+        const now = new Date();
+        await Promise.allSettled([
+          loadMyAccount(),
+          getReportCalendar(now.getFullYear(), now.getMonth() + 1).then((calendar) => {
+            if (!active) return;
+            setCompletedDays(calendar.completedDays);
+            setStreakDays(calendar.streakDays);
+          }),
+        ]);
+      })();
+      return () => {
+        active = false;
+      };
+    }, [loadMyAccount]),
+  );
 
   // 현재 표시할 프로필 값 (백엔드 프로필 -> 온보딩 스토어 -> 시안 기본값 순)
   const displayName =
@@ -223,6 +225,8 @@ export default function ProfileScreen() {
   // 모달 편집 상태
   const [activeField, setActiveField] = useState<EditFieldType>(null);
   const [draftText, setDraftText] = useState<string>('');
+  const [draftHeightText, setDraftHeightText] = useState<string>('');
+  const [draftWeightText, setDraftWeightText] = useState<string>('');
   const [draftGender, setDraftGender] = useState<Gender>(effectiveGender);
   const [draftGoal, setDraftGoal] = useState<ExerciseGoal>(effectiveGoal);
   const [draftWeeklyDays, setDraftWeeklyDays] =
@@ -232,25 +236,19 @@ export default function ProfileScreen() {
   >(['NONE']);
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [isWithdrawing, setIsWithdrawing] = useState<boolean>(false);
-  const [withdrawError, setWithdrawError] = useState<string | null>(null);
 
-  const openEditModal = (field: Exclude<EditFieldType, null>) => {
+  const openEditModal = (field: EditableField) => {
     switch (field) {
       case 'nickname':
         setDraftText(displayName);
         break;
-      case 'gender':
+      case 'profileMeta':
         setDraftGender(effectiveGender);
-        break;
-      case 'age':
         setDraftText(String(effectiveAge));
         break;
-      case 'heightCm':
-        setDraftText(String(effectiveHeightCm));
-        break;
-      case 'weightKg':
-        setDraftText(String(effectiveWeightKg));
+      case 'bodySpec':
+        setDraftHeightText(String(effectiveHeightCm));
+        setDraftWeightText(String(effectiveWeightKg));
         break;
       case 'goal':
         setDraftGoal(effectiveGoal);
@@ -268,19 +266,13 @@ export default function ProfileScreen() {
         }
         break;
       }
-      case 'settings':
-        break;
-      case 'withdrawConfirm':
-        setWithdrawError(null);
-        break;
     }
     setSaveError(null);
     setActiveField(field);
   };
 
   const closeModal = () => {
-    if (isWithdrawing || isSaving) return;
-    setWithdrawError(null);
+    if (isSaving) return;
     setSaveError(null);
     setActiveField(null);
   };
@@ -314,19 +306,33 @@ export default function ProfileScreen() {
         }
         return { request: nickname === user?.nickname ? null : { nickname } };
       }
-      case 'age':
-      case 'heightCm':
-      case 'weightKg': {
-        const rule = NUMBER_RULES[field];
-        const value = Number(draftText);
-        if (!draftText || !Number.isInteger(value) || value < rule.min || value > rule.max) {
-          return { error: `${rule.label}는 ${rule.min}~${rule.max} 사이로 입력해 주세요.` };
+      case 'profileMeta': {
+        const ageRule = NUMBER_RULES.age;
+        const age = Number(draftText);
+        if (!draftText || !Number.isInteger(age) || age < ageRule.min || age > ageRule.max) {
+          return { error: `${ageRule.label}는 ${ageRule.min}~${ageRule.max} 사이로 입력해 주세요.` };
         }
-        const current = { age: effectiveAge, heightCm: effectiveHeightCm, weightKg: effectiveWeightKg }[field];
-        return { request: value === current ? null : { [field]: value } };
+        const patch: ProfileUpdateRequest = {};
+        if (draftGender !== effectiveGender) patch.gender = draftGender;
+        if (age !== effectiveAge) patch.age = age;
+        return { request: Object.keys(patch).length > 0 ? patch : null };
       }
-      case 'gender':
-        return { request: draftGender === effectiveGender ? null : { gender: draftGender } };
+      case 'bodySpec': {
+        const hRule = NUMBER_RULES.heightCm;
+        const wRule = NUMBER_RULES.weightKg;
+        const heightCm = Number(draftHeightText);
+        const weightKg = Number(draftWeightText);
+        if (!draftHeightText || !Number.isInteger(heightCm) || heightCm < hRule.min || heightCm > hRule.max) {
+          return { error: `${hRule.label}는 ${hRule.min}~${hRule.max} 사이로 입력해 주세요.` };
+        }
+        if (!draftWeightText || !Number.isInteger(weightKg) || weightKg < wRule.min || weightKg > wRule.max) {
+          return { error: `${wRule.label}는 ${wRule.min}~${wRule.max} 사이로 입력해 주세요.` };
+        }
+        const patch: ProfileUpdateRequest = {};
+        if (heightCm !== effectiveHeightCm) patch.heightCm = heightCm;
+        if (weightKg !== effectiveWeightKg) patch.weightKg = weightKg;
+        return { request: Object.keys(patch).length > 0 ? patch : null };
+      }
       case 'goal':
         return { request: draftGoal === effectiveGoal ? null : { goal: draftGoal } };
       case 'weeklyWorkoutDays':
@@ -369,7 +375,7 @@ export default function ProfileScreen() {
   };
 
   const handleSaveField = async () => {
-    if (!activeField || activeField === 'settings' || activeField === 'withdrawConfirm') return;
+    if (!activeField) return;
     if (isSaving) return;
 
     const result = buildProfileUpdate(activeField);
@@ -410,41 +416,6 @@ export default function ProfileScreen() {
     }
   };
 
-  const handleLogout = async () => {
-    closeModal();
-    await logout();
-    router.replace('/login');
-  };
-
-  const handleConfirmWithdraw = async () => {
-    if (isWithdrawing) return;
-    setIsWithdrawing(true);
-    setWithdrawError(null);
-
-    try {
-      await withdraw();
-      setActiveField(null);
-      router.replace('/login');
-    } catch {
-      // 서버 detail·네트워크 오류 원문은 화면에 보여주지 않고 기존 안내 문구를 씁니다
-      setWithdrawError('회원 탈퇴 처리 중 문제가 발생했어요. 네트워크 연결을 확인한 뒤 다시 시도해 주세요.');
-    } finally {
-      setIsWithdrawing(false);
-    }
-  };
-
-  const handleOpenOnboarding = () => {
-    closeModal();
-    useOnboardingStore.getState().resetOnboarding();
-    router.push('/onboarding');
-  };
-
-  const handleOpenWorkoutResult = () => {
-    closeModal();
-    useWorkoutResultStore.getState().setResult(createMockWorkoutResult());
-    router.push('/workout-result', { dangerouslySingular: true });
-  };
-
   const renderSaveFooter = () => (
     <>
       {saveError ? <Text style={styles.saveErrorText}>{saveError}</Text> : null}
@@ -467,33 +438,10 @@ export default function ProfileScreen() {
   );
 
   const infoRows: {
-    key: Exclude<
-      EditFieldType,
-      'nickname' | 'settings' | 'withdrawConfirm' | null
-    >;
+    key: Exclude<EditFieldType, 'nickname' | 'profileMeta' | null>;
     label: string;
     value: string;
   }[] = [
-    {
-      key: 'gender',
-      label: '성별',
-      value: effectiveGender === 'MALE' ? '남성' : '여성',
-    },
-    {
-      key: 'age',
-      label: '나이',
-      value: String(effectiveAge),
-    },
-    {
-      key: 'heightCm',
-      label: '키(cm)',
-      value: String(effectiveHeightCm),
-    },
-    {
-      key: 'weightKg',
-      label: '몸무게(kg)',
-      value: String(effectiveWeightKg),
-    },
     {
       key: 'goal',
       label: '운동 목표',
@@ -505,11 +453,18 @@ export default function ProfileScreen() {
       value: `주 ${effectiveWeeklyDays}회`,
     },
     {
+      key: 'bodySpec',
+      label: '신체 정보',
+      value: `${effectiveHeightCm}cm / ${effectiveWeightKg}kg`,
+    },
+    {
       key: 'discomfort',
       label: '불편 부위',
       value: discomfortLabel,
     },
   ];
+
+  const genderLabel = effectiveGender === 'MALE' ? '남성' : '여성';
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
@@ -517,29 +472,78 @@ export default function ProfileScreen() {
 
       <ScrollView
         style={styles.scrollView}
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={[
+          styles.scrollContent,
+          { paddingBottom: Math.max(insets.bottom, 16) + 100 },
+        ]}
         showsVerticalScrollIndicator={false}>
-        {/* 1. 프로필 아바타 및 닉네임 영역 */}
-        <View style={styles.profileRow}>
-          <View style={styles.avatarCircle} />
+        {/* 1. 상단 타이틀 */}
+        <Text style={styles.pageTitle}>내 정보</Text>
 
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="닉네임 수정"
-            hitSlop={8}
-            onPress={() => openEditModal('nickname')}
-            style={({ pressed }) => [
-              styles.nicknameButton,
-              pressed && styles.pressed,
-            ]}>
-            <Text style={styles.nicknameText}>{`${displayName}님`}</Text>
-            <SolidPencilIcon color="#111111" size={18} />
-          </Pressable>
+        {/* 2. 프로필 아바타 및 닉네임·성별/나이 영역 */}
+        <View style={styles.profileRow}>
+          <View style={styles.avatarCircle}>
+            {user?.profileImageUrl ? (
+              <Image
+                source={{ uri: user.profileImageUrl }}
+                style={styles.avatarImage}
+              />
+            ) : (
+              <ProfileTabIcon color="#FFFFFF" size={32} />
+            )}
+          </View>
+
+          <View style={styles.profileInfo}>
+            <View style={styles.nicknameRow}>
+              <Text style={styles.nicknameText} numberOfLines={1}>
+                {displayName}
+              </Text>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="닉네임 수정"
+                hitSlop={8}
+                onPress={() => openEditModal('nickname')}
+                style={({ pressed }) => [
+                  styles.editBadgeButton,
+                  pressed && styles.pressed,
+                ]}>
+                <SolidPencilIcon color="#6B7280" size={14} />
+              </Pressable>
+            </View>
+
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="성별 및 나이 수정"
+              hitSlop={6}
+              onPress={() => openEditModal('profileMeta')}
+              style={({ pressed }) => pressed && styles.pressed}>
+              <Text style={styles.profileSubText}>
+                {`${genderLabel} · ${effectiveAge}세`}
+              </Text>
+            </Pressable>
+          </View>
         </View>
 
-        {/* 3. 운동 완료일·Streak Day 요약 카드: 실제 데이터 출처가 정해질 때까지 표시하지 않습니다 (하드코딩 값 제거) */}
+        {/* 3. 운동 완료일 · 연속 운동일 요약 카드 */}
+        <View style={styles.statsRow}>
+          <View style={styles.statCard}>
+            <Text style={styles.statLabel}>운동 완료일</Text>
+            <Text style={styles.statValue}>
+              {completedDays !== null ? `${completedDays}일` : '-일'}
+            </Text>
+          </View>
+
+          <View style={styles.statCard}>
+            <Text style={styles.statLabel}>연속 운동일</Text>
+            <Text style={styles.statValue}>
+              {streakDays !== null ? `${streakDays}일` : '-일'}
+            </Text>
+          </View>
+        </View>
 
         {/* 4. 신체 정보 및 운동 설정 리스트 */}
+        <View style={styles.sectionDivider} />
+
         <View style={styles.infoList}>
           {infoRows.map((row) => (
             <Pressable
@@ -555,7 +559,7 @@ export default function ProfileScreen() {
 
               <View style={styles.infoRight}>
                 <Text style={styles.infoValue}>{row.value}</Text>
-                <ChevronRightIcon color="#111111" size={14} />
+                <ChevronRightIcon color="#374151" size={13} />
               </View>
             </Pressable>
           ))}
@@ -567,17 +571,13 @@ export default function ProfileScreen() {
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="앱 설정"
-          onPress={() => openEditModal('settings')}
+          onPress={() => router.push('/app-settings')}
           style={({ pressed }) => [
             styles.appSettingsRow,
             pressed && styles.pressed,
           ]}>
-          <View style={styles.appSettingsLeft}>
-            <GearIcon color="#111111" size={20} />
-            <Text style={styles.appSettingsText}>앱 설정</Text>
-          </View>
-
-          <ChevronRightIcon color="#111111" size={14} />
+          <Text style={styles.appSettingsText}>앱 설정</Text>
+          <ChevronRightIcon color="#374151" size={13} />
         </Pressable>
       </ScrollView>
 
@@ -600,41 +600,18 @@ export default function ProfileScreen() {
               ]}>
               <View style={styles.sheetHandle} />
 
-              {/* 닉네임 / 나이 / 키 / 몸무게 텍스트 입력 모달 */}
-              {(activeField === 'nickname' ||
-                activeField === 'age' ||
-                activeField === 'heightCm' ||
-                activeField === 'weightKg') && (
+              {/* 닉네임 변경 모달 */}
+              {activeField === 'nickname' && (
                 <>
-                  <Text style={styles.sheetTitle}>
-                    {activeField === 'nickname'
-                      ? '닉네임 변경'
-                      : activeField === 'age'
-                        ? '나이 변경'
-                        : activeField === 'heightCm'
-                          ? '키(cm) 변경'
-                          : '몸무게(kg) 변경'}
-                  </Text>
+                  <Text style={styles.sheetTitle}>닉네임 변경</Text>
 
                   <TextInput
                     value={draftText}
-                    onChangeText={(text) =>
-                      setDraftText(
-                        activeField === 'nickname'
-                          ? text
-                          : text.replace(/[^0-9]/g, ''),
-                      )
-                    }
-                    keyboardType={
-                      activeField === 'nickname' ? 'default' : 'number-pad'
-                    }
-                    maxLength={activeField === 'nickname' ? 10 : 3}
+                    onChangeText={setDraftText}
+                    keyboardType="default"
+                    maxLength={10}
                     autoFocus
-                    placeholder={
-                      activeField === 'nickname'
-                        ? '닉네임을 입력해주세요'
-                        : '숫자를 입력해주세요'
-                    }
+                    placeholder="닉네임을 입력해주세요"
                     placeholderTextColor="#9CA3AF"
                     style={styles.sheetInput}
                   />
@@ -643,32 +620,81 @@ export default function ProfileScreen() {
                 </>
               )}
 
-              {/* 성별 선택 모달 */}
-              {activeField === 'gender' && (
+              {/* 성별 및 나이 변경 모달 */}
+              {activeField === 'profileMeta' && (
                 <>
-                  <Text style={styles.sheetTitle}>성별 변경</Text>
+                  <Text style={styles.sheetTitle}>성별 및 나이 변경</Text>
                   <View style={styles.optionGroup}>
-                    {GENDER_OPTIONS.map((item) => {
-                      const selected = draftGender === item.value;
-                      return (
-                        <Pressable
-                          key={item.value}
-                          accessibilityRole="button"
-                          onPress={() => setDraftGender(item.value)}
-                          style={[
-                            styles.optionCard,
-                            selected && styles.optionCardSelected,
-                          ]}>
-                          <Text
+                    <View style={styles.genderRow}>
+                      {GENDER_OPTIONS.map((item) => {
+                        const selected = draftGender === item.value;
+                        return (
+                          <Pressable
+                            key={item.value}
+                            accessibilityRole="button"
+                            onPress={() => setDraftGender(item.value)}
                             style={[
-                              styles.optionCardText,
-                              selected && styles.optionCardTextSelected,
+                              styles.optionCard,
+                              styles.genderOptionCard,
+                              selected && styles.optionCardSelected,
                             ]}>
-                            {item.label}
-                          </Text>
-                        </Pressable>
-                      );
-                    })}
+                            <Text
+                              style={[
+                                styles.optionCardText,
+                                selected && styles.optionCardTextSelected,
+                              ]}>
+                              {item.label}
+                            </Text>
+                          </Pressable>
+                        );
+                      })}
+                    </View>
+
+                    <TextInput
+                      value={draftText}
+                      onChangeText={(text) => setDraftText(text.replace(/[^0-9]/g, ''))}
+                      keyboardType="number-pad"
+                      maxLength={3}
+                      placeholder="나이 (예: 27)"
+                      placeholderTextColor="#9CA3AF"
+                      style={styles.sheetInput}
+                    />
+                  </View>
+
+                  {renderSaveFooter()}
+                </>
+              )}
+
+              {/* 신체 정보 (키 / 몸무게) 통합 변경 모달 */}
+              {activeField === 'bodySpec' && (
+                <>
+                  <Text style={styles.sheetTitle}>신체 정보 변경</Text>
+                  <View style={styles.bodySpecGroup}>
+                    <View style={styles.bodySpecField}>
+                      <Text style={styles.bodySpecLabel}>키 (cm)</Text>
+                      <TextInput
+                        value={draftHeightText}
+                        onChangeText={(text) => setDraftHeightText(text.replace(/[^0-9]/g, ''))}
+                        keyboardType="number-pad"
+                        maxLength={3}
+                        autoFocus
+                        placeholder="예: 180"
+                        placeholderTextColor="#9CA3AF"
+                        style={styles.sheetInput}
+                      />
+                    </View>
+                    <View style={styles.bodySpecField}>
+                      <Text style={styles.bodySpecLabel}>몸무게 (kg)</Text>
+                      <TextInput
+                        value={draftWeightText}
+                        onChangeText={(text) => setDraftWeightText(text.replace(/[^0-9]/g, ''))}
+                        keyboardType="number-pad"
+                        maxLength={3}
+                        placeholder="예: 80"
+                        placeholderTextColor="#9CA3AF"
+                        style={styles.sheetInput}
+                      />
+                    </View>
                   </View>
 
                   {renderSaveFooter()}
@@ -770,134 +796,6 @@ export default function ProfileScreen() {
                   {renderSaveFooter()}
                 </>
               )}
-
-              {/* 앱 설정 모달 */}
-              {activeField === 'settings' && (
-                <>
-                  <Text style={styles.sheetTitle}>앱 설정</Text>
-                  <View style={styles.optionGroup}>
-                    <Pressable
-                      accessibilityRole="button"
-                      onPress={() => {
-                        closeModal();
-                        void triggerManualInactivityAlarm();
-                      }}
-                      style={({ pressed }) => [
-                        styles.optionCard,
-                        pressed && styles.pressed,
-                      ]}>
-                      <Text style={styles.optionCardText}>
-                        알람 수동 발송 테스트
-                      </Text>
-                    </Pressable>
-
-                    {__DEV__ && (
-                      <Pressable
-                        accessibilityRole="button"
-                        onPress={handleOpenOnboarding}
-                        style={({ pressed }) => [
-                          styles.optionCard,
-                          pressed && styles.pressed,
-                        ]}>
-                        <Text style={styles.optionCardText}>
-                          [DEV] 온보딩 다시 보기
-                        </Text>
-                      </Pressable>
-                    )}
-
-                    {__DEV__ && (
-                      <Pressable
-                        accessibilityRole="button"
-                        onPress={handleOpenWorkoutResult}
-                        style={({ pressed }) => [
-                          styles.optionCard,
-                          pressed && styles.pressed,
-                        ]}>
-                        <Text style={styles.optionCardText}>
-                          [DEV] 오늘의 결과 바로가기
-                        </Text>
-                      </Pressable>
-                    )}
-
-                    <Pressable
-                      accessibilityRole="button"
-                      onPress={() => void handleLogout()}
-                      style={({ pressed }) => [
-                        styles.optionCard,
-                        pressed && styles.pressed,
-                      ]}>
-                      <Text style={styles.optionCardText}>로그아웃</Text>
-                    </Pressable>
-
-                    <Pressable
-                      accessibilityRole="button"
-                      onPress={() => openEditModal('withdrawConfirm')}
-                      style={({ pressed }) => [
-                        styles.optionCard,
-                        styles.logoutOptionCard,
-                        pressed && styles.pressed,
-                      ]}>
-                      <Text style={styles.logoutOptionText}>회원 탈퇴</Text>
-                    </Pressable>
-                  </View>
-                </>
-              )}
-
-              {/* 회원 탈퇴 확인 모달 */}
-              {activeField === 'withdrawConfirm' && (
-                <>
-                  <Text style={styles.sheetTitle}>정말 탈퇴하시겠어요?</Text>
-
-                  <View style={styles.withdrawNoticeBox}>
-                    <Text style={styles.withdrawNoticeTitle}>
-                      탈퇴 전 꼭 확인해 주세요
-                    </Text>
-                    <Text style={styles.withdrawNoticeItem}>
-                      • 신체 프로필, 운동 목표, 불편 부위 등 개인 맞춤 설정이 즉시 삭제되며 복구할 수 없어요.
-                    </Text>
-                    <Text style={styles.withdrawNoticeItem}>
-                      • 소셜 계정 연동이 해제되어 같은 계정으로 다시 로그인하면 신규 회원으로 시작하게 돼요.
-                    </Text>
-                  </View>
-
-                  {withdrawError ? (
-                    <Text style={styles.withdrawErrorText}>{withdrawError}</Text>
-                  ) : null}
-
-                  <View style={styles.withdrawButtonRow}>
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel="탈퇴 취소"
-                      disabled={isWithdrawing}
-                      onPress={closeModal}
-                      style={({ pressed }) => [
-                        styles.withdrawCancelButton,
-                        pressed && !isWithdrawing && styles.pressed,
-                      ]}>
-                      <Text style={styles.withdrawCancelButtonText}>취소</Text>
-                    </Pressable>
-
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel="회원 탈퇴 확정"
-                      disabled={isWithdrawing}
-                      onPress={() => void handleConfirmWithdraw()}
-                      style={({ pressed }) => [
-                        styles.withdrawConfirmButton,
-                        isWithdrawing && styles.withdrawButtonDisabled,
-                        pressed && !isWithdrawing && styles.pressed,
-                      ]}>
-                      {isWithdrawing ? (
-                        <ActivityIndicator size="small" color="#FFFFFF" />
-                      ) : (
-                        <Text style={styles.withdrawConfirmButtonText}>
-                          탈퇴하기
-                        </Text>
-                      )}
-                    </Pressable>
-                  </View>
-                </>
-              )}
             </View>
           ) : null}
         </KeyboardAvoidingView>
@@ -916,34 +814,91 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     paddingHorizontal: 20,
-    paddingTop: 20,
+    paddingTop: 12,
     paddingBottom: 120,
+  },
+  pageTitle: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: '#111827',
+    letterSpacing: -0.4,
+    marginBottom: 20,
   },
   profileRow: {
     flexDirection: 'row',
     alignItems: 'center',
   },
   avatarCircle: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    backgroundColor: '#D4D4D8',
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: '#D1D5DB',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
   },
-  nicknameButton: {
-    marginLeft: 20,
+  avatarImage: {
+    width: 60,
+    height: 60,
+  },
+  profileInfo: {
+    flex: 1,
+    marginLeft: 16,
+    gap: 4,
+  },
+  nicknameRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    paddingVertical: 4,
+    gap: 8,
   },
   nicknameText: {
-    fontSize: 22,
+    fontSize: 20,
     fontWeight: '700',
-    color: '#111111',
+    color: '#111827',
+    letterSpacing: -0.4,
+    flexShrink: 1,
+  },
+  editBadgeButton: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: '#F3F4F6',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  profileSubText: {
+    fontSize: 13.5,
+    fontWeight: '400',
+    color: '#6B7280',
+    letterSpacing: -0.2,
+  },
+  statsRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 22,
+  },
+  statCard: {
+    flex: 1,
+    backgroundColor: '#F1F5FF',
+    borderRadius: 14,
+    paddingVertical: 16,
+    paddingHorizontal: 16,
+    gap: 10,
+  },
+  statLabel: {
+    fontSize: 13.5,
+    fontWeight: '500',
+    color: '#4B5563',
+    letterSpacing: -0.2,
+  },
+  statValue: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#1D61E7',
     letterSpacing: -0.4,
   },
   infoList: {
-    marginTop: 22,
+    marginTop: 4,
   },
   infoRow: {
     height: 54,
@@ -952,9 +907,9 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   infoLabel: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#111111',
+    fontSize: 15.5,
+    fontWeight: '500',
+    color: '#111827',
     letterSpacing: -0.3,
   },
   infoRight: {
@@ -963,34 +918,48 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   infoValue: {
-    fontSize: 16,
-    fontWeight: '400',
-    color: '#111111',
+    fontSize: 15.5,
+    fontWeight: '600',
+    color: '#111827',
     letterSpacing: -0.2,
   },
   sectionDivider: {
     height: 8,
     backgroundColor: '#F3F4F6',
     marginHorizontal: -20,
-    marginTop: 14,
-    marginBottom: 4,
+    marginTop: 18,
+    marginBottom: 8,
   },
   appSettingsRow: {
-    height: 56,
+    height: 54,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
   },
-  appSettingsLeft: {
+  appSettingsText: {
+    fontSize: 15.5,
+    fontWeight: '500',
+    color: '#111827',
+    letterSpacing: -0.3,
+  },
+  genderRow: {
     flexDirection: 'row',
-    alignItems: 'center',
     gap: 10,
   },
-  appSettingsText: {
-    fontSize: 16,
-    fontWeight: '500',
-    color: '#111111',
-    letterSpacing: -0.3,
+  genderOptionCard: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  bodySpecGroup: {
+    gap: 14,
+  },
+  bodySpecField: {
+    gap: 6,
+  },
+  bodySpecLabel: {
+    fontSize: 13.5,
+    fontWeight: '600',
+    color: '#4B5563',
   },
   modalBackdrop: {
     flex: 1,
