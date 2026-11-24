@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ApiError } from '@/services/api';
-import { poseSupport } from '@/services/poseExerciseIds';
+import { poseSupportForSnapshot } from '@/services/poseExerciseIds';
 import { syncWorkoutSession, uploadPoseSetResult, generateWorkoutReport, type TodayWorkoutPlan, type WorkoutSessionSync } from '@/services/workoutSessionService';
 import type { WorkoutDraft } from '@/stores/useWorkoutDraftStore';
 
@@ -72,7 +72,8 @@ export function queuePoseSetResult(owner: string, item: Omit<PoseItem, 'kind'>) 
  * Atomically persist the measured Workout set and its unmodified report payload.
  * 주 측정값만 Workout 세트에 저장한다: REPS = summary.count, DURATION = floor(summary.holdSeconds).
  * 보조 측정값(REPS의 holdSeconds·observedSeconds·sideCounts 등)은 Workout 세트에 넣지 않고 AI 원본 payload에만 남긴다.
- * 주 측정값이 없거나(다른 값으로 대체하지 않음) 지원 상태가 supported가 아니면 아무것도 저장하지 않는다(change는 예외 시 미기록).
+ * 주 측정값이 없거나(다른 값으로 대체하지 않음) 세션 snapshot 기준 지원 상태가 supported가 아니면 아무것도 저장하지 않는다(change는 예외 시 미기록).
+ * (예: V13 이전 DURATION 마운틴 클라이머 snapshot = conflict → 저장 차단. 기존 snapshot·큐 항목은 변환하지 않는다)
  */
 export function commitPoseSet(owner: string, item: Omit<PoseItem, 'kind'>) {
   return change(owner, data => {
@@ -82,7 +83,7 @@ export function commitPoseSet(owner: string, item: Omit<PoseItem, 'kind'>) {
     const payload = item.payload;
     const summary = payload.summary as Record<string, unknown> | undefined;
     const exercise = current.session.routineSnapshot.exercises.find(e => e.sets.some(set => set.id === item.routineSetId));
-    const support = exercise ? poseSupport(exercise.exerciseId) : null;
+    const support = exercise ? poseSupportForSnapshot(exercise.exerciseId, exercise.measurementType) : null;
     if (payload.schemaVersion !== '2.0' || payload.type !== 'set.completed' || !summary ||
         typeof payload.exercise !== 'string' || !exercise || support?.status !== 'supported' || support.poseId !== payload.exercise)
       throw new Error('계획된 운동과 모델 결과가 일치하지 않습니다.');

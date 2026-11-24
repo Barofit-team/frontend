@@ -989,7 +989,9 @@ describe('3-1a — 분석기 생성과 readiness fallback 정리', () => {
 
   test('A2. 미완성·미구현·미확인 ID는 분석기를 만들지 않음 (ID 통과 fallback 제거)', () => {
     assert.equal(createExerciseAnalyzer('side-plank'), null, 'incomplete: SidePlankAnalyzer를 세션에 연결하지 않음');
-    assert.equal(createExerciseAnalyzer('mountain-climber'), null, 'conflict: Routine REPS 통일 전까지 연결하지 않음');
+    // 3-4c: 마운틴 클라이머는 V13 REPS snapshot만 연결. legacy DURATION·측정 유형 누락/오류 snapshot은 conflict로 연결하지 않음
+    assert.equal(createExerciseAnalyzer('mountain-climber', 'DURATION'), null, 'conflict: legacy DURATION snapshot');
+    for (const bad of [undefined, null, 'TIME', 'reps']) assert.equal(createExerciseAnalyzer('mountain-climber', bad), null, `conflict: 측정 유형 ${String(bad)}`);
     for (const id of ['jump-squat', 'reverse-crunch', 'flutter-kick', 'burpee', 'sit-up']) {
       assert.equal(createExerciseAnalyzer(id), null, `not_implemented ${id}`);
     }
@@ -1002,7 +1004,7 @@ describe('3-1a — 분석기 생성과 readiness fallback 정리', () => {
     }
   });
 
-  test('A3. 마운틴 클라이머(conflict): 정상 결과를 만들지 않고 기존 M10 안내로 정지, 재시도 없음', async () => {
+  test('A3. legacy DURATION 마운틴 클라이머 snapshot(conflict): 정상 결과를 만들지 않고 기존 M10 안내로 정지, 재시도 없음', async () => {
     const root = await startWith(routine({ exerciseId: 'mountain-climber', measurementType: 'DURATION', sets: [{ seconds: 20 }, { seconds: 20 }] }));
     feedFrames = true; // 카메라 프레임은 계속 들어옴
     await advance(10 * 1000);
@@ -1242,9 +1244,9 @@ async function verifyRealRepsExercise(c) {
   const feedCase = (until) => feedUntil(until, c.make, c.width, c.height);
   // 분석기·readiness·촬영 방향 연결
   assert.deepEqual(poseSupport(c.routineId), { status: 'supported', poseId: c.poseId });
-  assert.ok(createExerciseAnalyzer(c.routineId) instanceof poseModule[c.cls], `${c.routineId} → ${c.cls}`);
+  assert.ok(createExerciseAnalyzer(c.routineId, 'REPS') instanceof poseModule[c.cls], `${c.routineId} → ${c.cls}`);
   const hasProfile = (id) => Object.prototype.hasOwnProperty.call(poseModule.READINESS_PROFILES, id);
-  assert.deepEqual(readinessAvailability(c.routineId, hasProfile), { availability: 'available', poseId: c.poseId });
+  assert.deepEqual(readinessAvailability(c.routineId, hasProfile, 'REPS'), { availability: 'available', poseId: c.poseId });
   assert.equal(poseModule.READINESS_PROFILES[c.poseId].mode, c.mode, 'AI readiness 프로필 연결');
   assert.equal(poseBodyView(c.routineId), c.view);
 
@@ -1566,5 +1568,278 @@ describe('3-4a — 글루트 브리지 실제 분석기 연동 (REPS)', () => {
     assert.ok(payload.summary.details.repetitions.every((r) => typeof r.metrics.tempo.topHoldMs === 'number'), '상단 정지 시간은 회차별 AI 원본(tempo.topHoldMs)에만');
     const set = (await storedQueue()).filter((i) => i.kind !== 'pose').at(-1).session.sets[0];
     assert.deepEqual([set.actualReps, set.actualDurationSeconds], [3, null], '유지 시간이 횟수·actualDurationSeconds로 저장되지 않음');
+  });
+});
+
+// ---------------------------------------------------------------------
+// 3-4c: 마운틴 클라이머 실제 분석기 통합 (Routine V13 REPS, 측정값·finish 주입 없음)
+// 프레임은 barofit-pose mountain_climber.test.mjs의 합성 관절(높은 플랭크 측면, packet)을 따르며
+// 1초 주기 중 400~800ms 동안 한쪽 무릎만 당겼다가(0.75 → 0.47) 복귀하고, 매 초 좌·우를 교대한다.
+// 합성 관절 기반 FE 연동 검증이며 실제 자세 판정 정확도·실기기 검증을 뜻하지 않는다.
+// legacy DURATION snapshot 차단은 A3(단일 운동)와 아래 L1~L3(이어하기·다음 운동)에서 검증한다.
+// ---------------------------------------------------------------------
+describe('3-4c — 마운틴 클라이머 실제 분석기 연동 (REPS)', () => {
+  /** mode: 'cycle'(좌우 교대 왕복) | 'still'(높은 플랭크 정지) | 'hold'(왼쪽 무릎 당긴 채 유지) */
+  const mcFrame = (t, mode = 'cycle') => {
+    const p = t % 1000, side = Math.floor(t / 1000) % 2, active = mode === 'cycle' && p >= 400 && p < 800;
+    const lm = Array.from({ length: 33 }, () => [null, null, null, null, null]);
+    const place = (i, x, y) => { lm[i] = [x, y, 0, 1, 1]; };
+    for (const j of [0, 1]) {
+      place(11 + j, 0.3, 0.43); place(15 + j, 0.31, 0.76); place(23 + j, 0.6, 0.45);
+      place(25 + j, (active && j === side) || (mode === 'hold' && j === 0) ? 0.47 : 0.75, 0.55); place(27 + j, 0.9, 0.69);
+    }
+    return lm;
+  };
+  /** 호출 시점부터의 경과 시간으로 프레임 생성(새 세트 분석기가 동작 처음부터 관측하도록) */
+  async function feedMc(ms, mode = 'cycle') { const t0 = clock; await feedUntil(clock + ms, (t) => mcFrame(t - t0, mode), 800, 600); }
+  /** 프레임 없이 시계만 진행해 지정 운동·세트의 운동 단계까지 이동 */
+  async function untilPhase(exerciseIndex, set) {
+    for (let i = 0; i < 600; i += 1) {
+      const ph = ui.stage?.phase;
+      if (ph?.kind === 'exercising' && ph.exerciseIndex === exerciseIndex && ph.set === set) return;
+      await advance(250);
+    }
+    assert.fail(`HARNESS: ${exerciseIndex}번 운동 ${set}세트에 도달하지 않음`);
+  }
+  /** 여러 운동 snapshot (routine()과 같은 형식) */
+  function multi(items) {
+    const parts = items.map((it) => routine(it));
+    const exercises = parts.map((part, i) => ({ ...part.exercise, order: i + 1 }));
+    return { snapshot: { ...parts[0].snapshot, exercises }, sessions: parts.map((part) => part.sessions[0]), exercises };
+  }
+  const MC = (sets) => ({ exerciseId: 'mountain-climber', measurementType: 'REPS', sets: sets.map((reps) => ({ reps })) });
+  const LEGACY_MC = { exerciseId: 'mountain-climber', measurementType: 'DURATION', sets: [{ seconds: 20 }] };
+  const poseItems = async () => (await storedQueue()).filter((i) => i.kind === 'pose');
+  /** 큐에 마지막으로 기록된 세션 (운동 완료 후 로컬 세션이 지워져도 확인 가능, report 항목 제외) */
+  const lastSession = async () => (await storedQueue()).filter((i) => i.session).at(-1).session;
+  const feedbacks = () => events.filter((e) => e.eventType === 'SET_FEEDBACK');
+  beforeEach(resetRealReps);
+  afterEach(() => { stores.tts.setState({ sendCoachEvent: () => false }); testMeasure.value = null; testMeasure.summary = null; });
+
+  test('C1. 공통 하니스: 실제 분석기 → 횟수 링·목표 3회 종료 → SET_FEEDBACK·Workout·AI 원본 저장, 중복 없음', async () => {
+    // mid 1500ms: 1회(왼쪽) 완료 후 두 번째 동작 전, end 2800ms: 3회(왼·오·왼) 완료
+    await verifyRealRepsExercise({ routineId: 'mountain-climber', poseId: 'mountain_climber', cls: 'MountainClimberAnalyzer', mode: 'either', view: 'side',
+      make: mcFrame, mid: 1500, end: 2800, width: 800, height: 600 });
+    const payload = (await poseItems()).at(-1).payload;
+    assert.equal(payload.engineVersion, 'mountain-climber-0.5');
+    assert.deepEqual(payload.summary.details.repetitions.map((r) => r.metrics.side), ['left', 'right', 'left'], 'AI 반복 기록(좌우) 원본 유지');
+    assert.equal(payload.summary.holdSeconds, null);
+    assert.equal(typeof payload.summary.observedSeconds, 'number', '보조 observedSeconds는 원본에만');
+  });
+
+  test('C2. 한쪽 무릎 왕복 = 1회, 반대쪽 = +1회, 좌우 한 쌍 = 2회 (FE 변환 없음). 정지·당긴 채 유지는 횟수 아님', async () => {
+    const root = await startWith(routine(MC([16, 16])));
+    await feedMc(3000, 'still');
+    assert.equal(ui.stage.currentReps, 0, '높은 플랭크 자세 진입만으로는 0회');
+    await feedMc(3000, 'hold');
+    assert.equal(ui.stage.currentReps, 0, '무릎을 당긴 채 복귀하지 않으면 0회(미완료 동작)');
+    await feedMc(1000, 'still');
+    const before = ui.stage.currentReps;
+    assert.ok(before <= 1, `복귀 시점에 최대 1회만 인정: ${before}`);
+    const start = before;
+    await feedMc(900);
+    assert.equal(ui.stage.currentReps, start + 1, '왼쪽 무릎 왕복 완료 → +1');
+    await feedMc(1000);
+    assert.equal(ui.stage.currentReps, start + 2, '오른쪽 왕복 완료 → +1 (좌우 한 쌍 = 2회)');
+    assert.equal(ui.hud.reps, ui.stage.currentReps, 'HUD 횟수 = AI count 그대로');
+    await feedMc(2000);
+    assert.equal(ui.stage.currentReps, start + 4, '두 쌍 = 4회');
+    assert.equal(ui.stage.phase.kind, 'exercising', '목표 16회 미만 → 세트 진행');
+    await unmount(root);
+  });
+
+  test('C3. 세트 목표 16·20·24회(snapshot targets): 각 세트가 자기 목표에서 종료, 휴식 중 다음 세트 목표, 결과 actualReps = count', async () => {
+    const fx = routine(MC([16, 20, 24]));
+    const root = await startWith(fx);
+    const targets = [16, 20, 24];
+    for (let set = 1; set <= 3; set += 1) {
+      if (set > 1) await untilPhase(0, set);
+      const target = targets[set - 1];
+      assert.equal(ui.stage.targetReps, target, `${set}세트 목표 ${target}회`);
+      await feedMc((target - 2) * 1000 + 900);
+      assert.deepEqual([ui.hud.kind, ui.hud.target, ui.hud.reps], ['reps', target, target - 1], `${set}세트 REPS 링: count / 현재 세트 목표`);
+      assert.equal(ui.stage.currentReps, target - 1, `${set}세트 ${target - 1}회: 아직 진행`);
+      assert.equal(ui.stage.phase.kind, 'exercising');
+      assert.equal(ui.hud.seconds, remaining(), '링 옆 잔여 시간 = 기존 PhaseTimer');
+      await feedMc(2500);
+      if (set < 3) {
+        assert.equal(ui.stage.phase.kind, 'resting', `${set}세트 ${target}회 도달 → 종료`);
+        assert.equal(ui.stage.targetReps, targets[set], `휴식 중 표시 목표 = 다음(${set + 1})세트 ${targets[set]}회`);
+      }
+    }
+    assert.ok(ui.completeRenders > 0, '마지막 세트 24회 → 운동 완료');
+    const session = await lastSession();
+    assert.deepEqual(session.sets.map((x) => [x.routineSetId, x.actualReps, x.actualDurationSeconds]),
+      fx.exercise.sets.map((x, i) => [x.id, targets[i], null]), 'Workout 저장: actualReps = AI count, 시간 null');
+    const pose = await poseItems();
+    assert.deepEqual(pose.map((i) => [i.routineSetId, i.payload.summary.count]), fx.exercise.sets.map((x, i) => [x.id, targets[i]]), 'AI 결과 세트별 1건');
+    assert.deepEqual(feedbacks().map((e) => [e.exerciseId, e.actualReps, e.actualDurationSeconds]),
+      targets.map((n) => ['mountain-climber', n, undefined]), 'SET_FEEDBACK 주 측정값 count');
+    await unmount(root);
+  });
+
+  test('C4. 기존 60초 타이머 만료 종료 유지: 목표 미달이면 실제 count로 저장', async () => {
+    const fx = routine(MC([24, 24]));
+    const root = await startWith(fx);
+    await feedMc(4900); // 5회
+    await feedMc(EXERCISE_DURATION_SECONDS * 1000 - 4900 + 1000, 'still');
+    assert.equal(ui.stage.phase.kind, 'resting', '타이머 만료로 세트 종료');
+    assert.equal(stallAlerts().length, 0, '측정 프레임이 있으므로 M10 정지 아님');
+    const set = (await localSession()).sets[0];
+    assert.deepEqual([set.routineSetId, set.actualReps, set.actualDurationSeconds], [fx.exercise.sets[0].id, 5, null]);
+    assert.deepEqual(feedbacks().map((e) => e.actualReps), [5]);
+    assert.equal((await poseItems()).length, 1);
+    await unmount(root);
+  });
+
+  test('C5. 수동 일시정지·재개 후 누적 count 유지, 세트 결과 중복 없음', async () => {
+    const root = await startWith(routine(MC([16, 16])));
+    await feedMc(5900); // 6회
+    assert.equal(ui.stage.currentReps, 6);
+    await act(async () => { ui.stage.onPressMenu(); }); await settle();
+    assert.equal(ui.stage.pause, 'paused');
+    await feedMc(3000); // 일시정지 중 프레임은 측정하지 않음
+    assert.equal(ui.stage.currentReps, 6, '일시정지 중 증가·손실 없음');
+    await resumeLikeUser();
+    assert.equal(ui.stage.currentReps, 6, '재개 후 누적 6회 유지');
+    await feedMc(10900);
+    assert.equal(ui.stage.phase.kind, 'resting', '16회 도달 → 종료');
+    assert.deepEqual((await localSession()).sets.map((x) => x.actualReps), [16]);
+    assert.equal((await poseItems()).length, 1);
+    await unmount(root);
+  });
+
+  test('C6. REPS checkpoint·이어하기: 같은 세트·snapshot 목표로 실제 분석기 재연결, 결과 저장', async () => {
+    const fx = routine(MC([16, 20]));
+    let root = await startWith(fx);
+    await feedMc(16 * 1000);
+    await untilPhase(0, 2);
+    await feedMc(3900);
+    await act(async () => { ui.stage.onPressMenu(); }); await settle();
+    await advance(500);
+    await act(async () => { ui.stage.onPressStop(); }); await settle();
+    await advance(500);
+    await act(async () => { ui.stage.onConfirmStop(); }); await settle();
+    const draft = useWorkoutDraftStore.getState().draft;
+    assert.deepEqual([draft.exerciseId, draft.phase, draft.set, draft.targetReps], ['mountain-climber', 'exercising', 2, 20], 'checkpoint = 2세트 목표 20회');
+    await unmount(root);
+
+    root = await mount({ resume: '1' });
+    assert.deepEqual([ui.stage.phase.set, ui.stage.targetReps], [2, 20], '이어하기: 2세트 목표 20회');
+    await resumeLikeUser();
+    await feedMc(1500);
+    assert.deepEqual([ui.hud.kind, ui.hud.reps, ui.hud.target], ['reps', 1, 20], '이어하기 후 실제 분석기 count로 REPS 링');
+    await feedMc(18 * 1000 + 400);
+    assert.ok(ui.completeRenders > 0, '20회 → 마지막 세트 완료');
+    const session = await lastSession();
+    assert.deepEqual(session.sets.map((x) => [x.routineSetId, x.actualReps, x.actualDurationSeconds]),
+      [[fx.exercise.sets[0].id, 16, null], [fx.exercise.sets[1].id, 20, null]]);
+    assert.equal((await poseItems()).length, 2, 'AI 결과 중복 없음');
+    await unmount(root);
+  });
+
+  test('C7. 루틴 내 다음 운동 전환: 스쿼트 → 마운틴 클라이머(REPS) 실제 분석기 연결', async () => {
+    const fx = multi([{ exerciseId: 'squat', measurementType: 'REPS', sets: [{ reps: 2 }] }, MC([3])]);
+    const root = await startWith(fx);
+    // 앞 운동(스쿼트)은 기존 3-1b/3-1c 방식(실제 Squat 분석기 출력의 count만 지정)으로 2회 종료. 마운틴 클라이머는 주입 없이 실제 분석기
+    testMeasure.value = { count: 2 }; testMeasure.summary = { count: 2 };
+    await act(async () => { feedFrames = true; pushEmptyFrame(); feedFrames = false; }); await settle();
+    testMeasure.value = null; testMeasure.summary = null;
+    assert.notEqual(ui.stage.phase.kind, 'exercising', '스쿼트 세트 종료');
+    await untilPhase(1, 1);
+    assert.equal(ui.stage.targetReps, 3);
+    await feedMc(1500);
+    assert.deepEqual([ui.hud.kind, ui.hud.reps, ui.hud.target], ['reps', 1, 3], '다음 운동 REPS 링');
+    await feedMc(1400);
+    assert.ok(ui.completeRenders > 0, '마운틴 클라이머 3회 → 루틴 완료');
+    const session = await lastSession();
+    assert.deepEqual(session.sets.map((x) => [x.routineSetId, x.actualReps]), [[fx.exercises[0].sets[0].id, 2], [fx.exercises[1].sets[0].id, 3]]);
+    assert.deepEqual((await poseItems()).map((i) => i.payload.exercise), ['squat', 'mountain_climber']);
+    await unmount(root);
+  });
+
+  test('L1. legacy DURATION 마운틴 클라이머가 다음 운동으로 등장: 분석기 미연결·결과 없음·기존 M10 정지', async () => {
+    const fx = multi([{ exerciseId: 'squat', measurementType: 'REPS', sets: [{ reps: 2 }] }, LEGACY_MC]);
+    const root = await startWith(fx);
+    testMeasure.value = { count: 2 }; testMeasure.summary = { count: 2 }; // 앞 운동 스쿼트만 기존 방식으로 2회 종료
+    await act(async () => { feedFrames = true; pushEmptyFrame(); feedFrames = false; }); await settle();
+    testMeasure.value = null; testMeasure.summary = null;
+    await untilPhase(1, 1);
+    await feedMc(3000); // 실제 동작 프레임이 들어와도
+    assert.equal(ui.hud.kind, 'duration', 'legacy snapshot은 기존 DURATION 표시 유지(REPS로 강제 변경 없음)');
+    await feedMc(17 * 1000 + 500);
+    assert.equal(ui.stage.currentReps, null, '분석기 미연결 → 측정값 없음');
+    assert.equal(stallAlerts().length, 1, '기존 M10 안내로 정지');
+    const stuck = ui.stage.phase;
+    await advance(500);
+    await act(async () => { ui.stage.onPressResume(); }); await settle();
+    assert.equal(ui.stage.phase.id, stuck.id, '같은 충돌 세트 재시도 없음');
+    const session = await localSession();
+    assert.deepEqual(session.sets.map((x) => x.routineSetId), [fx.exercises[0].sets[0].id], '스쿼트 결과만, 마운틴 클라이머 결과 없음');
+    assert.deepEqual((await poseItems()).map((i) => i.payload.exercise), ['squat']);
+    assert.equal(session.routineSnapshot.exercises[1].measurementType, 'DURATION', 'snapshot 미변경');
+    assert.equal(session.routineSnapshot.exercises[1].sets[0].targetDurationSeconds, 20, '시간 목표를 횟수로 변환하지 않음');
+    await unmount(root);
+  });
+
+  test('L2. legacy DURATION checkpoint를 V13 REPS 화면 snapshot으로 이어하기: 세션 snapshot 기준으로 차단(계약 우회 없음)', async () => {
+    const legacy = routine(LEGACY_MC);
+    let root = await startWith(legacy);
+    await act(async () => { ui.stage.onPressMenu(); }); await settle();
+    await advance(500);
+    await act(async () => { ui.stage.onPressStop(); }); await settle();
+    await advance(500);
+    await act(async () => { ui.stage.onConfirmStop(); }); await settle();
+    await unmount(root);
+    const before = await offline.getLocalWorkout(owner);
+    assert.equal(before.session.routineSnapshot.exercises[0].measurementType, 'DURATION');
+
+    // 같은 루틴·세트 ID가 V13 이후 REPS 16회로 다시 내려온 상황(화면 store만 갱신, 진행 세션 snapshot은 그대로)
+    const exercise = { ...legacy.exercise, measurementType: 'REPS', sets: legacy.exercise.sets.map((x) => ({ ...x, targetReps: 16, targetDurationSeconds: null })) };
+    stores.today.setState({ routineSnapshot: { ...legacy.snapshot, exercises: [exercise] },
+      sessions: [{ ...legacy.sessions[0], measurementType: 'REPS', reps: 16 }] });
+    root = await mount({ resume: '1' });
+    await resumeLikeUser();
+    await feedMc(EXERCISE_DURATION_SECONDS * 1000 + 500);
+    assert.equal(ui.stage.currentReps, null, '세션 snapshot(DURATION)과 다른 화면 계약으로 분석기를 만들지 않음');
+    assert.equal(stallAlerts().length, 1, '기존 M10 정지 경로');
+    assert.equal((await poseItems()).length, 0, 'AI 결과 없음');
+    const after = await offline.getLocalWorkout(owner);
+    assert.equal(after.session.sets.length, 0, 'Workout 결과 없음');
+    assert.deepEqual(after.session.routineSnapshot, before.session.routineSnapshot, '진행 세션 snapshot·checkpoint 대상 미변경');
+    await unmount(root);
+  });
+
+  test('L3. legacy DURATION checkpoint를 같은 DURATION snapshot으로 이어하기: 기존 conflict 차단 유지', async () => {
+    let root = await startWith(routine(LEGACY_MC));
+    await act(async () => { ui.stage.onPressMenu(); }); await settle();
+    await advance(500);
+    await act(async () => { ui.stage.onPressStop(); }); await settle();
+    await advance(500);
+    await act(async () => { ui.stage.onConfirmStop(); }); await settle();
+    await unmount(root);
+    root = await mount({ resume: '1' });
+    await resumeLikeUser();
+    await feedMc(3000);
+    assert.equal(ui.hud.kind, 'duration', 'legacy DURATION 표시 유지');
+    await feedMc(17 * 1000 + 500);
+    assert.equal(ui.stage.currentReps, null);
+    assert.equal(stallAlerts().length, 1);
+    assert.equal((await poseItems()).length, 0);
+    assert.equal((await offline.getLocalWorkout(owner)).session.sets.length, 0);
+    await unmount(root);
+  });
+
+  test('L4. 잘못된 REPS 목표(snapshot targetReps 누락)는 보정하지 않고 기존 무효 목표 정지', async () => {
+    const fx = routine({ exerciseId: 'mountain-climber', measurementType: 'REPS', sets: [{ reps: 16 }, { reps: null }] });
+    fx.exercise.sets[1].targetReps = null;
+    const root = await startWith(fx);
+    await feedMc(16 * 1000);
+    await untilPhase(0, 2);
+    assert.equal(ui.stage.targetReps, 0, '누락 목표를 다른 세트 값(16)으로 대체하지 않음');
+    await feedMc(EXERCISE_DURATION_SECONDS * 1000 + 500);
+    assert.deepEqual((await localSession()).sets.map((x) => x.actualReps), [16], '무효 목표 세트 결과 저장 없음');
+    assert.equal((await poseItems()).length, 1);
+    await unmount(root);
   });
 });

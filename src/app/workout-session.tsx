@@ -370,6 +370,17 @@ export default function WorkoutSessionScreen() {
   const exitingRef = useRef(false);
 
   /**
+   * 세트 분석기. 측정 계약은 진행 중 세션에 고정된 routineSnapshot(결과 저장 검증과 같은 값) 기준이며,
+   * 화면 snapshot과 종목·측정 유형이 다르면(예: 이어하기한 V13 이전 DURATION 마운틴 클라이머 세션) 연결하지 않는다
+   */
+  const createSessionAnalyzer = useCallback((exerciseIndex: number) => {
+    const planned = snapshot?.exercises[exerciseIndex];
+    const frozen = serverSession.current?.session.routineSnapshot?.exercises[exerciseIndex];
+    if (!planned || !frozen || planned.exerciseId !== frozen.exerciseId || planned.measurementType !== frozen.measurementType) return null;
+    return createExerciseAnalyzer(frozen.exerciseId, frozen.measurementType);
+  }, [snapshot]);
+
+  /**
    * M10: 측정 결과 없이 0초에 도달해 멈춘 운동 세트의 phase id. 사용자가 '운동 재개'를 눌러야만(명시적 선택) 같은 세트를 처음부터 다시 시작.
    * 이어하기로 0초 운동 단계에 재진입한 경우도 같은 상태로 시작한다(첫 phase id는 0).
    * 자동 일시정지(남은 시간 보존 후 5초 복귀)와는 별개 기능.
@@ -381,8 +392,7 @@ export default function WorkoutSessionScreen() {
   const restartStalledSet = useCallback((): boolean => {
     const current = phaseRef.current;
     if (current.kind !== 'exercising' || stalledPhaseIdRef.current !== current.id) return false;
-    const exerciseId = snapshot?.exercises[current.exerciseIndex]?.exerciseId;
-    if (!exerciseId || !createExerciseAnalyzer(exerciseId)) return false;
+    if (!createSessionAnalyzer(current.exerciseIndex)) return false;
     // 목표 횟수를 결정할 수 없는 REPS 세트도 재시도해도 같은 무효 목표라 재시작하지 않는다(무한 재시도 방지)
     if (hasInvalidRepsTarget(current)) return false;
     stalledPhaseIdRef.current = null; // 연속 입력 시 한 번만
@@ -390,7 +400,7 @@ export default function WorkoutSessionScreen() {
     // 새 id → PhaseTimer key 변경으로 타이머 remount(completedRef 초기화), 목표 시간 재적용. 이전 타이머의 늦은 완료는 id 불일치로 무시
     setPhase(p => (p.id === current.id ? { ...current, id: current.id + 1 } : p));
     return true;
-  }, [snapshot, hasInvalidRepsTarget]);
+  }, [createSessionAnalyzer, hasInvalidRepsTarget]);
 
   /**
    * 자동 일시정지 상태 전환. 상태 모델이 changed=false를 주면(중복·순서 오류 이벤트) 아무것도 하지 않는다.
@@ -469,7 +479,7 @@ export default function WorkoutSessionScreen() {
         const routineExercise = snapshot.exercises[currentPhase.exerciseIndex];
         const routineSet = routineExercise?.sets[currentPhase.set - 1];
         if (!routineExercise || !routineSet) return;
-        const analyzer = createExerciseAnalyzer(routineExercise.exerciseId);
+        const analyzer = createSessionAnalyzer(currentPhase.exerciseIndex);
         if (!analyzer) return;
         const pipeline = createPosePipeline({
           analyzer,
@@ -546,7 +556,7 @@ export default function WorkoutSessionScreen() {
         if (__DEV__) console.warn('[WorkoutSession] pose frame error', err);
       }
     },
-    [owner, pause, snapshot, sessions, resolveExercise, finishCurrentPoseSet, applyAutoPauseEvent],
+    [owner, pause, snapshot, sessions, resolveExercise, finishCurrentPoseSet, applyAutoPauseEvent, createSessionAnalyzer],
   );
 
   if (__DEV__) console.log('[WorkoutSession]', phase, pause);

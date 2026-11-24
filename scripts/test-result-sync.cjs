@@ -7,6 +7,7 @@ const disk = new Map(), calls = []; let online = false;
 const poseIds = { poseExerciseId: id => ({ 'push-up': 'pushup', 'pike-push-up': 'pike_pushup', 'incline-push-up': 'incline_pushup' })[id] ?? null };
 // 3-1c: commitPoseSet이 지원 상태(poseSupport)로 검증 → 같은 매핑을 supported로 제공
 poseIds.poseSupport = id => { const poseId = poseIds.poseExerciseId(id); return poseId ? { status: 'supported', poseId } : { status: 'unknown', poseId: null }; };
+poseIds.poseSupportForSnapshot = id => poseIds.poseSupport(id); // 3-4c: 이 시나리오(push-up REPS)는 계약 지정 종목이 아님
 const storage = { getItem: async key => disk.get(key) ?? null, setItem: async (key, value) => disk.set(key, value) };
 class ApiError extends Error { constructor(status) { super('offline'); this.status = status; } }
 const api = {
@@ -35,7 +36,7 @@ function load() { const m = { exports: {} }; const deps = { '@react-native-async
   assert.deepEqual(calls, ['session:ACTIVE:0:0', 'session:ACTIVE:1:1', 'pose:planned-set:3', 'session:COMPLETED:2:1', 'report:s']);
   assert.equal(await offline.pendingCount('u'), 0);
   console.log('PASS: measured set, offline restart and report generation ordering');
-})().then(contract31c).catch(error => { console.error(error); process.exitCode = 1; });
+})().then(contract31c).then(contract34c).catch(error => { console.error(error); process.exitCode = 1; });
 
 // ---------- 3-1c: 주 측정값(REPS=count, DURATION=holdSeconds) · 보조값 · 원본 보존 · 원자성 ----------
 // 실제 poseExerciseIds.ts(23종 지원 상태)를 사용한다. Workout 계약: actualReps·actualDurationSeconds 각각 null 허용,
@@ -116,4 +117,80 @@ async function contract31c() {
     ['push-up-1', 'bird-dog-1', 'superman-1', 'plank-1', 'squat-1', 'plank-2', 'push-up-2'], '10. AI 결과 큐 순서 보존, 거부된 항목 없음');
   assert.equal(final.queue.filter(i => i.kind !== 'pose').length, 1 + 7, '10. 세션 동기화 항목 = 시작 1 + 저장 성공 7');
   console.log('PASS: 3-1c primary measure (REPS count / DURATION hold), auxiliary values kept only in AI payload, validation and atomic commit');
+}
+
+// ---------- 3-4c: 마운틴 클라이머 V13 REPS 저장 계약 · legacy DURATION·측정 유형 오류 차단 ----------
+// 실제 poseExerciseIds.ts 사용. 측정 payload는 실제 MountainClimberAnalyzer set.completed v2 필드 구성(count·holdSeconds null·observedSeconds·items·details.repetitions)을 따른 고정값이며,
+// 실제 분석기 통합은 test-auto-pause-session.cjs 3-4c에서 검증한다.
+async function contract34c() {
+  const idsJs = ts.transpileModule(fs.readFileSync(require('node:path').join(__dirname, '../src/services/poseExerciseIds.ts'), 'utf8'),
+    { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+  const realIds = { exports: {} }; new Function('module', 'exports', idsJs)(realIds, realIds.exports);
+  const store = new Map();
+  const storage3 = { getItem: async key => store.get(key) ?? null, setItem: async (key, value) => { store.set(key, value); } };
+  const m = { exports: {} };
+  const deps = { '@react-native-async-storage/async-storage': { __esModule: true, default: storage3 }, '@/services/api': { ApiError }, '@/services/poseExerciseIds': realIds.exports, '@/services/workoutSessionService': api };
+  new Function('require', 'module', 'exports', js)(name => deps[name], m, m.exports);
+  const offline = m.exports;
+  const ex = (prefix, measurementType) => ({ exerciseId: 'mountain-climber', measurementType, sets: [1, 2, 3].map(i => ({ id: `${prefix}-${i}` })) });
+  const { measurementType: _omit, ...missing } = ex('mc-missing', 'REPS');
+  const snapshot = { exercises: [ex('mc-reps', 'REPS'), ex('mc-legacy', 'DURATION'), missing, ex('mc-bad', 'TIME'), ex('mc-null', null)] };
+  await offline.queueSession('d', 's4', { routineId: 'r', routineSnapshot: snapshot, status: 'ACTIVE', revision: 0, sets: [] }, { sessionId: 's4' });
+  const originalSnapshot = JSON.stringify(snapshot);
+  let n = 0;
+  const reps = (count) => Array.from({ length: count }, (_, i) => ({ number: i + 1, timestampMs: 1000 + i * 1000, items: { hip_height: 'within_reference' }, codes: [],
+    metrics: { side: i % 2 === 0 ? 'left' : 'right', peakKneeForward: 0.42, cycleMs: 500 } }));
+  const pose = (setId, summary, exercise = 'mountain_climber') => ({ sessionId: 's4', resultId: `mc${++n}`, routineSetId: setId, performedAt: '2026-11-24T00:00:00Z',
+    payload: { schemaVersion: '2.0', type: 'set.completed', exercise, engineVersion: 'mountain-climber-0.5', timestampMs: 17000,
+      summary: { schemaVersion: '2.0', exercise, engineVersion: 'mountain-climber-0.5', holdSeconds: null, observedSeconds: 15.9, gapSeconds: 0,
+        items: { hip_height: { aggregationBasis: 'repetition', compliancePct: 100 } }, ...summary } } });
+  const raw = () => store.get('barofit.workout.v1.d');
+  const setOf = async id => (await offline.getLocalWorkout('d')).session.sets.find(x => x.routineSetId === id);
+  async function rejectsWithoutChange(item, label) {
+    const before = raw();
+    await assert.rejects(offline.commitPoseSet('d', item), undefined, label);
+    assert.equal(raw(), before, `${label}: 거부 시 저장 데이터 불변`);
+  }
+  // 1. V13 REPS: actualReps = 실제 count(16, 변환 없음), actualDurationSeconds = null (observedSeconds·경과시간 미사용)
+  const first = pose('mc-reps-1', { count: 16, details: { repetitions: reps(16) } });
+  await offline.commitPoseSet('d', first);
+  assert.deepEqual([(await setOf('mc-reps-1')).actualReps, (await setOf('mc-reps-1')).actualDurationSeconds], [16, null], '1. count 16 → actualReps 16, 시간 null');
+  assert.equal((await setOf('mc-reps-1')).modelVersion, 'mountain-climber-0.5');
+  // 2. AI 원본 payload(보조값·details·items·engineVersion·반복 기록) 그대로 보존
+  const queued = () => JSON.parse(raw()).queue.filter(i => i.kind === 'pose');
+  assert.deepEqual(queued()[0].payload, first.payload, '2. AI 원본 보존');
+  assert.equal(queued()[0].payload.summary.details.repetitions.filter(r => r.metrics.side === 'left').length, 8, '2. 좌 8 · 우 8 반복 기록 유지');
+  // 3. 중복 저장 방지: 같은 요청 재시도는 무시, 같은 세트에 다른 결과는 거부
+  const beforeDup = raw();
+  await offline.commitPoseSet('d', first);
+  assert.equal(raw(), beforeDup, '3. 동일 요청 재시도 → 변경 없음');
+  await rejectsWithoutChange({ ...first, resultId: 'other' }, '3. 같은 세트 다른 결과 ID');
+  await rejectsWithoutChange(pose('mc-reps-1', { count: 20 }), '3. 같은 세트 다른 count');
+  // 4. REPS에 holdSeconds가 있어도 시간으로 저장하지 않음
+  await offline.commitPoseSet('d', pose('mc-reps-2', { count: 20, holdSeconds: 12.5 }));
+  assert.deepEqual([(await setOf('mc-reps-2')).actualReps, (await setOf('mc-reps-2')).actualDurationSeconds], [20, null], '4. hold 혼용 없음');
+  // 5. 주 측정값 누락·무효: count 누락(hold·observed로 대체 금지)·NaN·음수·비정수·상한 초과·문자열
+  for (const [label, summary] of [['count 누락', { count: undefined }], ['count null', { count: null, holdSeconds: 20 }], ['NaN', { count: NaN }],
+    ['음수', { count: -2 }], ['비정수', { count: 2.5 }], ['상한 초과', { count: 10001 }], ['문자열', { count: '24' }]])
+    await rejectsWithoutChange(pose('mc-reps-3', summary), `5. ${label}`);
+  // 6. 분석기 불일치(다른 분석기 결과로 대체 금지)
+  await rejectsWithoutChange(pose('mc-reps-3', { count: 24 }, 'pushup'), '6. pushup 결과');
+  await rejectsWithoutChange(pose('mc-reps-3', { count: 24 }, 'plank'), '6. plank 결과');
+  // 7. legacy DURATION snapshot: count·hold 어느 쪽이 있어도 저장 차단 (REPS로 변환하지 않음)
+  await rejectsWithoutChange(pose('mc-legacy-1', { count: 20 }), '7. legacy DURATION + count');
+  await rejectsWithoutChange(pose('mc-legacy-1', { count: null, holdSeconds: 20 }), '7. legacy DURATION + hold');
+  // 8. 측정 유형 누락·잘못된 값
+  await rejectsWithoutChange(pose('mc-missing-1', { count: 16 }), '8. measurementType 누락');
+  await rejectsWithoutChange(pose('mc-bad-1', { count: 16 }), '8. measurementType TIME');
+  await rejectsWithoutChange(pose('mc-null-1', { count: 16 }), '8. measurementType null');
+  // 9. count 0은 유효한 측정(누락과 구분)
+  await offline.commitPoseSet('d', pose('mc-reps-3', { count: 0 }));
+  assert.deepEqual([(await setOf('mc-reps-3')).actualReps, (await setOf('mc-reps-3')).actualDurationSeconds], [0, null], '9. count 0 유효');
+  // 10. 최종: 저장 3건만, snapshot(legacy DURATION 포함) 변경 없음
+  const final = JSON.parse(raw());
+  assert.deepEqual(final.current.session.sets.map(x => [x.routineSetId, x.actualReps, x.actualDurationSeconds]),
+    [['mc-reps-1', 16, null], ['mc-reps-2', 20, null], ['mc-reps-3', 0, null]], '10. 저장 결과');
+  assert.deepEqual(queued().map(i => i.routineSetId), ['mc-reps-1', 'mc-reps-2', 'mc-reps-3'], '10. AI 결과 큐 = 저장 3건, 거부 항목 없음');
+  assert.equal(JSON.stringify(final.current.session.routineSnapshot), originalSnapshot, '10. 기존 snapshot(DURATION 포함) 미변경');
+  console.log('PASS: 3-4c mountain-climber REPS commit (actualReps = AI count, duration null, raw payload kept, dedupe) and legacy DURATION / missing·invalid measurementType blocked');
 }
