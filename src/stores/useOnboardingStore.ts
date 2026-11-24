@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { ageFromBirthDate } from '@/utils/birthDate';
 
 import {
   COACHING_STYLE_TO_PERSONA,
@@ -14,11 +15,15 @@ import {
   type WeeklyWorkoutDays,
 } from '@/types/onboarding';
 
-export const TOTAL_ONBOARDING_STEPS = 7;
+export const TOTAL_ONBOARDING_STEPS = 8;
 
 interface OnboardingState extends OnboardingProfile {
   step: number;
   ageInput: string;
+  birthYear: string;
+  birthMonth: string;
+  birthDay: string;
+  setBirthDatePart: (part: 'birthYear' | 'birthMonth' | 'birthDay', value: string) => void;
   heightInput: string;
   weightInput: string;
   persona: PersonaTone;
@@ -45,18 +50,22 @@ interface OnboardingState extends OnboardingProfile {
 const initialProfileState = {
   step: 1,
   nickname: '',
-  gender: 'MALE' as Gender,
+  gender: null as Gender | null,
   age: null as number | null,
   heightCm: null as number | null,
   weightKg: null as number | null,
   ageInput: '',
+  birthYear: '',
+  birthMonth: '',
+  birthDay: '',
   heightInput: '',
   weightInput: '',
   goal: null as ExerciseGoal | null,
   weeklyWorkoutDays: null as WeeklyWorkoutDays | null,
   experienceLevel: null as ExperienceLevel | null,
   discomfortSelections: [] as DiscomfortSelection[],
-  coachingStyle: null as CoachingStyle | null,
+  // 성향 선택 화면 보류 중에는 서버 필수값을 기본 친근한 코치로 보낸다.
+  coachingStyle: 'FRIENDLY' as CoachingStyle,
   persona: 'gentle' as PersonaTone,
 };
 
@@ -96,6 +105,13 @@ export const useOnboardingStore = create<OnboardingState>((set, get) => ({
     set((state) => ({
       gender: state.gender === 'MALE' ? 'FEMALE' : 'MALE',
     })),
+
+  setBirthDatePart: (part, value) => {
+    const text = value.replace(/[^0-9]/g, '').slice(0, part === 'birthYear' ? 4 : 2);
+    const birth = { birthYear: get().birthYear, birthMonth: get().birthMonth, birthDay: get().birthDay, [part]: text };
+    const age = ageFromBirthDate(birth.birthYear, birth.birthMonth, birth.birthDay);
+    set({ ...birth, age, ageInput: age === null ? '' : String(age) });
+  },
 
   setAgeInput: (value) => {
     const parsed = parsePositiveInt(value);
@@ -151,10 +167,11 @@ export const useOnboardingStore = create<OnboardingState>((set, get) => ({
   toOnboardingRequest: () => {
     const state = get();
     const trimmedNickname = state.nickname.trim();
+    const age = ageFromBirthDate(state.birthYear, state.birthMonth, state.birthDay);
     if (
       !trimmedNickname ||
       !state.gender ||
-      state.age === null ||
+      age === null || age < 14 || age > 100 ||
       state.heightCm === null ||
       state.weightKg === null ||
       !state.goal ||
@@ -173,7 +190,7 @@ export const useOnboardingStore = create<OnboardingState>((set, get) => ({
     return {
       nickname: trimmedNickname,
       gender: state.gender,
-      age: state.age,
+      birthDate: `${state.birthYear}-${state.birthMonth.padStart(2, '0')}-${state.birthDay.padStart(2, '0')}`,
       heightCm: state.heightCm,
       weightKg: state.weightKg,
       goal: state.goal,

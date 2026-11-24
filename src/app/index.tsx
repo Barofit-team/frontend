@@ -1,10 +1,11 @@
 import { router } from 'expo-router';
 import { useEffect } from 'react';
-import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
+import { Image } from 'expo-image';
+import { StatusBar } from 'expo-status-bar';
 
 import { ApiError } from '@/services/api';
 import type { MeResponse } from '@/types/onboarding';
-import { Colors } from '@/constants/theme';
 import { tokenStorage } from '@/services/tokenStorage';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useOnboardingStore } from '@/stores/useOnboardingStore';
@@ -17,12 +18,20 @@ import { useOnboardingStore } from '@/stores/useOnboardingStore';
 export default function Index() {
   useEffect(() => {
     let active = true;
+    let splashTimer: ReturnType<typeof setTimeout>;
+    const minimumSplash = new Promise<void>((resolve) => {
+      splashTimer = setTimeout(resolve, 2000);
+    });
+    const navigate = async (path: '/login' | '/home' | '/onboarding') => {
+      await minimumSplash;
+      if (active) router.replace(path);
+    };
 
     const restoreSession = async () => {
       const accessToken = await tokenStorage.getAccessToken();
       if (!active) return;
       if (!accessToken) {
-        router.replace('/login');
+        await navigate('/login');
         return;
       }
 
@@ -30,10 +39,10 @@ export default function Index() {
         const me = await useAuthStore.getState().loadMyAccount();
         if (!active) return;
         if (me.isOnboarded) {
-          router.replace('/home');
+          await navigate('/home');
         } else {
           useOnboardingStore.getState().resetOnboarding();
-          router.replace('/onboarding');
+          await navigate('/onboarding');
         }
       } catch (error) {
         // 오프라인일 때만 마지막으로 서버가 확인한 계정을 사용합니다.
@@ -44,25 +53,32 @@ export default function Index() {
               const me = JSON.parse(cached) as MeResponse;
               if (me.id && me.isOnboarded) {
                 useAuthStore.getState().applyMeResponse(me);
-                if (active) router.replace('/home');
+                if (active) await navigate('/home');
                 return;
               }
             } catch {}
           }
         }
-        if (active) router.replace('/login');
+        if (active) await navigate('/login');
       }
     };
 
     void restoreSession();
     return () => {
       active = false;
+      clearTimeout(splashTimer);
     };
   }, []);
 
   return (
     <View style={styles.container}>
-      <ActivityIndicator size="large" />
+      <StatusBar style="light" />
+      <Image
+        source={require('@/assets/images/splash-wordmark.png')}
+        style={styles.wordmark}
+        contentFit="contain"
+        accessibilityLabel="Barofit"
+      />
     </View>
   );
 }
@@ -72,6 +88,10 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: Colors.background,
+    backgroundColor: '#3473F8',
+  },
+  wordmark: {
+    width: 176,
+    height: 55,
   },
 });
