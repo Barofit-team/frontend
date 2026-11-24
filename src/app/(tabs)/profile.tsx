@@ -1,6 +1,7 @@
 import { router, useFocusEffect } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import React, { useCallback, useState } from 'react';
+import { ageFromBirthDate } from '@/utils/birthDate';
 import {
   ActivityIndicator,
   Image,
@@ -52,8 +53,7 @@ type EditFieldType =
 type EditableField = Exclude<EditFieldType, null>;
 
 /** 서버 검증 규칙(docs/onboarding-api.md 3장)과 같은 숫자 범위 */
-const NUMBER_RULES: Record<'age' | 'heightCm' | 'weightKg', { min: number; max: number; label: string }> = {
-  age: { min: 14, max: 100, label: '나이' },
+const NUMBER_RULES: Record<'heightCm' | 'weightKg', { min: number; max: number; label: string }> = {
   heightCm: { min: 100, max: 250, label: '키' },
   weightKg: { min: 20, max: 300, label: '몸무게' },
 };
@@ -86,6 +86,7 @@ const GOAL_OPTIONS: { value: ExerciseGoal; label: string }[] = [
   { value: 'STRENGTH', label: '근력 향상' },
   { value: 'ENDURANCE', label: '체력 증진' },
   { value: 'POSTURE', label: '자세 교정' },
+  { value: 'HABIT', label: '운동 습관 형성' },
 ];
 
 const GOAL_LABEL_MAP: Record<ExerciseGoal, string> = {
@@ -93,6 +94,7 @@ const GOAL_LABEL_MAP: Record<ExerciseGoal, string> = {
   STRENGTH: '근력 향상',
   ENDURANCE: '체력 증진',
   POSTURE: '자세 교정',
+  HABIT: '운동 습관 형성',
 };
 
 const FREQUENCY_OPTIONS: { value: WeeklyWorkoutDays; label: string }[] = [
@@ -244,7 +246,7 @@ export default function ProfileScreen() {
         break;
       case 'profileMeta':
         setDraftGender(effectiveGender);
-        setDraftText(String(effectiveAge));
+        setDraftText(profile?.birthDate ?? '');
         break;
       case 'bodySpec':
         setDraftHeightText(String(effectiveHeightCm));
@@ -307,14 +309,15 @@ export default function ProfileScreen() {
         return { request: nickname === user?.nickname ? null : { nickname } };
       }
       case 'profileMeta': {
-        const ageRule = NUMBER_RULES.age;
-        const age = Number(draftText);
-        if (!draftText || !Number.isInteger(age) || age < ageRule.min || age > ageRule.max) {
-          return { error: `${ageRule.label}는 ${ageRule.min}~${ageRule.max} 사이로 입력해 주세요.` };
+        const birthDate = draftText.trim();
+        const parts = birthDate.split('-');
+        const age = ageFromBirthDate(parts[0] ?? '', parts[1] ?? '', parts[2] ?? '');
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(birthDate) || age === null || age < 14 || age > 100) {
+          return { error: '생년월일을 YYYY-MM-DD 형식으로 입력해주세요. 만 14~100세만 사용할 수 있어요.' };
         }
         const patch: ProfileUpdateRequest = {};
         if (draftGender !== effectiveGender) patch.gender = draftGender;
-        if (age !== effectiveAge) patch.age = age;
+        if (birthDate !== profile?.birthDate) patch.birthDate = birthDate;
         return { request: Object.keys(patch).length > 0 ? patch : null };
       }
       case 'bodySpec': {
@@ -363,7 +366,15 @@ export default function ProfileScreen() {
       setOnboardingNickname(nickname);
     }
     if (Object.keys(profileFields).length > 0) {
-      updateProfile(profileFields);
+      const birth = profileFields.birthDate?.split('-');
+      const age = birth ? ageFromBirthDate(birth[0], birth[1], birth[2]) : null;
+      updateProfile({ ...profileFields, ...(age === null ? {} : { age }) });
+      if (birth) {
+        const store = useOnboardingStore.getState();
+        store.setBirthDatePart('birthYear', birth[0]);
+        store.setBirthDatePart('birthMonth', birth[1]);
+        store.setBirthDatePart('birthDay', birth[2]);
+      }
     }
     if (profileFields.gender) setOnboardingGender(profileFields.gender);
     if (profileFields.age) setOnboardingAgeInput(String(profileFields.age));
@@ -513,12 +524,12 @@ export default function ProfileScreen() {
 
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="성별 및 나이 수정"
+              accessibilityLabel="성별 및 생년월일 수정"
               hitSlop={6}
               onPress={() => openEditModal('profileMeta')}
               style={({ pressed }) => pressed && styles.pressed}>
               <Text style={styles.profileSubText}>
-                {`${genderLabel} · ${effectiveAge}세`}
+                {`${genderLabel} · ${profile?.birthDate ? profile.birthDate.replace(/-/g, '.') : `만 ${effectiveAge}세`}`}
               </Text>
             </Pressable>
           </View>
@@ -620,10 +631,10 @@ export default function ProfileScreen() {
                 </>
               )}
 
-              {/* 성별 및 나이 변경 모달 */}
+              {/* 성별 및 생년월일 변경 모달 */}
               {activeField === 'profileMeta' && (
                 <>
-                  <Text style={styles.sheetTitle}>성별 및 나이 변경</Text>
+                  <Text style={styles.sheetTitle}>성별 및 생년월일 변경</Text>
                   <View style={styles.optionGroup}>
                     <View style={styles.genderRow}>
                       {GENDER_OPTIONS.map((item) => {
@@ -652,10 +663,10 @@ export default function ProfileScreen() {
 
                     <TextInput
                       value={draftText}
-                      onChangeText={(text) => setDraftText(text.replace(/[^0-9]/g, ''))}
-                      keyboardType="number-pad"
-                      maxLength={3}
-                      placeholder="나이 (예: 27)"
+                      onChangeText={(text) => setDraftText(text.replace(/[^0-9-]/g, ''))}
+                      keyboardType="default"
+                      maxLength={10}
+                      placeholder="생년월일 (YYYY-MM-DD)"
                       placeholderTextColor="#9CA3AF"
                       style={styles.sheetInput}
                     />

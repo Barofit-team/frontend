@@ -34,6 +34,7 @@ const GOAL_LABEL_MAP: Record<ExerciseGoal, string> = {
   STRENGTH: '근력 향상',
   ENDURANCE: '체력 증진',
   POSTURE: '자세 교정',
+  HABIT: '운동 습관 형성',
 };
 
 /** 한글 마지막 글자의 받침(종성) 유무에 따라 조사 '을' 또는 '를'을 붙여 반환합니다. */
