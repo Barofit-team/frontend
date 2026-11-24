@@ -20,7 +20,7 @@ import {
 import type { PoseFrameResult } from '@/services/poseCoaching';
 import { createPoseCoach } from '@/services/poseCoaching';
 import { flushWorkoutQueue, commitPoseSet } from '@/services/offlineWorkout';
-import { poseExerciseId } from '@/services/poseExerciseIds';
+import { poseSupport } from '@/services/poseExerciseIds';
 import type { CoachingEvent } from '@/types/tts';
 
 type Completed = Record<string, unknown> & { schemaVersion: string; type: string; exercise: string };
@@ -30,9 +30,17 @@ export interface PoseAnalyzer {
   finish(): Completed[];
 }
 
-export function createExerciseAnalyzer(routineOrPoseId: string): PoseAnalyzer | null {
-  const id = poseExerciseId(routineOrPoseId) ?? routineOrPoseId;
-  switch (id) {
+/**
+ * Routine exerciseId → 분석기. 입력은 Routine ID만 받는다(AI ID·미확인 ID를 그대로 통과시키지 않음).
+ *  - supported: 명시 매핑된 분석기 생성
+ *  - conflict(마운틴 클라이머: Routine DURATION ↔ AI count): Routine을 REPS로 통일하는 백엔드 수정 전까지 연결하지 않는다.
+ *    잘못된 단위의 결과를 만들지 않도록 기존 M10 미지원 경로(측정 없이 진행 → 기존 안내 후 정지, 재시도 없음)를 쓴다
+ *  - incomplete·not_implemented·unknown: null (기존 M10 미지원 경로)
+ */
+export function createExerciseAnalyzer(routineExerciseId: string): PoseAnalyzer | null {
+  const support = poseSupport(routineExerciseId);
+  if (support.status !== 'supported') return null;
+  switch (support.poseId) {
     case 'pushup':
       return new PushupAnalyzer() as unknown as PoseAnalyzer;
     case 'plank':

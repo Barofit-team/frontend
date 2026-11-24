@@ -140,6 +140,8 @@ const realSources = new Set([
   'services/poseCoaching', 'services/poseExerciseIds', 'stores/useWorkoutDraftStore',
   // 자동 일시정지 2단계에서 화면이 import (기본 어댑터는 'unknown'만 반환 → M10 시나리오 동작 불변)
   'components/workout-session/autoPauseMachine', 'services/trackingSignalAdapter',
+  // 3-1a: 준비 화면 readiness 훅(실제 @barofit/pose CameraReadiness 사용)
+  'hooks/useCameraReadiness',
 ]);
 const realPackages = {
   react: () => require(nm('react')),
@@ -702,8 +704,9 @@ describe('3-1b — 측정값 분리와 현재 세트 목표값', () => {
     await unmount(root);
   });
 
-  test('N2. DURATION(마운틴 클라이머): count가 목표 초를 넘어도 횟수로 종료하지 않고 시간으로 표시하지 않음', async () => {
-    const root = await startWith(routine({ exerciseId: 'mountain-climber', measurementType: 'DURATION', sets: [{ seconds: 30 }, { seconds: 30 }] }));
+  // 3-1a에서 마운틴 클라이머(conflict)는 분석기를 연결하지 않으므로, count를 주입한 DURATION 분석기(플랭크)로 같은 계약을 검증한다
+  test('N2. DURATION: count가 목표 초를 넘어도 횟수로 종료하지 않고 시간으로 표시하지 않음', async () => {
+    const root = await startWith(routine({ exerciseId: 'plank', measurementType: 'DURATION', sets: [{ seconds: 30 }, { seconds: 30 }] }));
     testMeasure.value = { count: 31, holdSeconds: null }; feedFrames = true;
     await advance(1000);
     assert.equal(ui.stage.phase.kind, 'exercising', 'count 31 ≥ 목표 30초여도 세트 진행');
@@ -955,5 +958,111 @@ describe('3-1b — 측정값 분리와 현재 세트 목표값', () => {
 
   test('3-1b 테스트에서도 네트워크 요청이 실제로 나가지 않는다', () => {
     assert.ok(network.attempts.every((a) => a.startsWith('apiFetch:')));
+  });
+});
+
+// ---------------------------------------------------------------------
+// 3-1a: 분석기 지원 상태 · 분석기 생성 fallback · readiness fallback
+// ---------------------------------------------------------------------
+describe('3-1a — 분석기 생성과 readiness fallback 정리', () => {
+  const SUPPORTED_CLASSES = {
+    'push-up': 'PushupAnalyzer', plank: 'PlankAnalyzer', squat: 'SquatAnalyzer', 'bird-dog': 'BirdDogAnalyzer',
+    'jumping-jack': 'JumpingJackAnalyzer', 'leg-raise': 'LegRaiseAnalyzer', 'glute-bridge': 'GluteBridgeAnalyzer',
+    'pike-push-up': 'PikePushupAnalyzer', superman: 'SupermanAnalyzer', lunge: 'LungeAnalyzer',
+    'split-squat': 'SplitSquatAnalyzer', 'bulgarian-split-squat': 'BulgarianSplitSquatAnalyzer',
+    'incline-push-up': 'InclinePushupAnalyzer', 'side-lying-leg-raise': 'SideLegRaiseAnalyzer',
+    'standing-calf-raise': 'StandingCalfRaiseAnalyzer', 'dead-bug': 'DeadBugAnalyzer',
+  };
+
+  test('A1. 정상 지원 16종은 기존과 같은 분석기 클래스를 생성', () => {
+    for (const [routineId, cls] of Object.entries(SUPPORTED_CLASSES)) {
+      assert.ok(createExerciseAnalyzer(routineId) instanceof poseModule[cls], `${routineId} → ${cls}`);
+    }
+  });
+
+  test('A2. 미완성·미구현·미확인 ID는 분석기를 만들지 않음 (ID 통과 fallback 제거)', () => {
+    assert.equal(createExerciseAnalyzer('side-plank'), null, 'incomplete: SidePlankAnalyzer를 세션에 연결하지 않음');
+    assert.equal(createExerciseAnalyzer('mountain-climber'), null, 'conflict: Routine REPS 통일 전까지 연결하지 않음');
+    for (const id of ['jump-squat', 'reverse-crunch', 'flutter-kick', 'burpee', 'sit-up']) {
+      assert.equal(createExerciseAnalyzer(id), null, `not_implemented ${id}`);
+    }
+    for (const id of ['forward-lunge', 'reverse-lunge', 'jumping-lunge', 'unknown-exercise', 'toString']) {
+      assert.equal(createExerciseAnalyzer(id), null, `unknown ${id}`);
+    }
+    // 이전에는 Routine 매핑이 없으면 입력 문자열을 AI ID로 그대로 통과시켰다
+    for (const aiId of ['pushup', 'bird_dog', 'pike_pushup', 'side_lying_leg_raise', 'side_plank']) {
+      assert.equal(createExerciseAnalyzer(aiId), null, `AI ID를 Routine ID처럼 통과시키지 않음: ${aiId}`);
+    }
+  });
+
+  test('A3. 마운틴 클라이머(conflict): 정상 결과를 만들지 않고 기존 M10 안내로 정지, 재시도 없음', async () => {
+    const root = await startWith(routine({ exerciseId: 'mountain-climber', measurementType: 'DURATION', sets: [{ seconds: 20 }, { seconds: 20 }] }));
+    feedFrames = true; // 카메라 프레임은 계속 들어옴
+    await advance(10 * 1000);
+    assert.equal(ui.stage.phase.kind, 'exercising', '운동 진입·타이머 진행은 유지');
+    assert.equal(ui.stage.currentReps, null, '분석기를 연결하지 않아 측정값 없음');
+    await advance(10 * 1000 + 500);
+    const pose = (await storedQueue()).filter((i) => i.kind === 'pose').length;
+    assert.equal(pose, 0, '충돌 운동의 AI 결과가 정상 결과로 저장되지 않음');
+    assert.equal((await localSession()).sets.length, 0, 'Workout 세트 결과 없음');
+    assert.equal(ui.completeRenders, 0);
+    assert.equal(stallAlerts().length, 1, '기존 M10 안내 재사용');
+    assert.equal(ui.stage.pause, 'paused');
+    const stuck = ui.stage.phase;
+    await advance(500);
+    await act(async () => { ui.stage.onPressResume(); }); await settle();
+    assert.equal(ui.stage.phase.id, stuck.id, '같은 충돌 세트로 재시도하지 않음');
+    await advance(20 * 1000);
+    assert.equal(stallAlerts().length, 1, '안내 반복 없음');
+    assert.equal((await storedQueue()).filter((i) => i.kind === 'pose').length, 0);
+    await unmount(root);
+  });
+
+  // ---- readiness 훅: 실제 CameraReadiness로 실행 ----
+  const { useCameraReadiness } = src('hooks/useCameraReadiness.ts');
+  const probe = { r: null, ready: 0 };
+  function Probe(props) { probe.r = useCameraReadiness({ ...props, onReady: () => { probe.ready += 1; } }); return null; }
+  const fullBody = (t) => ({ timestampMs: t, width: 480, height: 640, landmarks: Array.from({ length: 33 }, () => [0.5, 0.5, 0, 1, 1]) });
+  async function runReadiness(exercise) {
+    probe.r = null; probe.ready = 0;
+    const root = createRoot(makeContainer()); liveRoots.add(root);
+    await act(async () => { root.render(React.createElement(Probe, { exercise, stableMs: 100 })); });
+    await settle();
+    const returned = [];
+    for (let i = 0; i < 10; i += 1) {
+      await act(async () => { returned.push(probe.r.pushFrame(fullBody(1000 + i * 50))); });
+    }
+    await settle();
+    const snapshot = { ready: probe.ready, isReady: probe.r.isReady, required: probe.r.requiredJointCount, returned };
+    await unmount(root);
+    return snapshot;
+  }
+
+  test('R1. 정상 종목 readiness 유지: 스쿼트·푸시업은 자기 프로필로 준비 완료', async () => {
+    const squat = await runReadiness('squat');
+    assert.equal(squat.ready, 1); assert.equal(squat.isReady, true);
+    assert.equal(squat.required, 4, '스쿼트 lower 프로필(한쪽 4관절)');
+    const pushup = await runReadiness('pushup');
+    assert.equal(pushup.ready, 1); assert.equal(pushup.required, 6, '푸시업 full 프로필(한쪽 6관절)');
+  });
+
+  test('R2. 프로필 없는 운동(사이드 플랭크)은 푸시업 프로필로 대체되지 않고 준비 완료가 되지 않음', async () => {
+    const r = await runReadiness('side_plank');
+    assert.equal(r.ready, 0, '준비 완료 콜백 없음');
+    assert.equal(r.isReady, false);
+    assert.equal(r.required, 0, '다른 운동(푸시업) 관절 프로필을 쓰지 않음');
+    assert.ok(r.returned.every((x) => x === null), '측정 결과를 만들지 않음');
+  });
+
+  test('R3. 운동 미지정(null)·미확인 ID도 준비 완료가 되지 않음', async () => {
+    for (const exercise of [null, 'forward-lunge']) {
+      const r = await runReadiness(exercise);
+      assert.equal(r.ready, 0, String(exercise)); assert.equal(r.isReady, false); assert.equal(r.required, 0);
+    }
+  });
+
+  test('R4. 계약 충돌(마운틴 클라이머)은 AI 프로필이 있어 기존 readiness 유지', async () => {
+    const r = await runReadiness('mountain_climber');
+    assert.equal(r.ready, 1); assert.equal(r.required, 6);
   });
 });

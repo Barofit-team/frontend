@@ -23,3 +23,53 @@ export function poseExerciseId(routineExerciseId: string): string | null {
   return Object.prototype.hasOwnProperty.call(POSE_EXERCISE_IDS, routineExerciseId)
     ? POSE_EXERCISE_IDS[routineExerciseId as keyof typeof POSE_EXERCISE_IDS] : null;
 }
+
+/**
+ * 23종 Routine exerciseId의 모바일 AI 분석기 지원 상태. Routine assessmentStatus는 입력으로 쓰지 않는다.
+ *  - supported: FE에서 기술적으로 연결 가능 (제품 출시 가능·실기기 검증 완료를 뜻하지 않음.
+ *    글루트 브리지 PD 측정 유형, 버드독·수퍼맨 보조 측정값, 실험 분석기 검증 상태는 별도 미해결)
+ *  - conflict: Routine 측정 유형과 AI 측정값이 충돌 (마운틴 클라이머: DURATION ↔ count)
+ *  - incomplete: JS 분석기는 있으나 FE 연동·readiness 미완성 (사이드 플랭크)
+ *  - not_implemented: 현재 앱 의존성에 JS 분석기 없음
+ *  - unknown: 23종에 없는 ID (유사한 이름도 다른 분석기에 연결하지 않음)
+ */
+export type PoseSupportStatus = 'supported' | 'conflict' | 'incomplete' | 'not_implemented' | 'unknown';
+export interface PoseSupport { status: PoseSupportStatus; poseId: string | null }
+
+const SPECIAL_SUPPORT: Readonly<Record<string, PoseSupport>> = {
+  'mountain-climber': { status: 'conflict', poseId: 'mountain_climber' },
+  'side-plank': { status: 'incomplete', poseId: 'side_plank' },
+  'jump-squat': { status: 'not_implemented', poseId: null },
+  'reverse-crunch': { status: 'not_implemented', poseId: null },
+  'flutter-kick': { status: 'not_implemented', poseId: null },
+  'burpee': { status: 'not_implemented', poseId: null },
+  'sit-up': { status: 'not_implemented', poseId: null },
+};
+
+export function poseSupport(routineExerciseId: string): PoseSupport {
+  if (Object.prototype.hasOwnProperty.call(SPECIAL_SUPPORT, routineExerciseId)) {
+    return { ...SPECIAL_SUPPORT[routineExerciseId] };
+  }
+  const poseId = poseExerciseId(routineExerciseId);
+  return poseId ? { status: 'supported', poseId } : { status: 'unknown', poseId: null };
+}
+
+/**
+ * 준비 화면 readiness 가능 여부. 프로필 원본은 AI READINESS_PROFILES이며 FE는 복사하지 않는다(hasProfile로 조회).
+ * 해당 운동 프로필이 없으면 다른 운동 프로필로 대체하지 않는다(poseId null → readiness 미실행).
+ */
+export type ReadinessAvailability = 'available' | 'profile_unsupported' | 'analyzer_unsupported' | 'contract_conflict';
+
+export function readinessAvailability(
+  routineExerciseId: string | undefined,
+  hasProfile: (poseId: string) => boolean,
+): { availability: ReadinessAvailability; poseId: string | null } {
+  const support = routineExerciseId ? poseSupport(routineExerciseId) : { status: 'unknown' as const, poseId: null };
+  if (support.status === 'not_implemented' || support.status === 'unknown' || !support.poseId) {
+    return { availability: 'analyzer_unsupported', poseId: null };
+  }
+  if (!hasProfile(support.poseId)) return { availability: 'profile_unsupported', poseId: null };
+  if (support.status === 'incomplete') return { availability: 'profile_unsupported', poseId: null };
+  // conflict: 준비 자세 관찰은 AI 프로필로 가능(진입 유지). 측정 계약 미합의라 세션에서는 분석기를 연결하지 않는다
+  return { availability: support.status === 'conflict' ? 'contract_conflict' : 'available', poseId: support.poseId };
+}

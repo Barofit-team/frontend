@@ -41,7 +41,8 @@ function formatJointListKo(landmarks: string[]): string[] {
 }
 
 export interface UseCameraReadinessOptions {
-  exercise: string;
+  /** AI readiness 운동 ID. null이거나 AI 프로필이 없으면 readiness를 실행하지 않는다(다른 운동 프로필로 대체하지 않음) */
+  exercise: string | null;
   side?: 'left' | 'right' | null;
   stableMs?: number;
   enabled?: boolean;
@@ -75,13 +76,13 @@ export function useCameraReadiness({
   const [latestFrame, setLatestFrame] = useState<PoseFrame | null>(null);
 
   const resolvedExercise = useMemo(
-    () => (READINESS_PROFILES[exercise] ? exercise : 'pushup'),
+    () => (exercise && Object.prototype.hasOwnProperty.call(READINESS_PROFILES, exercise) ? exercise : null),
     [exercise]
   );
 
   // 운동이나 side가 변경되면 새 인스턴스 생성
   useEffect(() => {
-    if (!enabled) {
+    if (!enabled || !resolvedExercise) {
       readinessRef.current = null;
       prevReadyRef.current = false;
       lockedReadyRef.current = null;
@@ -98,11 +99,8 @@ export function useCameraReadiness({
         stableMs,
       });
     } catch {
-      readinessRef.current = new CameraReadiness({
-        exercise: 'pushup',
-        side,
-        stableMs,
-      });
+      // 생성 실패 시 다른 운동 프로필로 대체하지 않는다 → 준비 완료로 판단하지 않음
+      readinessRef.current = null;
     }
     prevReadyRef.current = false;
     lockedReadyRef.current = null;
@@ -162,20 +160,20 @@ export function useCameraReadiness({
   }, []);
 
   return useMemo(() => {
-    const profile = READINESS_PROFILES[resolvedExercise] ?? READINESS_PROFILES.pushup;
+    const profile = resolvedExercise ? READINESS_PROFILES[resolvedExercise] : null;
     const status = result?.status ?? 'no_person';
     const isReady = result?.ready ?? false;
     const isObservable = result?.observable ?? false;
     const selectedSide = result?.selectedSide ?? null;
     const candidateSide = result?.candidateSide ?? null;
     const activeSide: 'left' | 'right' | 'both' | null =
-      selectedSide ?? candidateSide ?? (profile.mode === 'both' ? 'both' : side);
+      selectedSide ?? candidateSide ?? (profile?.mode === 'both' ? 'both' : side);
 
     const missingLandmarks = result?.missingLandmarks ?? [];
     const outOfFrameLandmarks = result?.outOfFrameLandmarks ?? [];
 
     let evaluatedSides: ('left' | 'right')[];
-    if (profile.mode === 'both' || activeSide === 'both') {
+    if (profile?.mode === 'both' || activeSide === 'both') {
       evaluatedSides = ['left', 'right'];
     } else if (activeSide === 'left' || activeSide === 'right') {
       evaluatedSides = [activeSide];
@@ -188,7 +186,7 @@ export function useCameraReadiness({
 
     const missingSet = new Set(missingLandmarks);
     const outOfFrameSet = new Set(outOfFrameLandmarks);
-    const requiredJointNames = new Set(profile.joints);
+    const requiredJointNames = new Set<string>(profile?.joints ?? []);
 
     const jointStates: Record<string, JointRecognitionState> = {};
     let requiredJointCount = 0;
@@ -260,6 +258,8 @@ export function useCameraReadiness({
       jointStates,
       recognizedJointCount,
       requiredJointCount,
+      /** 해당 운동의 AI readiness 프로필로 측정 중인지 (false면 준비 완료가 되지 않음) */
+      profileAvailable: profile !== null,
     };
   }, [pushFrame, breakContinuity, reset, result, latestFrame, resolvedExercise, side, stableMs]);
 }

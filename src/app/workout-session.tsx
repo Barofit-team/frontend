@@ -273,7 +273,7 @@ export default function WorkoutSessionScreen() {
       const session = sessions[current.exerciseIndex];
       const exerciseId = session?.exerciseId ?? activeRoutine[current.exerciseIndex]?.exerciseId ?? '';
       const base = EXERCISES[exerciseId] ?? { id: exerciseId, name: session?.name ?? exerciseId,
-        targetReps: 0, cameraView: 'side' as const };
+        targetReps: 0 };
       return {
         ...base,
         name: session?.name ?? base.name,

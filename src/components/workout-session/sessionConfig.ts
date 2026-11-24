@@ -12,9 +12,6 @@ export const RESUME_COUNTDOWN_SECONDS = 5;
 /** 세트 종료 후 휴식(초) */
 export const REST_DURATION_SECONDS = 30;
 
-/** 카메라 촬영 방향: 정면(스쿼트) / 측면(푸쉬업) */
-export type CameraView = 'front' | 'side';
-
 export type ExerciseId = string;
 
 export type ExerciseConfig = {
@@ -23,12 +20,13 @@ export type ExerciseConfig = {
   name: string;
   /** 목표 횟수 (디자인 기준 20회) */
   targetReps: number;
-  cameraView: CameraView;
 };
+// 사용자 몸 촬영 방향(정면/측면)은 AI 기술 조건·PD 정책 확정 전까지 정의하지 않는다(기존 cameraView는 사용처 없음).
+// 스마트폰 전면/후면 카메라 선택과 AI readiness의 either/both 관절 조건은 별개 개념이다.
 
 export const EXERCISES: Record<ExerciseId, ExerciseConfig> = {
-  squat: { id: 'squat', name: '스쿼트', targetReps: 20, cameraView: 'front' },
-  'push-up': { id: 'push-up', name: '푸쉬업', targetReps: 20, cameraView: 'side' },
+  squat: { id: 'squat', name: '스쿼트', targetReps: 20 },
+  'push-up': { id: 'push-up', name: '푸쉬업', targetReps: 20 },
 };
 
 export const DEFAULT_EXERCISE_ID: ExerciseId = 'squat';
