@@ -86,6 +86,37 @@ function describePause(phase: ActivePhase, exerciseName: string) {
   }
 }
 
+/** 목표값을 읽을 세트 번호. 휴식 중에는 휴식 뒤 이어질 같은 종목의 다음 세트 */
+function targetSetNumber(phase: ActivePhase) {
+  return phase.kind === 'resting' ? phase.completedSet + 1 : phase.set;
+}
+
+const isTargetReps = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isInteger(value) && value > 0;
+
+/**
+ * 현재 세트의 목표 횟수. REPS 종목이 아니거나 목표를 결정할 수 없으면 null (임의 목표로 세트를 완료하지 않는다).
+ *  - 서버 snapshot 세트 목표가 있으면 해당 세트의 targetReps
+ *  - 명시적 로컬 세트 증가(세트 수 > 서버 세트 수)로 생긴 세트만 백엔드 정책과 같이 마지막 세트 목표를 복사
+ *  - snapshot 세트 목표가 아예 없는 DEV·기존 테스트 환경만 종목 단위 목표(session.reps) 사용
+ *  - 그 외 목표 누락·배열 길이 불일치는 다른 세트 값으로 대체하지 않는다
+ */
+function resolveTargetReps(
+  item: RoutineItem | undefined,
+  session: { sets: number; defaultSets: number; reps: number; measurementType: 'REPS' | 'DURATION' } | undefined,
+  setNumber: number,
+): number | null {
+  if (session?.measurementType !== 'REPS') return null;
+  const targets = item?.targets;
+  if (!targets) return isTargetReps(session.reps) ? session.reps : null;
+  const target = targets[setNumber - 1];
+  if (target) return isTargetReps(target.targetReps) ? target.targetReps : null;
+  const locallyAdded = session.sets > session.defaultSets && targets.length === session.defaultSets
+    && setNumber > targets.length && setNumber <= session.sets;
+  const last = targets.at(-1)?.targetReps;
+  return locallyAdded && isTargetReps(last) ? last : null;
+}
+
 export default function WorkoutSessionScreen() {
   const insets = useSafeAreaInsets();
   const owner = useAuthStore(state => state.user?.id);
@@ -233,20 +264,29 @@ export default function WorkoutSessionScreen() {
     [sessions, snapshot],
   );
 
-  /** 현재 Phase의 종목 데이터 (오늘의 운동 루틴에서 설정한 세트/횟수 반영) */
+  /**
+   * 현재 Phase의 종목 데이터. targetReps = 현재 세트의 목표 횟수(REPS만, 결정할 수 없으면 0 = 횟수로 완료하지 않음).
+   * 목표 시간·휴식은 기존대로 sessionFlow가 세트별 targets에서 읽는다.
+   */
   const resolveExercise = useCallback(
     (current: ActivePhase): ExerciseConfig => {
       const session = sessions[current.exerciseIndex];
       const exerciseId = session?.exerciseId ?? activeRoutine[current.exerciseIndex]?.exerciseId ?? '';
       const base = EXERCISES[exerciseId] ?? { id: exerciseId, name: session?.name ?? exerciseId,
-        targetReps: session?.reps ?? 0, cameraView: 'side' as const };
+        targetReps: 0, cameraView: 'side' as const };
       return {
         ...base,
         name: session?.name ?? base.name,
-        targetReps: session?.reps ?? base.targetReps,
+        targetReps: resolveTargetReps(activeRoutine[current.exerciseIndex], session, targetSetNumber(current)) ?? 0,
       };
     },
     [sessions, activeRoutine],
+  );
+  /** REPS 세트인데 유효한 목표 횟수를 결정할 수 없음(snapshot 목표 누락·불일치). 이런 세트는 정상 완료·결과 저장하지 않는다 */
+  const hasInvalidRepsTarget = useCallback(
+    (current: ActivePhase) =>
+      sessions[current.exerciseIndex]?.measurementType === 'REPS' && resolveExercise(current).targetReps <= 0,
+    [sessions, resolveExercise],
   );
 
   const [phase, setPhase] = useState<SessionPhase>(initialPhase);
@@ -260,7 +300,10 @@ export default function WorkoutSessionScreen() {
   const autoPauseRef = useRef<AutoPauseState>(INITIAL_AUTO_PAUSE_STATE);
   const autoPaused = isAutoPaused(autoPause);
   const [exiting, setExiting] = useState(false);
-  const [currentReps, setCurrentReps] = useState<number | null>(null);
+  /** AI 측정 횟수(count). 세트(phase)가 바뀌면 초기화하고 일시정지·복귀 중에는 유지 */
+  const [measuredCount, setMeasuredCount] = useState<number | null>(null);
+  /** AI 유효 자세 유지 시간(holdSeconds, 초 내림). PhaseTimer 잔여·경과 시간과 별개이며 서로 대체하지 않는다 */
+  const [measuredHoldSeconds, setMeasuredHoldSeconds] = useState<number | null>(null);
   const [selectedSide, setSelectedSide] = useState<'left' | 'right' | 'both'>('both');
   const poseSetRef = useRef<{
     phaseId: number;
@@ -270,13 +313,16 @@ export default function WorkoutSessionScreen() {
     pipeline: ReturnType<typeof createPosePipeline>;
     tracking: TrackingSignalAdapter;
     frameCount: number;
-    lastValue: number | null;
+    lastCount: number | null;
+    lastHoldSeconds: number | null;
     finishing: boolean;
   } | null>(null);
 
   useEffect(() => {
     phaseRef.current = phase;
-    setCurrentReps(null);
+    // 새 세트(또는 M10 재시도의 새 phase)는 측정값을 새로 시작. 일시정지·복귀는 phase가 그대로라 유지된다
+    setMeasuredCount(null);
+    setMeasuredHoldSeconds(null);
     setSelectedSide('both');
     // 단계가 바뀌면 이전 단계의 자동 일시정지를 이어받지 않는다
     autoPauseRef.current = INITIAL_AUTO_PAUSE_STATE;
@@ -335,12 +381,14 @@ export default function WorkoutSessionScreen() {
     if (current.kind !== 'exercising' || stalledPhaseIdRef.current !== current.id) return false;
     const exerciseId = snapshot?.exercises[current.exerciseIndex]?.exerciseId;
     if (!exerciseId || !createExerciseAnalyzer(exerciseId)) return false;
+    // 목표 횟수를 결정할 수 없는 REPS 세트도 재시도해도 같은 무효 목표라 재시작하지 않는다(무한 재시도 방지)
+    if (hasInvalidRepsTarget(current)) return false;
     stalledPhaseIdRef.current = null; // 연속 입력 시 한 번만
     poseSetRef.current = null; // 측정 결과 없는 이전 pipeline은 버림 (finish 호출 안 함 → AI 결과 없음)
     // 새 id → PhaseTimer key 변경으로 타이머 remount(completedRef 초기화), 목표 시간 재적용. 이전 타이머의 늦은 완료는 id 불일치로 무시
     setPhase(p => (p.id === current.id ? { ...current, id: current.id + 1 } : p));
     return true;
-  }, [snapshot]);
+  }, [snapshot, hasInvalidRepsTarget]);
 
   /**
    * 자동 일시정지 상태 전환. 상태 모델이 changed=false를 주면(중복·순서 오류 이벤트) 아무것도 하지 않는다.
@@ -438,7 +486,8 @@ export default function WorkoutSessionScreen() {
           // 분석기가 있는 운동만 여기 도달. 미지원 종목은 위에서 return되어 자동 일시정지 대상이 아님
           tracking: createTrackingSignalAdapter({ analyzerSupported: true }),
           frameCount: 0,
-          lastValue: null,
+          lastCount: null,
+          lastHoldSeconds: null,
           finishing: false,
         };
         poseSetRef.current = activeSet;
@@ -467,23 +516,24 @@ export default function WorkoutSessionScreen() {
           setSelectedSide((prev) => (prev === side ? prev : side));
         }
 
-        const measured =
-          typeof output.count === 'number'
-            ? output.count
-            : typeof output.holdSeconds === 'number'
-              ? Math.floor(output.holdSeconds)
-              : null;
-
-        if (measured !== null && measured !== activeSet.lastValue) {
-          activeSet.lastValue = measured;
-          setCurrentReps(measured);
+        const count = typeof output.count === 'number' ? output.count : null;
+        const holdSeconds = typeof output.holdSeconds === 'number' ? Math.floor(output.holdSeconds) : null;
+        if (count !== null && count !== activeSet.lastCount) {
+          activeSet.lastCount = count;
+          setMeasuredCount(count);
+        }
+        if (holdSeconds !== null && holdSeconds !== activeSet.lastHoldSeconds) {
+          activeSet.lastHoldSeconds = holdSeconds;
+          setMeasuredHoldSeconds(holdSeconds);
         }
 
+        // REPS만 현재 세트 목표 횟수 도달로 종료. DURATION은 PhaseTimer 만료로만 종료(유지 시간 도달 종료는 정책 확정 전)
         const exercise = resolveExercise(currentPhase);
         if (
-          typeof output.count === 'number' &&
+          sessions[currentPhase.exerciseIndex]?.measurementType === 'REPS' &&
+          count !== null &&
           exercise.targetReps > 0 &&
-          output.count >= exercise.targetReps
+          count >= exercise.targetReps
         ) {
           finishCurrentPoseSet(currentPhase.id);
         }
@@ -491,7 +541,7 @@ export default function WorkoutSessionScreen() {
         if (__DEV__) console.warn('[WorkoutSession] pose frame error', err);
       }
     },
-    [owner, pause, snapshot, resolveExercise, finishCurrentPoseSet, applyAutoPauseEvent],
+    [owner, pause, snapshot, sessions, resolveExercise, finishCurrentPoseSet, applyAutoPauseEvent],
   );
 
   if (__DEV__) console.log('[WorkoutSession]', phase, pause);
@@ -641,13 +691,15 @@ export default function WorkoutSessionScreen() {
   const renderStage = (current: ActivePhase, remainingSeconds: number, phaseSeconds: number) => {
     const exercise = resolveExercise(current);
     const isDuration = sessions[current.exerciseIndex]?.measurementType === 'DURATION';
+    // SessionStage의 currentReps: 횟수 운동 = AI 횟수, 시간 운동 = AI 유효 자세 유지 시간(타이머 잔여 시간과 별개)
+    const displayedMeasure = isDuration ? measuredHoldSeconds : measuredCount;
     // 수동 일시정지 화면이 항상 우선. 자동 일시정지는 pause === 'none'일 때만 표시
     if (pause === 'none' && autoPause === 'LOST') {
       return (
         <AutoPauseOverlay
           alternate={isDuration
-            ? { kind: 'duration', seconds: remainingSeconds, progress: phaseSeconds > 0 ? 1 - remainingSeconds / phaseSeconds : 0, holdSeconds: currentReps }
-            : { kind: 'reps', reps: currentReps, target: exercise.targetReps, seconds: remainingSeconds }}
+            ? { kind: 'duration', seconds: remainingSeconds, progress: phaseSeconds > 0 ? 1 - remainingSeconds / phaseSeconds : 0, holdSeconds: measuredHoldSeconds }
+            : { kind: 'reps', reps: measuredCount, target: exercise.targetReps, seconds: remainingSeconds }}
           exerciseName={exercise.name}
           subtitle={describePause(current, exercise.name).subtitle}
           onPressMenu={handleClose}
@@ -665,7 +717,7 @@ export default function WorkoutSessionScreen() {
         phaseSeconds={phaseSeconds}
         exerciseName={exercise.name}
         targetReps={exercise.targetReps}
-        currentReps={currentReps}
+        currentReps={displayedMeasure}
         isDuration={isDuration}
         resumeSubtitle={describePause(current, exercise.name).subtitle}
         getPauseSummary={() => {
@@ -721,11 +773,12 @@ export default function WorkoutSessionScreen() {
           onComplete={() => {
             if (phase.kind === 'exercising') {
               const activeSet = poseSetRef.current;
-              if (activeSet && activeSet.phaseId === phase.id && activeSet.frameCount > 0) {
+              // 목표 횟수를 결정할 수 없는 REPS 세트는 측정이 있어도 정상 완료·AI 결과·세트 결과를 만들지 않는다
+              if (activeSet && activeSet.phaseId === phase.id && activeSet.frameCount > 0 && !hasInvalidRepsTarget(phase)) {
                 finishCurrentPoseSet(phase.id);
                 return;
               }
-              // 측정 결과 없는 세트는 완료 처리하지 않는다. '운동 재개'를 누르면 restartStalledSet으로 같은 세트 재시작
+              // 측정 결과 없는 세트(또는 목표 무효 세트)는 완료 처리하지 않는다. '운동 재개'를 누르면 restartStalledSet으로 같은 세트 재시작(목표 무효·미지원은 재시작 안 함)
               stalledPhaseIdRef.current = phase.id;
               requestPause();
               Alert.alert('자세 측정 연결 대기', 'AI 모델이 연결되면 세트 수행 결과를 기록할 수 있어요.');

@@ -156,6 +156,19 @@ for (const name of ['SquatAnalyzer', 'PlankAnalyzer']) {
   const original = proto.breakContinuity;
   proto.breakContinuity = function (...args) { breakCalls.push(`${name}:${args[0]}`); return original.apply(this, args); };
 }
+/**
+ * 3-1b 테스트 전용: 실제 분석기 출력의 count/holdSeconds만 지정한 값으로 덮어쓴다(null이면 실제 출력 그대로).
+ * 측정 알고리즘을 흉내 내지 않으며, 화면·세트 종료가 두 값을 어떻게 쓰는지만 검증한다.
+ */
+const testMeasure = { value: null };
+for (const name of ['SquatAnalyzer', 'PlankAnalyzer', 'MountainClimberAnalyzer']) {
+  const proto = poseModule[name].prototype;
+  const original = proto.pushFrame;
+  proto.pushFrame = function (...args) {
+    const output = original.apply(this, args);
+    return testMeasure.value ? { ...output, ...testMeasure.value } : output;
+  };
+}
 
 // ---------- TypeScript 소스 로더 ----------
 const cache = new Map();
@@ -634,6 +647,313 @@ describe('3단계 — Figma 자동 일시정지 화면 · 5초 복귀 · 재개'
   });
 
   test('네트워크 요청이 실제로 나가지 않는다', () => {
+    assert.ok(network.attempts.every((a) => a.startsWith('apiFetch:')));
+  });
+});
+
+// ---------------------------------------------------------------------
+// 3-1b: 측정값(횟수·유효 자세 유지 시간) 분리 · 현재 세트 목표 · DURATION 횟수 종료 제거
+// ---------------------------------------------------------------------
+describe('3-1b — 측정값 분리와 현재 세트 목표값', () => {
+  beforeEach(() => { testMeasure.value = null; });
+  afterEach(() => { testMeasure.value = null; });
+
+  /** 지정한 측정값으로 프레임 1개 주입 (시계는 진행하지 않음) */
+  async function measure(value) { testMeasure.value = value; await pushOneFrame(); await settle(); }
+  /** 측정값·프레임을 멈추고 n세트 운동 단계가 될 때까지 시계를 진행 */
+  async function untilExercising(set) {
+    testMeasure.value = null; feedFrames = false;
+    for (let i = 0; i < 400; i += 1) {
+      if (ui.stage?.phase.kind === 'exercising' && ui.stage.phase.set === set) return;
+      await advance(250);
+    }
+    assert.fail(`HARNESS: ${set}세트 운동 단계에 도달하지 않았습니다`);
+  }
+  const poseCount = async () => (await storedQueue()).filter((i) => i.kind === 'pose').length;
+  /** 저장 큐에 마지막으로 기록된 세션의 세트 결과 수 (운동 완료로 로컬 세션이 지워진 뒤에도 확인 가능) */
+  const queuedSetCount = async () => (await storedQueue()).filter((i) => i.kind !== 'pose').at(-1)?.session.sets.length;
+  const REPS_10_12_15 = () => routine({ exerciseId: 'squat', measurementType: 'REPS', sets: [{ reps: 10 }, { reps: 12 }, { reps: 15 }] });
+
+  test('N1. 세트별 목표 10·12·15회: 각 세트가 자기 목표 횟수에서만 종료', async () => {
+    const root = await startWith(REPS_10_12_15());
+    assert.equal(ui.stage.targetReps, 10);
+    await measure({ count: 9 });
+    assert.equal(ui.stage.phase.kind, 'exercising', '9회는 1세트 미완료');
+    await measure({ count: 10 });
+    assert.equal(ui.stage.phase.kind, 'resting', '10회 → 1세트 완료');
+
+    await untilExercising(2);
+    assert.equal(ui.stage.targetReps, 12, '2세트 목표 12회');
+    await measure({ count: 10 });
+    assert.equal(ui.stage.phase.kind, 'exercising', '첫 세트 목표(10회)로 2세트를 끝내지 않음');
+    await measure({ count: 11 });
+    assert.equal(ui.stage.phase.kind, 'exercising');
+    await measure({ count: 12 });
+    assert.equal(ui.stage.phase.kind, 'resting', '12회 → 2세트 완료');
+
+    await untilExercising(3);
+    assert.equal(ui.stage.targetReps, 15, '3세트 목표 15회');
+    await measure({ count: 12 });
+    assert.equal(ui.stage.phase.kind, 'exercising', '12회는 3세트 미완료');
+    await measure({ count: 15 });
+    assert.ok(ui.completeRenders > 0, '15회 → 마지막 세트 완료 → 운동 완료');
+    assert.equal(await queuedSetCount(), 3, '세트 결과 3회');
+    assert.equal(await poseCount(), 3, 'AI 결과 3회');
+    await unmount(root);
+  });
+
+  test('N2. DURATION(마운틴 클라이머): count가 목표 초를 넘어도 횟수로 종료하지 않고 시간으로 표시하지 않음', async () => {
+    const root = await startWith(routine({ exerciseId: 'mountain-climber', measurementType: 'DURATION', sets: [{ seconds: 30 }, { seconds: 30 }] }));
+    testMeasure.value = { count: 31, holdSeconds: null }; feedFrames = true;
+    await advance(1000);
+    assert.equal(ui.stage.phase.kind, 'exercising', 'count 31 ≥ 목표 30초여도 세트 진행');
+    assert.equal(ui.hud.kind, 'duration');
+    assert.equal(ui.hud.seconds, 29, '타이머 잔여 시간');
+    assert.equal(ui.hud.holdSeconds, null, '횟수를 유효 자세 유지 시간으로 표시하지 않음');
+    assert.equal(ui.stage.currentReps, null);
+    await advance(29 * 1000 + 500);
+    assert.equal(ui.stage.phase.kind, 'resting', '기존 PhaseTimer 만료로만 종료');
+    assert.equal((await localSession()).sets.length, 1);
+    await unmount(root);
+  });
+
+  test('N3. REPS: holdSeconds가 있어도 횟수로 쓰지 않음 (표시·종료 모두)', async () => {
+    const root = await startWith(routine({ exerciseId: 'squat', measurementType: 'REPS', sets: [{ reps: 12 }, { reps: 12 }] }));
+    testMeasure.value = { count: 3, holdSeconds: 7 }; feedFrames = true;
+    await advance(1000);
+    assert.equal(ui.hud.kind, 'reps');
+    assert.equal(ui.hud.reps, 3, '횟수 UI = count');
+    testMeasure.value = { count: null, holdSeconds: 20 };
+    await advance(1000);
+    assert.equal(ui.hud.reps, 3, 'count가 없을 때 holdSeconds(20)를 횟수로 표시하지 않음');
+    assert.equal(ui.stage.phase.kind, 'exercising', 'holdSeconds 20 ≥ 목표 12여도 종료하지 않음');
+    await unmount(root);
+  });
+
+  test('N4. DURATION(플랭크): AI 유효 자세 시간과 PhaseTimer 시간을 서로 대체하지 않음', async () => {
+    const root = await startWith(routine({ exerciseId: 'plank', measurementType: 'DURATION', sets: [{ seconds: 60 }, { seconds: 60 }] }));
+    testMeasure.value = { count: 4, holdSeconds: 5.7 }; feedFrames = true;
+    await advance(10 * 1000);
+    assert.equal(ui.hud.kind, 'duration');
+    assert.equal(ui.hud.seconds, 50, '타이머 잔여 = 60 - 경과 10초');
+    assert.equal(ui.hud.holdSeconds, 5, '유효 자세 시간 = floor(holdSeconds), count(4) 아님');
+    testMeasure.value = { count: null, holdSeconds: 61 };
+    await advance(1000);
+    assert.equal(ui.hud.holdSeconds, 61);
+    assert.equal(ui.hud.seconds, 49, '유효 자세 시간이 타이머를 바꾸지 않음');
+    assert.equal(ui.stage.phase.kind, 'exercising', 'holdSeconds 도달은 종료 조건이 아님');
+    await unmount(root);
+  });
+
+  test('N5. 명시적 로컬 세트 증가(세트 수 > 서버 세트 수): 마지막 세트 설정 복사 정책과 일치', async () => {
+    const fixture = routine({ exerciseId: 'squat', measurementType: 'REPS', sets: [{ reps: 10 }, { reps: 12 }] });
+    fixture.sessions[0].sets = 3; // defaultSets = 2 (서버 세트 수) → 사용자가 로컬에서 1세트 추가한 상태
+    const root = await startWith(fixture);
+    await measure({ count: 10 });
+    await untilExercising(2);
+    await measure({ count: 12 });
+    await untilExercising(3);
+    assert.equal(ui.stage.targetReps, 12, '추가 세트 = 마지막 세트(12회) 복사');
+    await unmount(root);
+  });
+
+  test('N6. 잘못된 서버 snapshot 목표는 다른 세트 값으로 조용히 대체하지 않음', async () => {
+    // a) 세트 수와 서버 세트 배열 길이 불일치 (로컬 증가 아님)
+    const short = routine({ exerciseId: 'squat', measurementType: 'REPS', sets: [{ reps: 10 }, { reps: 12 }] });
+    short.sessions[0].sets = 3; short.sessions[0].defaultSets = 3;
+    let root = await startWith(short);
+    await measure({ count: 10 });
+    await untilExercising(2);
+    await measure({ count: 12 });
+    await untilExercising(3);
+    assert.equal(ui.stage.targetReps, 0, '목표 미결정: 12회(마지막 세트)나 10회(첫 세트)로 대체하지 않음');
+    await unmount(root);
+
+    // b) REPS 세트의 targetReps 누락
+    const missing = routine({ exerciseId: 'squat', measurementType: 'REPS', sets: [{ reps: 10 }, {}] });
+    root = await startWith(missing);
+    await measure({ count: 10 });
+    await untilExercising(2);
+    assert.equal(ui.stage.targetReps, 0, '누락된 목표를 첫 세트(10회)로 대체하지 않음');
+    await measure({ count: 10 });
+    await measure({ count: 50 });
+    assert.equal(ui.stage.phase.kind, 'exercising', '목표를 알 수 없으면 횟수로 완료 처리하지 않음');
+    await unmount(root);
+  });
+
+  /** 저장 큐 전체에서 해당 서버 세트의 결과(세션 세트 결과 또는 AI 결과)가 있는지 */
+  async function queuedFor(routineSetId) {
+    const queue = await storedQueue();
+    return {
+      setResult: queue.some((i) => i.kind !== 'pose' && i.session.sets.some((s) => s.routineSetId === routineSetId)),
+      aiResult: queue.some((i) => i.kind === 'pose' && i.routineSetId === routineSetId),
+    };
+  }
+
+  test('N6c. targetReps 누락 REPS 세트: count가 늘어도 타이머 만료 시 정상 완료·결과 저장 없이 M10 정지, 재시도 없음', async () => {
+    const fx = routine({ exerciseId: 'squat', measurementType: 'REPS', sets: [{ reps: 10 }, {}] });
+    const [set1, set2] = fx.exercise.sets.map((s) => s.id);
+    const root = await startWith(fx);
+    await measure({ count: 10 });
+    await untilExercising(2);
+    assert.equal(ui.stage.targetReps, 0);
+    const before = { pose: await poseCount(), sets: await queuedSetCount() };
+    assert.deepEqual(before, { pose: 1, sets: 1 }, 'HARNESS: 1세트 결과 저장');
+    testMeasure.value = { count: 5, holdSeconds: null }; feedFrames = true;
+    await advance(20 * 1000);
+    testMeasure.value = { count: 30, holdSeconds: null };
+    await advance(20 * 1000);
+    assert.equal(ui.stage.phase.kind, 'exercising', 'count 30이어도 횟수 종료 없음');
+    assert.equal(ui.stage.currentReps, 30, 'AI count는 정상 표시');
+    const stuck = ui.stage.phase;
+    await advance(20 * 1000 + 500); // 60초 타이머 만료
+
+    assert.equal(ui.completeRenders, 0, '정상 완료(운동 완료 화면) 없음');
+    assert.equal(ui.stage.phase.id, stuck.id, '다음 단계로 넘어가지 않음');
+    assert.equal(stallAlerts().length, 1, '기존 M10 정지 경로');
+    assert.equal(ui.stage.pause, 'paused');
+    assert.equal(remaining(), 0);
+    assert.equal(await poseCount(), before.pose, 'AI 결과 추가 없음');
+    assert.equal(await queuedSetCount(), before.sets, 'Workout 세트 결과 추가 없음');
+    assert.deepEqual(await queuedFor(set2), { setResult: false, aiResult: false }, '목표 무효 세트는 동기화 큐에 결과 없음');
+    assert.deepEqual(await queuedFor(set1), { setResult: true, aiResult: true }, '이전 완료 세트·큐 항목 보존');
+
+    // 재개를 눌러도 같은 무효 목표로 재시도하지 않는다 (무한 재시도 방지)
+    await advance(500);
+    await act(async () => { ui.stage.onPressResume(); }); await settle();
+    assert.equal(ui.stage.phase.id, stuck.id, '재시도(새 phase) 없음');
+    await advance(20 * 1000);
+    assert.equal(stallAlerts().length, 1, '정지 경고 반복 없음');
+    assert.equal(ui.completeRenders, 0);
+    assert.equal(await poseCount(), before.pose);
+    assert.equal(await queuedSetCount(), before.sets);
+    await unmount(root);
+  });
+
+  test('N6d. 서버 세트 배열 길이 불일치(서버 세트 없음): 분석기 없이 M10 정지, 결과 없음, 재시도 없음', async () => {
+    const fx = routine({ exerciseId: 'squat', measurementType: 'REPS', sets: [{ reps: 10 }, { reps: 12 }] });
+    fx.sessions[0].sets = 3; fx.sessions[0].defaultSets = 3;
+    const root = await startWith(fx);
+    await measure({ count: 10 }); await untilExercising(2); await measure({ count: 12 }); await untilExercising(3);
+    const before = { pose: await poseCount(), sets: await queuedSetCount() };
+    assert.deepEqual(before, { pose: 2, sets: 2 }, 'HARNESS: 1·2세트 결과 저장');
+    testMeasure.value = { count: 30, holdSeconds: null }; feedFrames = true;
+    await advance(EXERCISE_DURATION_SECONDS * 1000 + 500);
+    assert.equal(ui.stage.currentReps, null, '서버 세트가 없어 분석기를 만들지 않음');
+    assert.equal(stallAlerts().length, 1, '기존 M10 정지');
+    assert.equal(ui.stage.pause, 'paused');
+    assert.equal(ui.completeRenders, 0);
+    assert.equal(await poseCount(), before.pose);
+    assert.equal(await queuedSetCount(), before.sets);
+    const stuck = ui.stage.phase;
+    await advance(500);
+    await act(async () => { ui.stage.onPressResume(); }); await settle();
+    assert.equal(ui.stage.phase.id, stuck.id, '같은 무효 세트로 재시도하지 않음');
+    await advance(EXERCISE_DURATION_SECONDS * 1000);
+    assert.equal(stallAlerts().length, 1, '정지 경고 반복 없음');
+    assert.equal(await poseCount(), before.pose);
+    await unmount(root);
+  });
+
+  test('N7. 이어하기 후 같은 세트의 목표값 사용', async () => {
+    let root = await startWith(REPS_10_12_15());
+    await measure({ count: 10 });
+    await untilExercising(2);
+    await measure({ count: 4 });
+    await act(async () => { ui.stage.onPressMenu(); }); await settle();
+    assert.equal(ui.stage.pause, 'paused');
+    await advance(500);
+    await act(async () => { ui.stage.onPressStop(); }); await settle();
+    await advance(500);
+    await act(async () => { ui.stage.onConfirmStop(); }); await settle();
+    const draft = useWorkoutDraftStore.getState().draft;
+    assert.deepEqual([draft.phase, draft.set, draft.targetReps], ['exercising', 2, 12], '임시저장 목표 = 현재 세트 12회');
+    await unmount(root);
+
+    root = await mount({ resume: '1' });
+    assert.equal(ui.stage.phase.set, 2);
+    assert.equal(ui.stage.targetReps, 12, '이어하기 후 2세트 목표 12회');
+    await resumeLikeUser();
+    await measure({ count: 10 });
+    assert.equal(ui.stage.phase.kind, 'exercising', '첫 세트 목표로 끝내지 않음');
+    await measure({ count: 12 });
+    assert.equal(ui.stage.phase.kind, 'resting');
+    assert.equal((await localSession()).sets.length, 2);
+    await unmount(root);
+  });
+
+  test('N8. 자동 일시정지·복귀·수동 일시정지 후에도 현재 세트 목표와 누적 측정값 유지', async () => {
+    const root = await startWith(routine({ exerciseId: 'squat', measurementType: 'REPS', sets: [{ reps: 10 }, { reps: 12 }] }));
+    await measure({ count: 10 });
+    await untilExercising(2);
+    testTracking.user = 'present';
+    testMeasure.value = { count: 5, holdSeconds: null }; feedFrames = true;
+    await advance(3 * 1000);
+    feedFrames = false;
+    await signal('lost');
+    assert.ok(isAutoPauseScreen());
+    assert.deepEqual(ui.overlay.alternate, { kind: 'reps', reps: 5, target: 12, seconds: remaining() }, 'LOST 화면 = 누적 5회 / 현재 세트 12회');
+    await signal('present');
+    await advance(5 * 1000);
+    assert.equal(ui.stage.pause, 'none');
+    assert.equal(ui.stage.currentReps, 5, '복귀 후 누적 횟수 유지');
+    assert.equal(ui.stage.targetReps, 12);
+    await act(async () => { ui.stage.onPressMenu(); }); await settle();
+    assert.equal(ui.stage.pause, 'paused');
+    assert.equal(ui.stage.currentReps, 5, '수동 일시정지 중 누적 횟수 유지');
+    await resumeLikeUser();
+    assert.equal(ui.stage.currentReps, 5, '수동 재개 후 누적 횟수 유지');
+    await measure({ count: 12 });
+    assert.ok(ui.completeRenders > 0, '12회 → 마지막 세트 완료');
+    assert.equal(await queuedSetCount(), 2);
+    assert.equal(await poseCount(), 2, '일시정지·복귀로 AI 결과가 중복되지 않음');
+    await unmount(root);
+  });
+
+  test('N9. M10 재시도: 같은 세트 목표 유지, 측정값 초기화, 세트 결과 중복 없음', async () => {
+    const root = await startWith(routine({ exerciseId: 'squat', measurementType: 'REPS', sets: [{ reps: 10 }, { reps: 12 }] }));
+    await measure({ count: 10 });
+    await untilExercising(2);
+    const stuck = ui.stage.phase;
+    await advance(EXERCISE_DURATION_SECONDS * 1000 + 250); // 프레임 없음 → 0초 정지
+    assert.equal(stallAlerts().length, 1);
+    assert.equal(ui.stage.pause, 'paused');
+    await advance(500);
+    await act(async () => { ui.stage.onPressResume(); }); await settle();
+    assert.equal(ui.stage.phase.id, stuck.id + 1, '재시도 = 새 phase id');
+    assert.equal(ui.stage.phase.set, 2, '같은 세트');
+    assert.equal(ui.stage.targetReps, 12, '같은 세트 목표 12회');
+    assert.equal(ui.stage.currentReps, null, '재시도는 측정값을 새로 시작');
+    await advance(5 * 1000);
+    assert.equal(ui.stage.pause, 'none');
+    await measure({ count: 10 });
+    assert.equal(ui.stage.phase.kind, 'exercising');
+    await measure({ count: 12 });
+    assert.ok(ui.completeRenders > 0);
+    assert.equal(await queuedSetCount(), 2, '세트 결과 = 1세트 + 재시도 2세트');
+    assert.equal(await poseCount(), 2, 'AI 결과 = 1세트 + 재시도 2세트, 중복 없음');
+    await unmount(root);
+  });
+
+  test('N10. 다음 세트로 넘어가면 이전 세트의 측정값이 남지 않음 (횟수·유지 시간)', async () => {
+    let root = await startWith(routine({ exerciseId: 'squat', measurementType: 'REPS', sets: [{ reps: 10 }, { reps: 12 }] }));
+    await measure({ count: 10 });
+    assert.equal(ui.stage.phase.kind, 'resting');
+    assert.equal(ui.stage.currentReps, null, '휴식 단계에 1세트 횟수가 남지 않음');
+    await untilExercising(2);
+    assert.equal(ui.stage.currentReps, null, '2세트 시작 시 1세트 횟수(10)가 남지 않음');
+    await unmount(root);
+
+    root = await startWith(routine({ exerciseId: 'plank', measurementType: 'DURATION', sets: [{ seconds: 20 }, { seconds: 20 }] }));
+    testMeasure.value = { count: null, holdSeconds: 8 }; feedFrames = true;
+    await advance(20 * 1000 + 500);
+    assert.equal(ui.stage.phase.kind, 'resting');
+    await untilExercising(2);
+    assert.equal(ui.stage.currentReps, null, '2세트 시작 시 1세트 유효 자세 시간(8초)이 남지 않음');
+    await unmount(root);
+  });
+
+  test('3-1b 테스트에서도 네트워크 요청이 실제로 나가지 않는다', () => {
     assert.ok(network.attempts.every((a) => a.startsWith('apiFetch:')));
   });
 });
