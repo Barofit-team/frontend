@@ -52,3 +52,12 @@ assert.deepEqual(readinessAvailability(undefined, hasProfile), { availability: '
 assert.deepEqual(readinessAvailability('squat', () => false), { availability: 'profile_unsupported', poseId: null }, '분석기는 있어도 프로필이 없으면 다른 프로필을 쓰지 않음');
 for (const poseId of Object.values(SUPPORTED_16)) assert.ok(hasProfile(poseId), `현재 AI readiness 프로필 존재 ${poseId}`);
 console.log('PASS: 3-1a support states (16 supported / conflict / incomplete / 5 not_implemented / unknown) and readiness availability');
+
+// ---------- 3-2: 촬영 방향(PD 구상도 근거 종목만) ----------
+const { poseBodyView } = m.exports;
+assert.equal(poseBodyView('squat'), 'side', 'PD 구상도: 스쿼트 측면');
+assert.equal(poseBodyView('plank'), 'side', 'PD 구상도: 플랭크 측면');
+for (const id of ['push-up', 'jumping-jack', 'lunge', 'mountain-climber', 'side-plank', 'unknown', 'toString']) {
+  assert.equal(poseBodyView(id), null, `근거 없는 종목은 미확정: ${id}`);
+}
+console.log('PASS: 3-2 body view (squat/plank side only, others undecided)');

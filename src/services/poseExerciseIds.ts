@@ -73,3 +73,17 @@ export function readinessAvailability(
   // conflict: 준비 자세 관찰은 AI 프로필로 가능(진입 유지). 측정 계약 미합의라 세션에서는 분석기를 연결하지 않는다
   return { availability: support.status === 'conflict' ? 'contract_conflict' : 'available', poseId: support.poseId };
 }
+
+/**
+ * 사용자 몸 촬영 방향(정면/측면). 스마트폰 전면·후면 카메라 선택, AI readiness의 either/both 관절 조건과 별개다.
+ * PD 운동 세션 구상도에서 확인된 종목만 정의한다(스쿼트·플랭크 = 측면). 그 외는 미확정(null)이며 기본값을 두지 않는다.
+ */
+export type BodyView = 'front' | 'side';
+const BODY_VIEWS: Readonly<Record<string, BodyView>> = {
+  'squat': 'side',
+  'plank': 'side',
+};
+
+export function poseBodyView(routineExerciseId: string): BodyView | null {
+  return Object.prototype.hasOwnProperty.call(BODY_VIEWS, routineExerciseId) ? BODY_VIEWS[routineExerciseId] : null;
+}

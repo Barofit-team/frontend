@@ -1113,3 +1113,104 @@ describe('3-1c — SET_FEEDBACK 주 측정값', () => {
     await unmount(root);
   });
 });
+
+// ---------------------------------------------------------------------
+// 3-2: 대표 운동 실제 분석기 검증 (측정값 주입 없음)
+// 프레임은 barofit-pose 자체 테스트(squat/plank/pushup_activity)의 합성 관절 생성 방식을 따른 것이며 실제 사람 관절 기록이 아니다.
+// 검증 대상: 실제 분석기 출력 → 화면(HUD) → 세트 종료 → Workout 세트·AI 원본 저장의 FE 데이터 전달.
+// ---------------------------------------------------------------------
+describe('3-2 — 대표 운동 실제 분석기 연동 (스쿼트·플랭크·푸시업)', () => {
+  const SIDE_IDS = { left: [11, 13, 15, 23, 25, 27], right: [12, 14, 16, 24, 26, 28] };
+  const blank = () => Array.from({ length: 33 }, () => [0, 0, 0, 0, 0]);
+  const squatFrame = (t, knee) => {
+    const p = blank();
+    for (const [side, q] of [['left', 0.9], ['right', 0.8]]) {
+      const a = (knee * Math.PI) / 180;
+      const pts = [[0.5, 0.15], [0.55, 0.25], [0.6, 0.35], [0.5, 0.35], [0.5, 0.6], [0.5 + 0.22 * Math.sin(a), 0.6 - 0.22 * Math.cos(a)]];
+      SIDE_IDS[side].forEach((id, i) => { p[id] = [...pts[i], 0, q, q]; });
+    }
+    return { timestampMs: t, width: 1000, height: 1000, landmarks: p };
+  };
+  const plankFrame = (t) => {
+    const p = blank();
+    for (const [side, c] of [['left', 0.9], ['right', 0.8]]) {
+      const xy = [[0.2, 0.3], [0.2, 0.5], [0.1, 0.5], [0.5, 0.3], [0.7, 0.3], [0.9, 0.3]];
+      SIDE_IDS[side].forEach((id, i) => { p[id] = [...xy[i], 0, c, c]; });
+    }
+    return { timestampMs: t, width: 1000, height: 1000, landmarks: p };
+  };
+  const pushupFrame = (t, phase) => {
+    const p = blank();
+    const s = [0.25, 0.3 + 0.2 * phase], h = [0.55, 0.4 + 0.05 * phase], a = [0.85, 0.45];
+    const k = [(h[0] + a[0]) / 2, (h[1] + a[1]) / 2];
+    for (const [j, xy] of [[11, s], [13, [0.3, 0.5]], [15, [0.3, 0.7]], [23, h], [25, k], [27, a]]) p[j] = [...xy, 0, 0.9, 0.9];
+    return { timestampMs: t, width: 640, height: 360, landmarks: p };
+  };
+  let clock = 0;
+  /** 100ms마다 실제 관절 프레임을 넣으며 시계를 진행 (타이머·분석기가 같은 시간축) */
+  async function feed(ms, make) {
+    for (let t = 0; t < ms; t += 100) {
+      await act(async () => { clock += 100; ui.camera.onPoseFrame(make(clock), { frameId: clock, inferenceMs: 1 }); mock.timers.tick(100); });
+      if (t % 500 === 400) await settle();
+    }
+    await settle();
+  }
+  const poseItems = async () => (await storedQueue()).filter((i) => i.kind === 'pose');
+  beforeEach(() => { clock = 0; testMeasure.value = null; testMeasure.summary = null; });
+
+  test('S1. 스쿼트(REPS): AI 동작 완료 시 횟수 증가 → 횟수 링(목표 대비)·잔여 시간 표시 → 목표 3회에서 종료·저장', async () => {
+    const root = await startWith(routine({ exerciseId: 'squat', measurementType: 'REPS', sets: [{ reps: 3 }, { reps: 3 }] }));
+    await feed(1000, (t) => squatFrame(t, 170)); // 서 있는 준비 자세
+    assert.equal(ui.hud.kind, 'reps', '횟수형 HUD = 횟수 링');
+    assert.equal(ui.hud.target, 3, '링 진행률 기준 = 현재 세트 목표 3회');
+    const seen = [];
+    for (let rep = 1; rep <= 3; rep += 1) {
+      await feed(1000, (t) => squatFrame(t, 90)); // 앉기: 아직 동작 미완료
+      if (rep < 3) assert.equal(ui.hud.reps ?? 0, rep - 1, `${rep}회차 하강 중에는 횟수 증가 없음`);
+      await feed(1000, (t) => squatFrame(t, 170)); // 일어서기: AI가 1회 완료 판정
+      if (rep < 3) { seen.push(ui.hud.reps); assert.equal(ui.hud.seconds, remaining(), '링 옆 잔여 시간 = PhaseTimer'); }
+    }
+    assert.deepEqual(seen, [1, 2], '실제 AI count가 링에 1→2로 표시');
+    assert.equal(ui.stage.phase.kind, 'resting', '목표 3회 도달 → 기존 세트 완료 흐름');
+    const set = (await localSession()).sets[0];
+    assert.deepEqual([set.actualReps, set.actualDurationSeconds], [3, null], 'Workout: actualReps = AI count');
+    const [item] = await poseItems();
+    assert.equal(item.payload.exercise, 'squat');
+    assert.equal(item.payload.summary.count, 3, 'AI 원본 summary 보존');
+    await unmount(root);
+  });
+
+  test('S2. 플랭크(DURATION): 타이머·가로 진행률 바, 링 없음, 유효 자세 시간은 타이머와 분리, 타이머로 종료, AI 유지 시간 저장', async () => {
+    const root = await startWith(routine({ exerciseId: 'plank', measurementType: 'DURATION', sets: [{ seconds: 20 }, { seconds: 20 }] }));
+    await feed(10 * 1000, plankFrame);
+    assert.equal(ui.hud.kind, 'duration', '시간형 HUD = 타이머 + 가로 진행률 바 (횟수 링 아님)');
+    assert.equal(ui.hud.seconds, remaining(), '타이머 = PhaseTimer 잔여 시간');
+    assert.equal(ui.hud.seconds, 10);
+    assert.ok(Math.abs(ui.hud.progress - 0.5) < 1e-9, '진행률 = 경과/목표 시간');
+    assert.equal(typeof ui.hud.holdSeconds, 'number', 'AI 유효 자세 유지 시간 별도 표시');
+    assert.ok(ui.hud.holdSeconds >= 0 && ui.hud.holdSeconds < 10, `유효 자세 시간(${ui.hud.holdSeconds})은 경과 시간(10초)과 다른 AI 값`);
+    await feed(9 * 1000, plankFrame);
+    assert.equal(ui.stage.phase.kind, 'exercising', '유효 자세 시간과 무관하게 타이머 만료 전 진행');
+    await feed(1500, plankFrame);
+    assert.equal(ui.stage.phase.kind, 'resting', '기존 타이머 정책으로 종료');
+    const [item] = await poseItems();
+    const hold = item.payload.summary.holdSeconds;
+    assert.equal(typeof hold, 'number');
+    const set = (await localSession()).sets[0];
+    assert.deepEqual([set.actualReps, set.actualDurationSeconds], [null, Math.floor(hold)], 'Workout: actualDurationSeconds = floor(AI holdSeconds)');
+    assert.ok(set.actualDurationSeconds < 20, `저장값(${set.actualDurationSeconds})은 타이머 20초가 아닌 AI 유효 자세 시간`);
+    await unmount(root);
+  });
+
+  test('S3. 푸시업(REPS): 실제 분석기 횟수 → 목표 2회 종료·저장', async () => {
+    const root = await startWith(routine({ exerciseId: 'push-up', measurementType: 'REPS', sets: [{ reps: 2 }, { reps: 2 }] }));
+    let i = 0;
+    const next = (t) => { const ph = i < 30 ? 0 : (1 - Math.cos(((i - 30) * 2 * Math.PI) / 20)) / 2; i += 1; return pushupFrame(t, ph); };
+    for (let guard = 0; guard < 40 && ui.stage.phase.kind === 'exercising'; guard += 1) await feed(500, next);
+    assert.equal(ui.stage.phase.kind, 'resting', '목표 2회 도달로 종료');
+    const set = (await localSession()).sets[0];
+    assert.deepEqual([set.actualReps, set.actualDurationSeconds], [2, null]);
+    assert.equal((await poseItems())[0].payload.exercise, 'pushup');
+    await unmount(root);
+  });
+});
