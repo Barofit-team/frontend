@@ -4,6 +4,7 @@ import React, { useCallback, useState } from 'react';
 import { ageFromBirthDate } from '@/utils/birthDate';
 import {
   ActivityIndicator,
+  Alert,
   Image,
   KeyboardAvoidingView,
   Modal,
@@ -11,6 +12,7 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   View,
@@ -26,9 +28,11 @@ import {
   SolidPencilIcon,
 } from '@/components/home/HomeIcons';
 import { ApiError } from '@/services/api';
+import { initCrossPlatformAlarm } from '@/services/inactivityAlarmService';
 import { updateMyProfile } from '@/services/onboardingService';
 import { getReportCalendar } from '@/services/reportService';
 import { tokenStorage } from '@/services/tokenStorage';
+import { useAppSettingsStore } from '@/stores/useAppSettingsStore';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useOnboardingStore } from '@/stores/useOnboardingStore';
 import {
@@ -48,9 +52,10 @@ type EditFieldType =
   | 'goal'
   | 'weeklyWorkoutDays'
   | 'discomfort'
+  | 'withdrawConfirm'
   | null;
 
-type EditableField = Exclude<EditFieldType, null>;
+type EditableField = Exclude<EditFieldType, 'withdrawConfirm' | null>;
 
 /** 서버 검증 규칙(docs/onboarding-api.md 3장)과 같은 숫자 범위 */
 const NUMBER_RULES: Record<'heightCm' | 'weightKg', { min: number; max: number; label: string }> = {
@@ -145,6 +150,12 @@ export default function ProfileScreen() {
   const updateUserNickname = useAuthStore((state) => state.updateUserNickname);
   const updateProfile = useAuthStore((state) => state.updateProfile);
   const applyMeResponse = useAuthStore((state) => state.applyMeResponse);
+  const logout = useAuthStore((state) => state.logout);
+  const withdraw = useAuthStore((state) => state.withdraw);
+
+  const pushEnabled = useAppSettingsStore((state) => state.pushEnabled);
+  const hydrateAppSettings = useAppSettingsStore((state) => state.hydrate);
+  const setPushEnabled = useAppSettingsStore((state) => state.setPushEnabled);
 
   const onboardingNickname = useOnboardingStore((state) => state.nickname);
   const onboardingGender = useOnboardingStore((state) => state.gender);
@@ -186,6 +197,7 @@ export default function ProfileScreen() {
   useFocusEffect(
     useCallback(() => {
       let active = true;
+      void hydrateAppSettings();
       void (async () => {
         const token = await tokenStorage.getAccessToken();
         if (!token || !active) return;
@@ -203,7 +215,7 @@ export default function ProfileScreen() {
       return () => {
         active = false;
       };
-    }, [loadMyAccount]),
+    }, [hydrateAppSettings, loadMyAccount]),
   );
 
   // 현재 표시할 프로필 값 (백엔드 프로필 -> 온보딩 스토어 -> 시안 기본값 순)
@@ -238,8 +250,10 @@ export default function ProfileScreen() {
   >(['NONE']);
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [isWithdrawing, setIsWithdrawing] = useState<boolean>(false);
+  const [withdrawError, setWithdrawError] = useState<string | null>(null);
 
-  const openEditModal = (field: EditableField) => {
+  const openEditModal = (field: Exclude<EditFieldType, null>) => {
     switch (field) {
       case 'nickname':
         setDraftText(displayName);
@@ -268,13 +282,17 @@ export default function ProfileScreen() {
         }
         break;
       }
+      case 'withdrawConfirm':
+        setWithdrawError(null);
+        break;
     }
     setSaveError(null);
     setActiveField(field);
   };
 
   const closeModal = () => {
-    if (isSaving) return;
+    if (isWithdrawing || isSaving) return;
+    setWithdrawError(null);
     setSaveError(null);
     setActiveField(null);
   };
@@ -386,7 +404,7 @@ export default function ProfileScreen() {
   };
 
   const handleSaveField = async () => {
-    if (!activeField) return;
+    if (!activeField || activeField === 'withdrawConfirm') return;
     if (isSaving) return;
 
     const result = buildProfileUpdate(activeField);
@@ -427,6 +445,45 @@ export default function ProfileScreen() {
     }
   };
 
+  const handleTogglePush = async (next: boolean) => {
+    if (next) {
+      await initCrossPlatformAlarm();
+    }
+    await setPushEnabled(next);
+  };
+
+  const handlePressLogout = () => {
+    Alert.alert('로그아웃', '현재 계정에서 로그아웃하시겠어요?', [
+      { text: '취소', style: 'cancel' },
+      {
+        text: '로그아웃',
+        style: 'destructive',
+        onPress: () => {
+          void (async () => {
+            await logout();
+            router.replace('/login');
+          })();
+        },
+      },
+    ]);
+  };
+
+  const handleConfirmWithdraw = async () => {
+    if (isWithdrawing) return;
+    setIsWithdrawing(true);
+    setWithdrawError(null);
+
+    try {
+      await withdraw();
+      setActiveField(null);
+      router.replace('/login');
+    } catch {
+      setWithdrawError('회원 탈퇴 처리 중 문제가 발생했어요. 네트워크 연결을 확인한 뒤 다시 시도해 주세요.');
+    } finally {
+      setIsWithdrawing(false);
+    }
+  };
+
   const renderSaveFooter = () => (
     <>
       {saveError ? <Text style={styles.saveErrorText}>{saveError}</Text> : null}
@@ -449,7 +506,7 @@ export default function ProfileScreen() {
   );
 
   const infoRows: {
-    key: Exclude<EditFieldType, 'nickname' | 'profileMeta' | null>;
+    key: Exclude<EditFieldType, 'nickname' | 'profileMeta' | 'withdrawConfirm' | null>;
     label: string;
     value: string;
   }[] = [
@@ -488,10 +545,7 @@ export default function ProfileScreen() {
           { paddingBottom: Math.max(insets.bottom, 16) + 100 },
         ]}
         showsVerticalScrollIndicator={false}>
-        {/* 1. 상단 타이틀 */}
-        <Text style={styles.pageTitle}>내 정보</Text>
-
-        {/* 2. 프로필 아바타 및 닉네임·성별/나이 영역 */}
+        {/* 1. 프로필 아바타 및 닉네임·성별/생년월일 영역 */}
         <View style={styles.profileRow}>
           <View style={styles.avatarCircle}>
             {user?.profileImageUrl ? (
@@ -576,19 +630,46 @@ export default function ProfileScreen() {
           ))}
         </View>
 
-        {/* 5. 하단 구분선 및 앱 설정 */}
+        {/* 5. 하단 구분선 및 푸시 알림 · 로그아웃 · 회원 탈퇴 */}
         <View style={styles.sectionDivider} />
+
+        <View style={styles.settingToggleRow}>
+          <Text style={styles.infoLabel}>푸시 알림</Text>
+          <Switch
+            value={pushEnabled}
+            onValueChange={(value) => void handleTogglePush(value)}
+            trackColor={{ false: '#E5E7EB', true: '#1D61E7' }}
+            thumbColor="#FFFFFF"
+            ios_backgroundColor="#E5E7EB"
+          />
+        </View>
+
+        <View style={styles.thinDivider} />
 
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="앱 설정"
-          onPress={() => router.push('/app-settings')}
+          accessibilityLabel="로그아웃"
+          onPress={handlePressLogout}
           style={({ pressed }) => [
-            styles.appSettingsRow,
+            styles.accountRow,
             pressed && styles.pressed,
           ]}>
-          <Text style={styles.appSettingsText}>앱 설정</Text>
-          <ChevronRightIcon color="#374151" size={13} />
+          <Text style={styles.logoutText}>로그아웃</Text>
+          <ChevronRightIcon color="#DC2626" size={13} />
+        </Pressable>
+
+        <View style={styles.thinDivider} />
+
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="회원 탈퇴"
+          onPress={() => openEditModal('withdrawConfirm')}
+          style={({ pressed }) => [
+            styles.accountRow,
+            pressed && styles.pressed,
+          ]}>
+          <Text style={styles.withdrawText}>회원 탈퇴</Text>
+          <ChevronRightIcon color="#6B7280" size={13} />
         </Pressable>
       </ScrollView>
 
@@ -807,6 +888,62 @@ export default function ProfileScreen() {
                   {renderSaveFooter()}
                 </>
               )}
+
+              {/* 회원 탈퇴 확인 모달 */}
+              {activeField === 'withdrawConfirm' && (
+                <>
+                  <Text style={styles.sheetTitle}>정말 탈퇴하시겠어요?</Text>
+
+                  <View style={styles.withdrawNoticeBox}>
+                    <Text style={styles.withdrawNoticeTitle}>
+                      탈퇴 전 꼭 확인해 주세요
+                    </Text>
+                    <Text style={styles.withdrawNoticeItem}>
+                      • 신체 프로필, 운동 목표, 불편 부위 등 개인 맞춤 설정이 즉시 삭제되며 복구할 수 없어요.
+                    </Text>
+                    <Text style={styles.withdrawNoticeItem}>
+                      • 소셜 계정 연동이 해제되어 같은 계정으로 다시 로그인하면 신규 회원으로 시작하게 돼요.
+                    </Text>
+                  </View>
+
+                  {withdrawError ? (
+                    <Text style={styles.withdrawErrorText}>{withdrawError}</Text>
+                  ) : null}
+
+                  <View style={styles.withdrawButtonRow}>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="탈퇴 취소"
+                      disabled={isWithdrawing}
+                      onPress={closeModal}
+                      style={({ pressed }) => [
+                        styles.withdrawCancelButton,
+                        pressed && !isWithdrawing && styles.pressed,
+                      ]}>
+                      <Text style={styles.withdrawCancelButtonText}>취소</Text>
+                    </Pressable>
+
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="회원 탈퇴 확정"
+                      disabled={isWithdrawing}
+                      onPress={() => void handleConfirmWithdraw()}
+                      style={({ pressed }) => [
+                        styles.withdrawConfirmButton,
+                        isWithdrawing && styles.withdrawButtonDisabled,
+                        pressed && !isWithdrawing && styles.pressed,
+                      ]}>
+                      {isWithdrawing ? (
+                        <ActivityIndicator size="small" color="#FFFFFF" />
+                      ) : (
+                        <Text style={styles.withdrawConfirmButtonText}>
+                          탈퇴하기
+                        </Text>
+                      )}
+                    </Pressable>
+                  </View>
+                </>
+              )}
             </View>
           ) : null}
         </KeyboardAvoidingView>
@@ -825,15 +962,8 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     paddingHorizontal: 20,
-    paddingTop: 12,
+    paddingTop: 20,
     paddingBottom: 120,
-  },
-  pageTitle: {
-    fontSize: 22,
-    fontWeight: '700',
-    color: '#111827',
-    letterSpacing: -0.4,
-    marginBottom: 20,
   },
   profileRow: {
     flexDirection: 'row',
@@ -941,16 +1071,33 @@ const styles = StyleSheet.create({
     marginTop: 18,
     marginBottom: 8,
   },
-  appSettingsRow: {
+  settingToggleRow: {
     height: 54,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
   },
-  appSettingsText: {
+  thinDivider: {
+    height: 1,
+    backgroundColor: '#F3F4F6',
+    marginHorizontal: -20,
+  },
+  accountRow: {
+    height: 54,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  logoutText: {
     fontSize: 15.5,
     fontWeight: '500',
-    color: '#111827',
+    color: '#DC2626',
+    letterSpacing: -0.3,
+  },
+  withdrawText: {
+    fontSize: 15.5,
+    fontWeight: '500',
+    color: '#6B7280',
     letterSpacing: -0.3,
   },
   genderRow: {
