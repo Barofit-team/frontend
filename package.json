@@ -55,7 +55,8 @@
     "web": "expo start --web",
     "lint": "expo lint",
     "typecheck": "expo customize tsconfig.json && tsc --noEmit",
-    "test:workout": "node scripts/test-workout-integration.cjs"
+    "test:workout": "node scripts/test-workout-integration.cjs",
+    "test:onboarding": "node scripts/test-onboarding-store.cjs"
   },
   "private": true
 }

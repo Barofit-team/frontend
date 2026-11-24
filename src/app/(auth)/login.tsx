@@ -7,9 +7,12 @@ import {
   Alert,
   ActivityIndicator,
   Modal,
+  ScrollView,
+  useWindowDimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
+import { Image } from 'expo-image';
 import { router } from 'expo-router';
 import { WebView, WebViewNavigation } from 'react-native-webview';
 import type { ShouldStartLoadRequest } from 'react-native-webview/lib/WebViewTypes';
@@ -30,6 +33,10 @@ import type { SocialProvider } from '@/types/auth';
 const PROVIDER_NAME: Record<SocialProvider, string> = { KAKAO: '카카오', GOOGLE: 'Google' };
 
 export default function LoginScreen() {
+  const { height } = useWindowDimensions();
+  const extraHeight = Math.max(0, height - 640);
+  const heroTop = Math.max(32, height * 0.104) + Math.min(48, extraHeight * 0.24);
+  const bottomSpacing = 16 + Math.min(96, extraHeight * 0.48);
   const loginWithCode = useAuthStore((state) => state.loginWithCode);
   const devLogin = useAuthStore((state) => state.devLogin);
   // 진행 중인 로그인 시도(state, nonce 포함). null이면 모달이 닫혀 있습니다
@@ -119,67 +126,77 @@ export default function LoginScreen() {
     router.push('/onboarding');
   };
 
+  const showDeveloperActions = () => {
+    Alert.alert('개발 도구', undefined, [
+      { text: 'dev 로그인', onPress: handleDevLogin },
+      { text: 'dev 온보딩', onPress: handleDevOnboarding },
+      { text: '둘러보기', onPress: handleGuestMode },
+    ], { cancelable: true });
+  };
+
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <StatusBar style="dark" />
-      <View style={styles.container}>
-        {/* 상단 미니멀 타이틀 */}
-        <View style={styles.header}>
-          <Text style={styles.title}>BaroFit</Text>
-          <Text style={styles.subtitle}>AI 실시간 운동 코칭</Text>
-        </View>
-
-        {/* 소셜 로그인 버튼 영역 */}
-        <View style={styles.buttonContainer}>
-          {/* DEV: 소셜 로그인 상단 작은 dev 로그인 / dev 온보딩 버튼 */}
-          {__DEV__ && (
-            <View style={styles.devButtonRow}>
-              <TouchableOpacity
-                style={styles.devSmallButton}
-                activeOpacity={0.7}
-                onPress={handleDevLogin}
-              >
-                <Text style={styles.devSmallButtonText}>dev 로그인</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={styles.devSmallButton}
-                activeOpacity={0.7}
-                onPress={handleDevOnboarding}
-              >
-                <Text style={styles.devSmallButtonText}>dev 온보딩</Text>
-              </TouchableOpacity>
-            </View>
-          )}
-
-          {/* 카카오 로그인 */}
+    <View style={styles.screen}>
+      <Image
+        source={require('@/assets/images/auth-background.svg')}
+        style={StyleSheet.absoluteFill}
+        contentFit="fill"
+        accessibilityElementsHidden
+        importantForAccessibility="no-hide-descendants"
+      />
+      <SafeAreaView style={styles.safeArea}>
+        <StatusBar style="dark" />
+        <ScrollView
+          contentContainerStyle={[styles.container, { paddingBottom: bottomSpacing }]}
+          bounces={false}
+          showsVerticalScrollIndicator={false}
+        >
           <TouchableOpacity
-            style={styles.kakaoButton}
-            activeOpacity={0.85}
-            onPress={() => openLogin('KAKAO')}
+            style={[styles.hero, { paddingTop: heroTop }]}
+            activeOpacity={1}
+            onLongPress={__DEV__ ? showDeveloperActions : undefined}
+            accessible={false}
           >
-            <Text style={styles.kakaoButtonText}>카카오로 시작하기</Text>
+            <Image
+              source={require('@/assets/images/login-glass.png')}
+              style={styles.heroImage}
+              contentFit="fill"
+              accessibilityElementsHidden
+              importantForAccessibility="no-hide-descendants"
+            />
+            <Text accessibilityRole="header" style={styles.headline}>
+              {'집에서 혼자 운동해도\n자세는 바로핏이 봐드릴게요'}
+            </Text>
           </TouchableOpacity>
 
-          {/* Google 로그인 */}
-          <TouchableOpacity
-            style={styles.googleButton}
-            activeOpacity={0.85}
-            onPress={() => openLogin('GOOGLE')}
-          >
-            <Text style={styles.googleButtonText}>Google로 계속하기</Text>
-          </TouchableOpacity>
+          <View style={styles.buttonContainer}>
+            <TouchableOpacity
+              style={[styles.socialButton, styles.kakaoButton]}
+              activeOpacity={0.8}
+              onPress={() => openLogin('KAKAO')}
+              disabled={submitting}
+              accessibilityRole="button"
+              accessibilityLabel="카카오 로그인"
+              accessibilityState={{ disabled: submitting }}
+            >
+              <Image source={require('@/assets/images/social-kakao.svg')} style={styles.providerIcon} />
+              <Text style={styles.socialButtonText}>카카오 로그인</Text>
+            </TouchableOpacity>
 
-          {/* 둘러보기 (체험 페이지 [미구현]) */}
-          <TouchableOpacity
-            style={styles.guestButton}
-            activeOpacity={0.7}
-            onPress={handleGuestMode}
-          >
-            <Text style={styles.guestButtonText}>둘러보기</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
+            <TouchableOpacity
+              style={[styles.socialButton, styles.googleButton]}
+              activeOpacity={0.8}
+              onPress={() => openLogin('GOOGLE')}
+              disabled={submitting}
+              accessibilityRole="button"
+              accessibilityLabel="Google 계정으로 로그인"
+              accessibilityState={{ disabled: submitting }}
+            >
+              <Image source={require('@/assets/images/social-google.svg')} style={styles.providerIcon} />
+              <Text style={styles.socialButtonText}>Google 계정으로 로그인</Text>
+            </TouchableOpacity>
+          </View>
+        </ScrollView>
+      </SafeAreaView>
 
       {/* 인앱 웹뷰 로그인 모달 */}
       <Modal
@@ -221,97 +238,72 @@ export default function LoginScreen() {
           <Text style={styles.submittingText}>로그인 중...</Text>
         </View>
       ) : null}
-    </SafeAreaView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  screen: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+  },
   safeArea: {
     flex: 1,
-    backgroundColor: '#FFFFFF', // 흰색 배경
   },
   container: {
-    flex: 1,
-    paddingHorizontal: 24,
+    flexGrow: 1,
+    paddingHorizontal: 16,
+    paddingBottom: 16,
     justifyContent: 'space-between',
-    paddingVertical: 40,
   },
-  header: {
-    marginTop: 80,
+  hero: {
     alignItems: 'center',
+    flexShrink: 0,
   },
-  title: {
-    fontSize: 36,
-    fontWeight: '800',
-    color: '#111827',
-    letterSpacing: -0.5,
+  heroImage: {
+    width: 184,
+    height: 144,
   },
-  subtitle: {
-    fontSize: 15,
-    color: '#6B7280',
-    marginTop: 8,
+  headline: {
+    marginTop: 52,
+    fontSize: 22,
+    lineHeight: 32,
+    fontWeight: '700',
+    letterSpacing: -0.7,
+    color: '#222222',
+    textAlign: 'center',
   },
   buttonContainer: {
     width: '100%',
     gap: 12,
-    marginBottom: 16,
+    marginTop: 32,
+  },
+  socialButton: {
+    minHeight: 54,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
   },
   kakaoButton: {
-    backgroundColor: '#FEE500',
-    height: 52,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  kakaoButtonText: {
-    color: '#191919',
-    fontSize: 15,
-    fontWeight: '700',
+    backgroundColor: '#FFEB00',
   },
   googleButton: {
-    backgroundColor: '#FFFFFF',
-    height: 52,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
+    backgroundColor: '#F2F2F2',
   },
-  googleButtonText: {
-    color: '#1F2937',
-    fontSize: 15,
-    fontWeight: '700',
+  providerIcon: {
+    width: 22,
+    height: 22,
   },
-  guestButton: {
-    paddingVertical: 12,
-    alignItems: 'center',
-  },
-  guestButtonText: {
-    color: '#9CA3AF',
-    fontSize: 14,
-    fontWeight: '500',
-  },
-  devButtonRow: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    gap: 8,
-    marginBottom: 2,
-  },
-  devSmallButton: {
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: 6,
-    borderWidth: 1,
-    borderStyle: 'dashed',
-    borderColor: '#D1D5DB',
-    backgroundColor: '#F9FAFB',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  devSmallButtonText: {
-    color: '#4B5563',
-    fontSize: 12,
+  socialButtonText: {
+    color: '#191919',
+    fontSize: 16,
+    lineHeight: 22,
     fontWeight: '600',
+    letterSpacing: -0.4,
   },
   // 모달 스타일
   modalContainer: {
