@@ -310,6 +310,8 @@ export default function WorkoutSessionScreen() {
     setNumber: number;
     routineSetId: string;
     exerciseId: string;
+    /** Routine 측정 유형. SET_FEEDBACK 주 측정값 선택에 사용 */
+    measurementType: 'REPS' | 'DURATION';
     pipeline: ReturnType<typeof createPosePipeline>;
     tracking: TrackingSignalAdapter;
     frameCount: number;
@@ -437,12 +439,14 @@ export default function WorkoutSessionScreen() {
           serverSession.current = { sessionId: local.sessionId, session: local.session };
         }
         const summary = completed.summary as { count?: number | null; holdSeconds?: number | null } | undefined;
+        // 주 측정값만 전달: REPS = count, DURATION = floor(holdSeconds). 보조값을 다른 측정 유형 값으로 보내지 않는다
+        const isReps = activeSet.measurementType === 'REPS';
         useTtsStore.getState().sendCoachEvent({
           eventType: 'SET_FEEDBACK',
           exerciseId: activeSet.exerciseId,
-          actualReps: typeof summary?.count === 'number' ? summary.count : undefined,
+          actualReps: isReps && typeof summary?.count === 'number' ? summary.count : undefined,
           actualDurationSeconds:
-            typeof summary?.holdSeconds === 'number' ? Math.floor(summary.holdSeconds) : undefined,
+            !isReps && typeof summary?.holdSeconds === 'number' ? Math.floor(summary.holdSeconds) : undefined,
         });
         completePhase(finishedPhaseId);
       });
@@ -482,6 +486,7 @@ export default function WorkoutSessionScreen() {
           setNumber: currentPhase.set,
           routineSetId: routineSet.id,
           exerciseId: routineExercise.exerciseId,
+          measurementType: routineExercise.measurementType,
           pipeline,
           // 분석기가 있는 운동만 여기 도달. 미지원 종목은 위에서 return되어 자동 일시정지 대상이 아님
           tracking: createTrackingSignalAdapter({ analyzerSupported: true }),

@@ -162,13 +162,20 @@ for (const name of ['SquatAnalyzer', 'PlankAnalyzer']) {
  * 3-1b 테스트 전용: 실제 분석기 출력의 count/holdSeconds만 지정한 값으로 덮어쓴다(null이면 실제 출력 그대로).
  * 측정 알고리즘을 흉내 내지 않으며, 화면·세트 종료가 두 값을 어떻게 쓰는지만 검증한다.
  */
-const testMeasure = { value: null };
+const testMeasure = { value: null, summary: null };
 for (const name of ['SquatAnalyzer', 'PlankAnalyzer', 'MountainClimberAnalyzer']) {
   const proto = poseModule[name].prototype;
   const original = proto.pushFrame;
   proto.pushFrame = function (...args) {
     const output = original.apply(this, args);
     return testMeasure.value ? { ...output, ...testMeasure.value } : output;
+  };
+  // 3-1c 테스트 전용: 세트 종료 요약(set.completed summary)의 count/holdSeconds만 지정 (null이면 실제 요약 그대로)
+  const originalFinish = proto.finish;
+  proto.finish = function (...args) {
+    const events = originalFinish.apply(this, args);
+    if (!testMeasure.summary) return events;
+    return events.map((e) => (e.type === 'set.completed' ? { ...e, summary: { ...e.summary, ...testMeasure.summary } } : e));
   };
 }
 
@@ -1064,5 +1071,45 @@ describe('3-1a — 분석기 생성과 readiness fallback 정리', () => {
   test('R4. 계약 충돌(마운틴 클라이머)은 AI 프로필이 있어 기존 readiness 유지', async () => {
     const r = await runReadiness('mountain_climber');
     assert.equal(r.ready, 1); assert.equal(r.required, 6);
+  });
+});
+
+// ---------------------------------------------------------------------
+// 3-1c: SET_FEEDBACK 코치 이벤트의 주 측정값
+// ---------------------------------------------------------------------
+describe('3-1c — SET_FEEDBACK 주 측정값', () => {
+  const events = [];
+  beforeEach(() => {
+    events.length = 0; testMeasure.value = null; testMeasure.summary = null;
+    stores.tts.setState({ sendCoachEvent: (e) => { events.push(e); return false; } });
+  });
+  afterEach(() => { testMeasure.value = null; testMeasure.summary = null; stores.tts.setState({ sendCoachEvent: () => false }); });
+  const setFeedback = () => events.filter((e) => e.eventType === 'SET_FEEDBACK');
+
+  test('F1. REPS(스쿼트): actualReps = count, 보조 holdSeconds는 actualDurationSeconds로 보내지 않음', async () => {
+    const root = await startWith(routine({ exerciseId: 'squat', measurementType: 'REPS', sets: [{ reps: 7 }, { reps: 7 }] }));
+    testMeasure.summary = { count: 7, holdSeconds: 4.2 };
+    testMeasure.value = { count: 7, holdSeconds: 4.2 };
+    await pushOneFrame(); await settle();
+    assert.equal(ui.stage.phase.kind, 'resting');
+    assert.equal(setFeedback().length, 1);
+    assert.equal(setFeedback()[0].actualReps, 7);
+    assert.equal(setFeedback()[0].actualDurationSeconds, undefined);
+    assert.equal((await localSession()).sets[0].actualDurationSeconds, null, 'Workout 세트에도 보조 holdSeconds 미저장');
+    await unmount(root);
+  });
+
+  test('F2. DURATION(플랭크): actualDurationSeconds = floor(holdSeconds), count는 actualReps로 보내지 않음', async () => {
+    const root = await startWith(routine({ exerciseId: 'plank', measurementType: 'DURATION', sets: [{ seconds: 20 }, { seconds: 20 }] }));
+    testMeasure.summary = { count: 3, holdSeconds: 18.9 };
+    feedFrames = true;
+    await advance(20 * 1000 + 500);
+    assert.equal(ui.stage.phase.kind, 'resting', '기존 타이머 정책으로 종료');
+    assert.equal(setFeedback().length, 1);
+    assert.equal(setFeedback()[0].actualReps, undefined);
+    assert.equal(setFeedback()[0].actualDurationSeconds, 18);
+    const set = (await localSession()).sets[0];
+    assert.deepEqual([set.actualReps, set.actualDurationSeconds], [null, 18], 'Workout 세트: count 미저장, AI 유지 시간 18초(타이머 20초 아님)');
+    await unmount(root);
   });
 });
