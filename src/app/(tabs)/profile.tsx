@@ -1,6 +1,6 @@
 import { router, useFocusEffect } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import { ageFromBirthDate } from '@/utils/birthDate';
 import {
   ActivityIndicator,
@@ -87,31 +87,40 @@ const GENDER_OPTIONS: { value: Gender; label: string }[] = [
 ];
 
 const GOAL_OPTIONS: { value: ExerciseGoal; label: string }[] = [
-  { value: 'WEIGHT_LOSS', label: '체중 감량' },
-  { value: 'STRENGTH', label: '근력 향상' },
-  { value: 'ENDURANCE', label: '체력 증진' },
-  { value: 'POSTURE', label: '자세 교정' },
+  { value: 'WEIGHT_LOSS', label: '체중 관리' },
+  { value: 'STRENGTH', label: '근력 강화' },
+  { value: 'ENDURANCE', label: '체력 향상' },
   { value: 'HABIT', label: '운동 습관 형성' },
 ];
 
 const GOAL_LABEL_MAP: Record<ExerciseGoal, string> = {
-  WEIGHT_LOSS: '체중 감량',
-  STRENGTH: '근력 향상',
-  ENDURANCE: '체력 증진',
+  WEIGHT_LOSS: '체중 관리',
+  STRENGTH: '근력 강화',
+  ENDURANCE: '체력 향상',
   POSTURE: '자세 교정',
   HABIT: '운동 습관 형성',
 };
 
+function goalIconUri(goal: ExerciseGoal, selected: boolean): string {
+  const paths: Record<ExerciseGoal, string> = {
+    WEIGHT_LOSS: '<path d="M12 2C9 6 5 9 5 14a7 7 0 0 0 14 0c0-3-2-6-4-8 0 3-1 4-2 4 0-3-1-5-1-8Z"/><path d="M12 13c-3 3-3 6 0 7 3-1 3-4 0-7Z" fill="white"/>',
+    STRENGTH: '<path d="M2 8h3v8H2zm4-3h3v14H6zm4 6h4v2h-4zm5-6h3v14h-3zm4 3h3v8h-3z"/>',
+    ENDURANCE: '<path d="M12 21 3 12C-3 4 8-1 12 6c4-7 15-2 9 6Z"/>',
+    HABIT: '<path d="M4 4h16v18H4z"/><path d="M7 2v5m10-5v5M8 14l3 3 5-6" fill="none" stroke="white" stroke-width="2"/>',
+    POSTURE: '<path d="M6 3h12v3H6zm-2 4h16v15H4z"/><path d="m8 14 3 3 5-6" fill="none" stroke="white" stroke-width="2"/>',
+  };
+  return `data:image/svg+xml;utf8,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="${selected ? '#1D61E7' : '#4B5563'}">${paths[goal]}</svg>`)}`;
+}
+
 const FREQUENCY_OPTIONS: { value: WeeklyWorkoutDays; label: string }[] = [
-  { value: 2, label: '주 2회' },
-  { value: 3, label: '주 3회' },
-  { value: 4, label: '주 4회' },
-  { value: 5, label: '주 5회' },
-  { value: 6, label: '주 6회' },
+  { value: 2, label: '2회' },
+  { value: 3, label: '3회' },
+  { value: 4, label: '4회' },
+  { value: 5, label: '5회' },
 ];
 
 const DISCOMFORT_OPTIONS: { value: DiscomfortSelection; label: string }[] = [
-  { value: 'NONE', label: '해당 없음' },
+  { value: 'NONE', label: '불편 부위 없음' },
   { value: 'NECK_SHOULDER', label: '목 / 어깨' },
   { value: 'ARM_WRIST', label: '팔 / 손목' },
   { value: 'BACK', label: '등 / 허리' },
@@ -250,6 +259,8 @@ export default function ProfileScreen() {
   >(['NONE']);
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [focusedInput, setFocusedInput] = useState<'nickname' | 'birthDate' | 'heightCm' | 'weightCm' | null>(null);
+  const weightInputRef = useRef<React.ComponentRef<typeof TextInput>>(null);
   const [isWithdrawing, setIsWithdrawing] = useState<boolean>(false);
   const [withdrawError, setWithdrawError] = useState<string | null>(null);
 
@@ -292,6 +303,7 @@ export default function ProfileScreen() {
 
   const closeModal = () => {
     if (isWithdrawing || isSaving) return;
+    setFocusedInput(null);
     setWithdrawError(null);
     setSaveError(null);
     setActiveField(null);
@@ -484,25 +496,52 @@ export default function ProfileScreen() {
     }
   };
 
-  const renderSaveFooter = () => (
-    <>
-      {saveError ? <Text style={styles.saveErrorText}>{saveError}</Text> : null}
+  const renderSaveFooter = (options?: { inlineError?: boolean }) => {
+    const isNextStep = activeField === 'bodySpec' && focusedInput === 'heightCm';
+    return (
+      <View style={styles.sheetFooter}>
+        {!options?.inlineError && saveError ? (
+          <Text style={styles.saveErrorText}>{saveError}</Text>
+        ) : null}
+        <Pressable
+          accessibilityRole="button"
+          disabled={isSaving}
+          onPress={() => {
+            if (isNextStep) {
+              weightInputRef.current?.focus();
+              return;
+            }
+            void handleSaveField();
+          }}
+          style={({ pressed }) => [
+            styles.saveButton,
+            isSaving && styles.saveButtonDisabled,
+            pressed && !isSaving && styles.pressed,
+          ]}>
+          {isSaving ? (
+            <ActivityIndicator size="small" color="#FFFFFF" />
+          ) : (
+            <Text style={styles.saveButtonText}>
+              {isNextStep ? '다음' : '변경사항 저장'}
+            </Text>
+          )}
+        </Pressable>
+      </View>
+    );
+  };
+
+  const renderSheetHeader = (title: string) => (
+    <View style={styles.sheetHeader}>
+      <Text style={styles.sheetTitle}>{title}</Text>
       <Pressable
         accessibilityRole="button"
-        disabled={isSaving}
-        onPress={() => void handleSaveField()}
-        style={({ pressed }) => [
-          styles.saveButton,
-          isSaving && styles.saveButtonDisabled,
-          pressed && !isSaving && styles.pressed,
-        ]}>
-        {isSaving ? (
-          <ActivityIndicator size="small" color="#FFFFFF" />
-        ) : (
-          <Text style={styles.saveButtonText}>저장</Text>
-        )}
+        accessibilityLabel="닫기"
+        hitSlop={10}
+        onPress={closeModal}
+        style={({ pressed }) => [styles.sheetCloseButton, pressed && styles.pressed]}>
+        <Text style={styles.sheetCloseText}>✕</Text>
       </Pressable>
-    </>
+    </View>
   );
 
   const infoRows: {
@@ -673,61 +712,326 @@ export default function ProfileScreen() {
         </Pressable>
       </ScrollView>
 
-      {/* 6. 항목 편집 & 앱 설정 바텀시트 모달 */}
+      {/* 6. 항목 편집 & 회원 탈퇴 바텀시트 모달 */}
       <Modal
         visible={activeField !== null}
         transparent
-        animationType="fade"
+        animationType="slide"
         onRequestClose={closeModal}>
         <KeyboardAvoidingView
           style={styles.modalBackdrop}
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-          <Pressable style={styles.modalDismissArea} onPress={closeModal} />
+          {activeField === 'withdrawConfirm' ? (
+            <Pressable style={styles.modalDismissArea} onPress={closeModal} />
+          ) : null}
 
           {activeField !== null ? (
             <View
               style={[
-                styles.sheetContainer,
+                activeField === 'withdrawConfirm'
+                  ? styles.withdrawSheetContainer
+                  : [styles.fullSheetContainer, { marginTop: insets.top + 12 }],
                 { paddingBottom: Math.max(insets.bottom, 20) + 8 },
               ]}>
-              <View style={styles.sheetHandle} />
+              {activeField === 'withdrawConfirm' ? (
+                <View style={styles.sheetHandle} />
+              ) : null}
 
-              {/* 닉네임 변경 모달 */}
+              {/* 닉네임 변경 모달 (MP01-1 ~ MP01-3) */}
               {activeField === 'nickname' && (
-                <>
-                  <Text style={styles.sheetTitle}>닉네임 변경</Text>
+                <View style={styles.sheetBody}>
+                  {renderSheetHeader('닉네임 변경')}
 
-                  <TextInput
-                    value={draftText}
-                    onChangeText={setDraftText}
-                    keyboardType="default"
-                    maxLength={10}
-                    autoFocus
-                    placeholder="닉네임을 입력해주세요"
-                    placeholderTextColor="#9CA3AF"
-                    style={styles.sheetInput}
-                  />
+                  <View style={styles.sheetContent}>
+                    <View
+                      style={[
+                        styles.inputBox,
+                        focusedInput === 'nickname' && styles.inputBoxFocused,
+                        saveError && styles.inputBoxError,
+                      ]}>
+                      <TextInput
+                        value={draftText}
+                        onChangeText={(text) => {
+                          setDraftText(text);
+                          if (saveError) setSaveError(null);
+                        }}
+                        onFocus={() => setFocusedInput('nickname')}
+                        onBlur={() => setFocusedInput((prev) => (prev === 'nickname' ? null : prev))}
+                        keyboardType="default"
+                        maxLength={10}
+                        placeholder="닉네임을 입력해주세요"
+                        placeholderTextColor="#9CA3AF"
+                        style={styles.inputField}
+                      />
+                      {focusedInput === 'nickname' && draftText.length > 0 ? (
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel="입력 지우기"
+                          hitSlop={8}
+                          onPress={() => {
+                            setDraftText('');
+                            if (saveError) setSaveError(null);
+                          }}
+                          style={styles.clearButton}>
+                          <Text style={styles.clearButtonText}>✕</Text>
+                        </Pressable>
+                      ) : null}
+                    </View>
+                    {saveError ? (
+                      <Text style={styles.inlineErrorText}>{saveError}</Text>
+                    ) : null}
+                  </View>
 
-                  {renderSaveFooter()}
-                </>
+                  {renderSaveFooter({ inlineError: true })}
+                </View>
               )}
 
               {/* 성별 및 생년월일 변경 모달 */}
               {activeField === 'profileMeta' && (
-                <>
-                  <Text style={styles.sheetTitle}>성별 및 생년월일 변경</Text>
-                  <View style={styles.optionGroup}>
-                    <View style={styles.genderRow}>
-                      {GENDER_OPTIONS.map((item) => {
-                        const selected = draftGender === item.value;
+                <View style={styles.sheetBody}>
+                  {renderSheetHeader('성별 및 생년월일 변경')}
+                  <View style={styles.sheetContent}>
+                    <View style={styles.optionGroup}>
+                      <View style={styles.genderRow}>
+                        {GENDER_OPTIONS.map((item) => {
+                          const selected = draftGender === item.value;
+                          return (
+                            <Pressable
+                              key={item.value}
+                              accessibilityRole="button"
+                              onPress={() => setDraftGender(item.value)}
+                              style={[
+                                styles.optionCard,
+                                styles.genderOptionCard,
+                                selected && styles.optionCardSelected,
+                              ]}>
+                              <Text
+                                style={[
+                                  styles.optionCardText,
+                                  selected && styles.optionCardTextSelected,
+                                ]}>
+                                {item.label}
+                              </Text>
+                            </Pressable>
+                          );
+                        })}
+                      </View>
+
+                      <View
+                        style={[
+                          styles.inputBox,
+                          focusedInput === 'birthDate' && styles.inputBoxFocused,
+                          saveError && styles.inputBoxError,
+                        ]}>
+                        <TextInput
+                          value={draftText}
+                          onChangeText={(text) => {
+                            setDraftText(text.replace(/[^0-9-]/g, ''));
+                            if (saveError) setSaveError(null);
+                          }}
+                          onFocus={() => setFocusedInput('birthDate')}
+                          onBlur={() => setFocusedInput((prev) => (prev === 'birthDate' ? null : prev))}
+                          keyboardType="default"
+                          maxLength={10}
+                          placeholder="생년월일 (YYYY-MM-DD)"
+                          placeholderTextColor="#9CA3AF"
+                          style={styles.inputField}
+                        />
+                        {focusedInput === 'birthDate' && draftText.length > 0 ? (
+                          <Pressable
+                            accessibilityRole="button"
+                            accessibilityLabel="입력 지우기"
+                            hitSlop={8}
+                            onPress={() => setDraftText('')}
+                            style={styles.clearButton}>
+                            <Text style={styles.clearButtonText}>✕</Text>
+                          </Pressable>
+                        ) : null}
+                      </View>
+                    </View>
+                  </View>
+
+                  {renderSaveFooter()}
+                </View>
+              )}
+
+              {/* 신체 정보 (키 / 몸무게) 통합 변경 모달 (MP04, MP04-1) */}
+              {activeField === 'bodySpec' && (
+                <View style={styles.sheetBody}>
+                  {renderSheetHeader('신체 정보 변경')}
+                  <View style={[styles.sheetContent, styles.bodySpecGroup]}>
+                    <View style={styles.bodySpecField}>
+                      <Text style={styles.bodySpecLabel}>키(cm)</Text>
+                      <View
+                        style={[
+                          styles.inputBox,
+                          focusedInput === 'heightCm' && styles.inputBoxFocused,
+                        ]}>
+                        <TextInput
+                          value={draftHeightText}
+                          onChangeText={(text) => {
+                            setDraftHeightText(text.replace(/[^0-9]/g, ''));
+                            if (saveError) setSaveError(null);
+                          }}
+                          onFocus={() => setFocusedInput('heightCm')}
+                          onBlur={() => setFocusedInput((prev) => (prev === 'heightCm' ? null : prev))}
+                          keyboardType="number-pad"
+                          maxLength={3}
+                          placeholder="예: 180"
+                          placeholderTextColor="#9CA3AF"
+                          style={styles.inputField}
+                        />
+                        {focusedInput === 'heightCm' && draftHeightText.length > 0 ? (
+                          <Pressable
+                            accessibilityRole="button"
+                            accessibilityLabel="키 지우기"
+                            hitSlop={8}
+                            onPress={() => setDraftHeightText('')}
+                            style={styles.clearButton}>
+                            <Text style={styles.clearButtonText}>✕</Text>
+                          </Pressable>
+                        ) : null}
+                      </View>
+                    </View>
+                    <View style={styles.bodySpecField}>
+                      <Text style={styles.bodySpecLabel}>몸무게(kg)</Text>
+                      <View
+                        style={[
+                          styles.inputBox,
+                          focusedInput === 'weightCm' && styles.inputBoxFocused,
+                        ]}>
+                        <TextInput
+                          ref={weightInputRef}
+                          value={draftWeightText}
+                          onChangeText={(text) => {
+                            setDraftWeightText(text.replace(/[^0-9]/g, ''));
+                            if (saveError) setSaveError(null);
+                          }}
+                          onFocus={() => setFocusedInput('weightCm')}
+                          onBlur={() => setFocusedInput((prev) => (prev === 'weightCm' ? null : prev))}
+                          keyboardType="number-pad"
+                          maxLength={3}
+                          placeholder="예: 80"
+                          placeholderTextColor="#9CA3AF"
+                          style={styles.inputField}
+                        />
+                        {focusedInput === 'weightCm' && draftWeightText.length > 0 ? (
+                          <Pressable
+                            accessibilityRole="button"
+                            accessibilityLabel="몸무게 지우기"
+                            hitSlop={8}
+                            onPress={() => setDraftWeightText('')}
+                            style={styles.clearButton}>
+                            <Text style={styles.clearButtonText}>✕</Text>
+                          </Pressable>
+                        ) : null}
+                      </View>
+                    </View>
+                  </View>
+
+                  {renderSaveFooter()}
+                </View>
+              )}
+
+              {/* 운동 목표 선택 모달 (MP02) */}
+              {activeField === 'goal' && (
+                <View style={styles.sheetBody}>
+                  {renderSheetHeader('운동 목표 변경')}
+                  <View style={styles.sheetContent}>
+                    <View style={styles.optionGroup}>
+                      {GOAL_OPTIONS.map((item) => {
+                        const selected = draftGoal === item.value;
                         return (
                           <Pressable
                             key={item.value}
                             accessibilityRole="button"
-                            onPress={() => setDraftGender(item.value)}
+                            onPress={() => setDraftGoal(item.value)}
                             style={[
                               styles.optionCard,
-                              styles.genderOptionCard,
+                              selected && styles.optionCardSelected,
+                            ]}>
+                            <View style={styles.optionRowLeft}>
+                              <Image
+                                source={{ uri: goalIconUri(item.value, selected) }}
+                                style={styles.goalIcon}
+                              />
+                              <Text
+                                style={[
+                                  styles.optionCardText,
+                                  selected && styles.optionCardTextSelected,
+                                ]}>
+                                {item.label}
+                              </Text>
+                            </View>
+                            {item.value === 'HABIT' ? (
+                              <View style={styles.beginnerBadge}>
+                                <Text style={styles.beginnerBadgeText}>초심자 추천</Text>
+                              </View>
+                            ) : null}
+                          </Pressable>
+                        );
+                      })}
+                    </View>
+                  </View>
+
+                  {renderSaveFooter()}
+                </View>
+              )}
+
+              {/* 희망 운동 빈도 선택 모달 (MP03) */}
+              {activeField === 'weeklyWorkoutDays' && (
+                <View style={styles.sheetBody}>
+                  {renderSheetHeader('희망 운동 빈도 변경')}
+                  <View style={styles.sheetContent}>
+                    <View style={styles.optionGroup}>
+                      {FREQUENCY_OPTIONS.map((item) => {
+                        const selected = draftWeeklyDays === item.value;
+                        return (
+                          <Pressable
+                            key={item.value}
+                            accessibilityRole="button"
+                            onPress={() => setDraftWeeklyDays(item.value)}
+                            style={[
+                              styles.optionCard,
+                              selected && styles.optionCardSelected,
+                            ]}>
+                            <Text
+                              style={[
+                                styles.optionCardText,
+                                selected && styles.optionCardTextSelected,
+                              ]}>
+                              {item.label}
+                            </Text>
+                            {item.value === 3 ? (
+                              <View style={styles.beginnerBadge}>
+                                <Text style={styles.beginnerBadgeText}>초심자 추천</Text>
+                              </View>
+                            ) : null}
+                          </Pressable>
+                        );
+                      })}
+                    </View>
+                  </View>
+
+                  {renderSaveFooter()}
+                </View>
+              )}
+
+              {/* 불편 부위 선택 모달 (MP05) */}
+              {activeField === 'discomfort' && (
+                <View style={styles.sheetBody}>
+                  {renderSheetHeader('불편 부위 변경')}
+                  <View style={styles.sheetContent}>
+                    <View style={styles.optionGroup}>
+                      {DISCOMFORT_OPTIONS.map((item) => {
+                        const selected = draftDiscomforts.includes(item.value);
+                        return (
+                          <Pressable
+                            key={item.value}
+                            accessibilityRole="button"
+                            onPress={() => toggleDraftDiscomfort(item.value)}
+                            style={[
+                              styles.optionCard,
                               selected && styles.optionCardSelected,
                             ]}>
                             <Text
@@ -741,152 +1045,10 @@ export default function ProfileScreen() {
                         );
                       })}
                     </View>
-
-                    <TextInput
-                      value={draftText}
-                      onChangeText={(text) => setDraftText(text.replace(/[^0-9-]/g, ''))}
-                      keyboardType="default"
-                      maxLength={10}
-                      placeholder="생년월일 (YYYY-MM-DD)"
-                      placeholderTextColor="#9CA3AF"
-                      style={styles.sheetInput}
-                    />
                   </View>
 
                   {renderSaveFooter()}
-                </>
-              )}
-
-              {/* 신체 정보 (키 / 몸무게) 통합 변경 모달 */}
-              {activeField === 'bodySpec' && (
-                <>
-                  <Text style={styles.sheetTitle}>신체 정보 변경</Text>
-                  <View style={styles.bodySpecGroup}>
-                    <View style={styles.bodySpecField}>
-                      <Text style={styles.bodySpecLabel}>키 (cm)</Text>
-                      <TextInput
-                        value={draftHeightText}
-                        onChangeText={(text) => setDraftHeightText(text.replace(/[^0-9]/g, ''))}
-                        keyboardType="number-pad"
-                        maxLength={3}
-                        autoFocus
-                        placeholder="예: 180"
-                        placeholderTextColor="#9CA3AF"
-                        style={styles.sheetInput}
-                      />
-                    </View>
-                    <View style={styles.bodySpecField}>
-                      <Text style={styles.bodySpecLabel}>몸무게 (kg)</Text>
-                      <TextInput
-                        value={draftWeightText}
-                        onChangeText={(text) => setDraftWeightText(text.replace(/[^0-9]/g, ''))}
-                        keyboardType="number-pad"
-                        maxLength={3}
-                        placeholder="예: 80"
-                        placeholderTextColor="#9CA3AF"
-                        style={styles.sheetInput}
-                      />
-                    </View>
-                  </View>
-
-                  {renderSaveFooter()}
-                </>
-              )}
-
-              {/* 운동 목표 선택 모달 */}
-              {activeField === 'goal' && (
-                <>
-                  <Text style={styles.sheetTitle}>운동 목표 변경</Text>
-                  <View style={styles.optionGroup}>
-                    {GOAL_OPTIONS.map((item) => {
-                      const selected = draftGoal === item.value;
-                      return (
-                        <Pressable
-                          key={item.value}
-                          accessibilityRole="button"
-                          onPress={() => setDraftGoal(item.value)}
-                          style={[
-                            styles.optionCard,
-                            selected && styles.optionCardSelected,
-                          ]}>
-                          <Text
-                            style={[
-                              styles.optionCardText,
-                              selected && styles.optionCardTextSelected,
-                            ]}>
-                            {item.label}
-                          </Text>
-                        </Pressable>
-                      );
-                    })}
-                  </View>
-
-                  {renderSaveFooter()}
-                </>
-              )}
-
-              {/* 희망 운동 빈도 선택 모달 */}
-              {activeField === 'weeklyWorkoutDays' && (
-                <>
-                  <Text style={styles.sheetTitle}>희망 운동 빈도 변경</Text>
-                  <View style={styles.optionGroup}>
-                    {FREQUENCY_OPTIONS.map((item) => {
-                      const selected = draftWeeklyDays === item.value;
-                      return (
-                        <Pressable
-                          key={item.value}
-                          accessibilityRole="button"
-                          onPress={() => setDraftWeeklyDays(item.value)}
-                          style={[
-                            styles.optionCard,
-                            selected && styles.optionCardSelected,
-                          ]}>
-                          <Text
-                            style={[
-                              styles.optionCardText,
-                              selected && styles.optionCardTextSelected,
-                            ]}>
-                            {item.label}
-                          </Text>
-                        </Pressable>
-                      );
-                    })}
-                  </View>
-
-                  {renderSaveFooter()}
-                </>
-              )}
-
-              {/* 불편 부위 선택 모달 */}
-              {activeField === 'discomfort' && (
-                <>
-                  <Text style={styles.sheetTitle}>불편 부위 변경</Text>
-                  <View style={styles.optionGroup}>
-                    {DISCOMFORT_OPTIONS.map((item) => {
-                      const selected = draftDiscomforts.includes(item.value);
-                      return (
-                        <Pressable
-                          key={item.value}
-                          accessibilityRole="button"
-                          onPress={() => toggleDraftDiscomfort(item.value)}
-                          style={[
-                            styles.optionCard,
-                            selected && styles.optionCardSelected,
-                          ]}>
-                          <Text
-                            style={[
-                              styles.optionCardText,
-                              selected && styles.optionCardTextSelected,
-                            ]}>
-                            {item.label}
-                          </Text>
-                        </Pressable>
-                      );
-                    })}
-                  </View>
-
-                  {renderSaveFooter()}
-                </>
+                </View>
               )}
 
               {/* 회원 탈퇴 확인 모달 */}
@@ -1121,13 +1283,21 @@ const styles = StyleSheet.create({
   },
   modalBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.36)',
+    backgroundColor: 'rgba(0, 0, 0, 0.45)',
     justifyContent: 'flex-end',
   },
   modalDismissArea: {
     flex: 1,
   },
-  sheetContainer: {
+  fullSheetContainer: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingHorizontal: 20,
+    paddingTop: 22,
+  },
+  withdrawSheetContainer: {
     backgroundColor: '#FFFFFF',
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
@@ -1140,47 +1310,132 @@ const styles = StyleSheet.create({
     height: 4,
     borderRadius: 2,
     backgroundColor: '#E4E4E7',
+    marginBottom: 16,
+  },
+  sheetBody: {
+    flex: 1,
+  },
+  sheetHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 24,
   },
   sheetTitle: {
-    marginTop: 20,
-    marginBottom: 16,
     fontSize: 20,
     fontWeight: '700',
-    color: '#111111',
+    color: '#111827',
     letterSpacing: -0.4,
   },
-  sheetInput: {
-    height: 52,
-    borderRadius: 12,
-    backgroundColor: '#F4F4F5',
-    paddingHorizontal: 16,
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#111111',
+  sheetCloseButton: {
+    width: 32,
+    height: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  optionGroup: {
-    gap: 10,
+  sheetCloseText: {
+    fontSize: 20,
+    fontWeight: '400',
+    color: '#4B5563',
   },
-  optionCard: {
-    height: 50,
+  sheetContent: {
+    flex: 1,
+  },
+  sheetFooter: {
+    paddingTop: 12,
+  },
+  inputBox: {
+    height: 54,
     borderRadius: 12,
-    backgroundColor: '#F4F4F5',
+    backgroundColor: '#F3F4F6',
     borderWidth: 1.5,
     borderColor: 'transparent',
     paddingHorizontal: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  inputBoxFocused: {
+    backgroundColor: '#FFFFFF',
+    borderColor: '#374151',
+  },
+  inputBoxError: {
+    backgroundColor: '#FFFFFF',
+    borderColor: '#DC2626',
+  },
+  inputField: {
+    flex: 1,
+    fontSize: 16,
+    fontWeight: '500',
+    color: '#111827',
+    paddingVertical: 0,
+  },
+  clearButton: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: '#6B7280',
+    alignItems: 'center',
     justifyContent: 'center',
+    marginLeft: 8,
+  },
+  clearButtonText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  inlineErrorText: {
+    marginTop: 8,
+    marginLeft: 4,
+    fontSize: 13,
+    fontWeight: '500',
+    color: '#DC2626',
+  },
+  optionGroup: {
+    gap: 12,
+  },
+  optionCard: {
+    height: 54,
+    borderRadius: 12,
+    backgroundColor: '#F3F4F6',
+    borderWidth: 1.5,
+    borderColor: 'transparent',
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
   },
   optionCardSelected: {
-    borderColor: '#111111',
-    backgroundColor: '#FFFFFF',
+    borderColor: '#1D61E7',
+    backgroundColor: '#EEF4FF',
+  },
+  optionRowLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  goalIcon: {
+    width: 20,
+    height: 20,
   },
   optionCardText: {
-    fontSize: 15,
+    fontSize: 15.5,
     fontWeight: '500',
-    color: '#111111',
+    color: '#111827',
   },
   optionCardTextSelected: {
-    fontWeight: '700',
+    fontWeight: '600',
+    color: '#1D61E7',
+  },
+  beginnerBadge: {
+    backgroundColor: '#DBEAFE',
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  beginnerBadgeText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#1D61E7',
   },
   logoutOptionCard: {
     backgroundColor: '#FEF2F2',
@@ -1254,10 +1509,9 @@ const styles = StyleSheet.create({
     letterSpacing: -0.2,
   },
   saveButton: {
-    marginTop: 22,
     height: 52,
-    borderRadius: 26,
-    backgroundColor: '#111111',
+    borderRadius: 14,
+    backgroundColor: '#1D61E7',
     alignItems: 'center',
     justifyContent: 'center',
   },
