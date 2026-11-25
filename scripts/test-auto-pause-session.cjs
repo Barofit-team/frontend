@@ -5,11 +5,12 @@
  *
  * 하니스는 test-m10-session-stall.cjs 기반. 실제 코드로 실행:
  *  - workout-session.tsx, SessionStage.tsx(복귀 카운트다운 포함), PhaseTimer.tsx, useCountdown.ts, sessionFlow.ts,
- *    autoPauseMachine.ts, trackingSignalAdapter.ts, posePipeline.ts + @barofit/pose 실제 Squat/Plank 분석기, offlineWorkout.ts
+ *    posePipeline.ts + @barofit/pose 실제 ExerciseSessionController·분석기, offlineWorkout.ts
  * 표시 전용 stub(props 기록): AutoPauseOverlay, SessionHud, SessionStatusPill, PauseView, StopConfirmSheet
  * 테스트 전용:
- *  - trackingSignalAdapter의 해석기만 testTracking.user 값을 돌려주도록 주입. 실제 AI 신호가 아니며,
- *    상태 전환·타이머·복귀 카운트다운은 하니스에서 구현하지 않는다.
+ *  - 07-A: 이탈·복귀 판정은 실제 ExerciseSessionController가 한다. 하니스는 카메라 프레임 내용만 바꾼다
+ *    (testTracking.user 'lost' → 사람 미검출 landmarks [], 그 외 → 33관절이 보이는 프레임, feedFrames=false → 카메라 콜백 중단).
+ *    프레임·watchdog 시각은 services/sessionClock 대신 mock.timers의 Date.now()를 쓴다. 상태 전환·타이머·복귀 카운트다운은 구현하지 않는다.
  *  - AppState 리스너 수집(백그라운드), AsyncStorage.setItem 대기 게이트(세트 완료 저장 경합 재현)
  */
 'use strict';
@@ -59,7 +60,7 @@ const nav = [];
 let routeParams = {};
 const disk = new Map();
 const appStateListeners = new Set();
-/** 테스트 전용 tracking 신호. null이면 실제 기본 해석기('unknown')를 그대로 사용 */
+/** 테스트 전용 카메라 프레임 내용. 'lost'면 사람 미검출 프레임(landmarks []), 그 외에는 관절이 보이는 프레임 (07-A: Controller가 판정) */
 const testTracking = { user: null };
 /** 설정되면 AsyncStorage.setItem이 해제될 때까지 대기 (세트 완료 저장 경합 재현용) */
 let diskGate = null;
@@ -97,6 +98,8 @@ const stores = {
   result: create(() => ({ openApiSession: () => {} })),
 };
 const sourceMocks = {
+  // 07-A: Controller 시간축. 실제 앱은 performance.now(), 테스트는 mock.timers가 제어하는 Date.now()로 프레임·watchdog을 같은 축에 둔다
+  'services/sessionClock': { sessionNow: () => Date.now(), SESSION_WATCHDOG_MS: 100 },
   'components/workout-preparation/palette': { PrepColors: { cameraBackground: '#000' } },
   'components/workout-session/sessionPalette': { SessionColors: { base: '#000' } },
   // 실제 SessionStage(복귀 5초 PhaseTimer 포함)를 실행하고 props만 기록. 표시 전용 하위 컴포넌트만 기록용 stub
@@ -119,7 +122,7 @@ const sourceMocks = {
   'stores/useTtsStore': { useTtsStore: stores.tts },
   'stores/useTodayRoutineStore': { useTodayRoutineStore: stores.today },
   'stores/useWorkoutResultStore': { useWorkoutResultStore: stores.result },
-  // 실제 어댑터 모듈을 쓰되, 테스트에서만 해석기를 가짜로 주입한다 (실제 AI 신호로 간주하지 않음)
+  // 07-A 이후 화면은 이 어댑터를 쓰지 않는다(Controller가 판정). 어댑터 단위 테스트(기본값 확인)용으로만 남아 있다
   'services/trackingSignalAdapter': {
     get createTrackingSignalAdapter() {
       const real = load(path.join(SRC, 'services/trackingSignalAdapter.ts'));
@@ -152,6 +155,19 @@ const realPackages = {
 
 // 실제 분석기. breakContinuity 호출 횟수만 기록하고 원래 동작을 그대로 실행
 const poseModule = require(nm('@barofit/pose/runtime/index.js'));
+// 07-A: Controller 인스턴스별 pushFrame·tick 호출 기록 (원래 동작 그대로). 분석기 이중 호출·잔존 watchdog 검증용
+const controllerLog = { instances: [], frames: new Map(), ticks: new Map() };
+{
+  const proto = poseModule.ExerciseSessionController.prototype;
+  const pushFrame = proto.pushFrame, tick = proto.tick;
+  proto.pushFrame = function (...args) {
+    if (!controllerLog.frames.has(this)) { controllerLog.instances.push(this); controllerLog.frames.set(this, 0); }
+    controllerLog.frames.set(this, controllerLog.frames.get(this) + 1);
+    return pushFrame.apply(this, args);
+  };
+  proto.tick = function (...args) { controllerLog.ticks.set(this, (controllerLog.ticks.get(this) ?? 0) + 1); return tick.apply(this, args); };
+}
+const analyzerCalls = { count: 0 };
 const breakCalls = [];
 for (const name of ['SquatAnalyzer', 'PlankAnalyzer']) {
   const proto = poseModule[name].prototype;
@@ -167,6 +183,7 @@ for (const name of ['SquatAnalyzer', 'PlankAnalyzer', 'MountainClimberAnalyzer']
   const proto = poseModule[name].prototype;
   const original = proto.pushFrame;
   proto.pushFrame = function (...args) {
+    analyzerCalls.count += 1;
     const output = original.apply(this, args);
     return testMeasure.value ? { ...output, ...testMeasure.value } : output;
   };
@@ -242,15 +259,22 @@ function routine({ exerciseId, measurementType, sets }) {
 async function settle() {
   for (let i = 0; i < 6; i += 1) await act(async () => { await new Promise((r) => setImmediate(r)); });
 }
+/**
+ * 07-A: 프레임 1개 주입. 기본은 33개 관절이 모두 보이는 프레임(Controller 관측 가능 → 300ms 안정 후 측정).
+ * bodyVisible = false면 사람 미검출(landmarks [])로 Controller가 이탈로 판정한다. 측정값은 기존처럼 testMeasure로만 지정한다.
+ */
+const VISIBLE_BODY = () => Array.from({ length: 33 }, () => [0.5, 0.5, 0, 1, 1]);
+let bodyVisible = true;
 function pushEmptyFrame() {
   if (!feedFrames || !ui.camera?.onPoseFrame) return;
   frameClock += 100;
-  ui.camera.onPoseFrame({ timestampMs: frameClock, width: 480, height: 640, landmarks: [] }, { frameId: frameClock, inferenceMs: 1 });
+  ui.camera.onPoseFrame({ timestampMs: frameClock, width: 480, height: 640, landmarks: bodyVisible && testTracking.user !== 'lost' ? VISIBLE_BODY() : [] }, { frameId: frameClock, inferenceMs: 1 });
 }
 /** 가짜 시계를 250ms씩 진행. feedFrames면 단계마다 빈 관절 프레임(사람 미검출)을 넣는다. */
 async function advance(ms) {
   for (let t = 0; t < ms; t += 250) {
-    await act(async () => { pushEmptyFrame(); pushEmptyFrame(); mock.timers.tick(250); });
+    // 125ms 간격 프레임(Controller 프레임 공백 기준 400ms 미만). 시계 진행 총량은 기존과 같다
+    await act(async () => { pushEmptyFrame(); mock.timers.tick(125); pushEmptyFrame(); mock.timers.tick(125); });
     await settle();
   }
 }
@@ -284,6 +308,19 @@ async function resumeLikeUser() {
   await advance(RESUME_COUNTDOWN_SECONDS * 1000 + 250); // 실제 SessionStage의 복귀 PhaseTimer가 onFinishResume 호출
   assert.ok(!(ui.view === 'stage' && ui.stage.pause === 'resuming'), 'HARNESS: 재개 카운트다운이 끝나지 않았습니다');
 }
+/**
+ * 07-A: Controller가 있는 세트의 수동 재개. 재개 버튼 → Controller resume(재인식 안정 300ms → 5초 countdown → active).
+ * 그동안 카메라 프레임(같은 자세)을 계속 공급해야 재개된다. FE 5초 표시는 Controller countdown 진입 시점에 시작하고 확정 권한은 없다
+ */
+async function resumeWithFrames(make, width = 1000, height = 1000) {
+  await advance(500);
+  await act(async () => { ui.view = null; ui.stage.onPressResume(); });
+  await settle();
+  // Controller countdown 전에는 기존 이탈(재인식 대기) 화면, countdown부터 기존 5초 재개 화면
+  assert.ok(ui.view === 'overlay' || (ui.view === 'stage' && ui.stage.pause === 'resuming'), 'HARNESS: 재개 상태가 아닙니다');
+  await feedStatic(make, 300 + RESUME_COUNTDOWN_SECONDS * 1000 + 300, width, height);
+  assert.ok(ui.view === 'stage' && ui.stage.pause === 'none', 'HARNESS: Controller active로 재개되지 않았습니다');
+}
 async function localSession() { return (await offline.getLocalWorkout(owner))?.session ?? null; }
 async function storedQueue() { return JSON.parse(disk.get(`barofit.workout.v1.${owner}`) ?? '{"queue":[]}').queue; }
 
@@ -295,7 +332,8 @@ beforeEach(() => {
   useWorkoutDraftStore.setState({ draft: null });
   alerts.length = 0; nav.length = 0; ui.completeRenders = 0; feedFrames = false; frameClock = 0;
   ui.view = null; ui.overlay = null; ui.hud = null;
-  testTracking.user = null; breakCalls.length = 0; diskGate = null;
+  testTracking.user = null; bodyVisible = true; warmedPhaseId = null; breakCalls.length = 0; diskGate = null;
+  controllerLog.instances.length = 0; controllerLog.frames.clear(); controllerLog.ticks.clear(); analyzerCalls.count = 0;
 });
 // 실패한 테스트가 화면을 남겨 다음 테스트에 영향 주지 않도록 정리
 afterEach(async () => { for (const root of [...liveRoots]) await unmount(root); diskGate = null; mock.timers.reset(); });
@@ -313,47 +351,66 @@ const isAutoPauseScreen = () => ui.view === 'overlay';
 const isAutoResumeScreen = () => ui.view === 'stage' && ui.stage.pause === 'resuming' && ui.hud?.title === '복귀';
 const position = () => ({ id: ui.stage.phase.id, kind: ui.stage.phase.kind, exerciseIndex: ui.stage.phase.exerciseIndex, set: ui.stage.phase.set });
 /** 프레임 1개 주입 (시계는 진행하지 않음) */
-async function pushOneFrame() { await act(async () => { const f = feedFrames; feedFrames = true; pushEmptyFrame(); feedFrames = f; }); await settle(); }
+/** 07-A: 세트의 첫 측정 전 Controller 안정화(300ms). 같은 자세 프레임 4개를 100ms 간격으로(생성기 시간은 고정, 시계·타이머만 진행) */
+const WARM_FRAMES = 4;
+let warmedPhaseId = null;
+async function warmUpVisible() {
+  const id = ui.stage?.phase?.id;
+  if (id === undefined || id === warmedPhaseId || testTracking.user === 'lost' || !bodyVisible) return;
+  warmedPhaseId = id;
+  for (let i = 0; i < WARM_FRAMES; i += 1) {
+    await act(async () => { const f = feedFrames; feedFrames = true; pushEmptyFrame(); feedFrames = f; mock.timers.tick(100); });
+  }
+  await settle();
+}
+/**
+ * 프레임 1개 주입. 세트 첫 주입이면 Controller 안정화 프레임을 먼저 넣는다.
+ * 07-A: FE가 콜백 시각(sessionNow)으로 프레임을 찍으므로 같은 시각 프레임은 Controller가 중복으로 무시한다 → 10ms 진행 후 주입
+ */
+async function pushOneFrame() { await warmUpVisible(); await act(async () => { mock.timers.tick(10); const f = feedFrames; feedFrames = true; pushEmptyFrame(); feedFrames = f; }); await settle(); }
 async function signal(user) { testTracking.user = user; await pushOneFrame(); }
 async function emitAppState(state) { await act(async () => { for (const fn of [...appStateListeners]) fn(state); }); await settle(); }
 async function draftRemaining() { return (await offline.getLocalWorkout(owner)).draft.remainingSeconds; }
 
-/** 60초 운동 시작 → 23초 진행(present) → LOST */
+/**
+ * 07-A: 60초 운동 시작 → 21초 정상 관측 → 사람 미검출 프레임 2초 → Controller auto_paused(2초 이탈 확정).
+ * 2초 동안(recognition_lost)은 측정만 차단되고 타이머는 계속 흐르므로 자동 일시정지 시점은 23초(남은 37초)다
+ */
 async function loseAt23s(fixture = SQUAT_60()) {
   const root = await startWith(fixture);
   testTracking.user = 'present'; feedFrames = true;
-  await advance(23 * 1000);
-  feedFrames = false;
-  assert.equal(remaining(), 37, 'HARNESS: 23초 진행 후 37초여야 합니다');
-  assert.equal(breakCalls.length, 0, 'HARNESS: present 신호에서 일시정지되면 안 됩니다');
+  await advance(21 * 1000);
+  assert.equal(remaining(), 39, 'HARNESS: 21초 진행 후 39초여야 합니다');
+  assert.equal(breakCalls.length, 0, 'HARNESS: 정상 관측 중 측정이 끊기면 안 됩니다');
   const before = position();
   const revision = (await localSession()).revision;
-  await signal('lost');
-  return { root, before, revision };
+  testTracking.user = 'lost';
+  await advance(1750);
+  assert.ok(!isAutoPauseScreen(), 'HARNESS: 2초 전에는 자동 일시정지가 아닙니다');
+  await advance(250);
+  assert.ok(isAutoPauseScreen(), 'HARNESS: 2초 이탈 확정 → 자동 일시정지');
+  return { root, before, revision, frozen: remaining() };
+}
+/** 사람 재검출 → Controller 300ms 안정화 → countdown 진입(기존 복귀 화면 5초 표시 시작) */
+async function recoverToCountdown() {
+  testTracking.user = 'present'; feedFrames = true;
+  await advance(500);
+  assert.ok(isAutoResumeScreen(), 'HARNESS: Controller countdown → 기존 복귀 화면');
 }
 
 // ---------------------------------------------------------------------
-describe('어댑터 — 자동 일시정지 중 프레임 해석 기본값', () => {
-  test('fromPausedFrame 기본 해석기는 unknown (실제 AI 재인식 신호를 가정하지 않음)', () => {
-    const A = load(path.join(SRC, 'services/trackingSignalAdapter.ts'));
-    const adapter = A.createTrackingSignalAdapter({ analyzerSupported: true });
-    assert.deepEqual(adapter.fromPausedFrame({ landmarks: [] }), { user: 'unknown', camera: 'available', analyzer: 'supported' });
-    const unsupported = A.createTrackingSignalAdapter({ analyzerSupported: false, interpretPausedFrame: () => 'present' });
-    assert.equal(unsupported.fromPausedFrame({}).user, 'unknown');
-  });
-});
-
+// 07-A: 자동 일시정지 판정 주체 = ExerciseSessionController. 화면·타이머는 기존 UI에 상태만 매핑
+//  - 사람 미검출 프레임(testTracking 'lost' → landmarks []) 또는 카메라 콜백 중단(watchdog)으로 실제 이탈을 만든다
+// ---------------------------------------------------------------------
 describe('2단계 — LOST 시 타이머 정지와 남은 시간 보존 (3단계 화면 반영)', () => {
-  test('LOST: 타이머 정지, 37초 보존, 30초 경과에도 유지, 운동·세트·phase 유지, 체크포인트 37초', async () => {
-    const { root, before } = await loseAt23s();
-    assert.deepEqual(breakCalls, ['SquatAnalyzer:pause'], 'LOST 진입 시 AI 연속성 끊기 1회');
-    assert.ok(isAutoPauseScreen(), 'Figma 자동 일시정지 화면(AutoPauseOverlay)');
-    assert.equal(remaining(), 37);
-    feedFrames = true; // 계속 lost
-    await advance(30 * 1000);
+  test('LOST(2초 이탈 확정): 타이머 정지, 37초 보존, 30초 경과에도 유지, 운동·세트·phase 유지, 체크포인트 37초', async () => {
+    const { root, before, frozen } = await loseAt23s();
+    assert.equal(frozen, 37);
+    assert.deepEqual(breakCalls, ['SquatAnalyzer:measurement_unavailable'], '이탈 시 Controller가 AI 연속성 끊기 1회');
+    await advance(30 * 1000); // 계속 미검출
     assert.equal(remaining(), 37, '30초가 지나도 37초 유지');
     assert.deepEqual(position(), before);
-    assert.equal(breakCalls.length, 1, '중복 LOST로 일시정지가 다시 생성되지 않음');
+    assert.equal(breakCalls.length, 1, '이탈이 이어져도 중복 끊기 없음');
     const local = await offline.getLocalWorkout(owner);
     assert.equal(local.sessionId, local.draft.sessionId);
     assert.deepEqual([local.draft.phase, local.draft.exerciseIndex, local.draft.set, local.draft.remainingSeconds], ['exercising', 0, 1, 37]);
@@ -363,7 +420,6 @@ describe('2단계 — LOST 시 타이머 정지와 남은 시간 보존 (3단계
 
   test('AI 결과·세트 결과를 만들지 않고, 서버 상태·revision을 바꾸지 않는다', async () => {
     const { root, revision } = await loseAt23s();
-    feedFrames = true;
     await advance(60 * 1000);
     const session = await localSession();
     assert.equal(session.sets.length, 0);
@@ -373,9 +429,45 @@ describe('2단계 — LOST 시 타이머 정지와 남은 시간 보존 (3단계
     await unmount(root);
   });
 
-  test('카메라 프레임 없음은 LOST가 아니다: 타이머 계속 진행', async () => {
+  test('2초 미만 이탈: 측정 즉시 차단(이탈 중 값 반영 안 됨), 자동 일시정지·타이머 정지 없음, 재검출 후 측정 재개·누적 유지', async () => {
     const root = await startWith(SQUAT_60());
-    testTracking.user = 'lost';
+    testTracking.user = 'present'; feedFrames = true; testMeasure.value = { count: 3, holdSeconds: null };
+    await advance(5 * 1000);
+    assert.equal(ui.stage.currentReps, 3);
+    const before = remaining();
+    testTracking.user = 'lost'; testMeasure.value = { count: 4, holdSeconds: null };
+    await advance(1500);
+    assert.ok(!isAutoPauseScreen(), '2초 전 복구 → 자동 일시정지 없음');
+    assert.equal(ui.stage.currentReps, 3, '이탈 중 프레임은 분석기로 가지 않음');
+    assert.ok(remaining() < before, 'recognition_lost 동안 타이머는 계속');
+    testTracking.user = 'present';
+    await advance(1000);
+    assert.equal(ui.stage.currentReps, 4, '재검출·안정화 후 같은 분석기로 측정 재개');
+    assert.ok(!isAutoPauseScreen());
+    assert.deepEqual(breakCalls, ['SquatAnalyzer:measurement_unavailable'], '미완료 동작만 끊고 완료 횟수는 분석기가 유지');
+    testMeasure.value = null;
+    await unmount(root);
+  });
+
+  test('카메라 콜백 중단(zero-frame): watchdog이 400ms 공백을 이탈로 보고 2초 후 자동 일시정지, 타이머 보존', async () => {
+    const root = await startWith(SQUAT_60());
+    testTracking.user = 'present'; feedFrames = true;
+    await advance(10 * 1000);
+    feedFrames = false; // 카메라 콜백 자체가 멈춤 (마지막 프레임은 125ms 전)
+    await advance(1750);
+    assert.ok(!isAutoPauseScreen(), '마지막 프레임 시각부터 2초 전');
+    await advance(250);
+    assert.ok(isAutoPauseScreen(), '마지막 프레임 시각부터 2초 → 자동 일시정지 (프레임 없이 watchdog만으로)');
+    const frozen = remaining();
+    await advance(20 * 1000);
+    assert.equal(remaining(), frozen, '프레임이 없어도 타이머 정지 유지');
+    assert.deepEqual(breakCalls, ['SquatAnalyzer:measurement_unavailable']);
+    assert.equal(alerts.length, 0, 'M10 안내가 아님');
+    await unmount(root);
+  });
+
+  test('세트 시작부터 프레임 0개: Controller가 시작 전이라 자동 일시정지 없음, 타이머 진행(기존 M10 경로)', async () => {
+    const root = await startWith(SQUAT_60());
     await advance(30 * 1000);
     assert.equal(breakCalls.length, 0);
     assert.equal(remaining(), 30);
@@ -383,7 +475,7 @@ describe('2단계 — LOST 시 타이머 정지와 남은 시간 보존 (3단계
     await unmount(root);
   });
 
-  test('분석기 미지원 종목: lost 신호가 있어도 자동 일시정지 대상이 아니다 (M10 기존 동작 유지)', async () => {
+  test('분석기 미연결 종목(계약 충돌): 사람이 사라져도 Controller가 없어 자동 일시정지 대상이 아니다 (M10 기존 동작 유지)', async () => {
     const root = await startWith(UNSUPPORTED());
     testTracking.user = 'lost'; feedFrames = true;
     await advance(10 * 1000);
@@ -394,21 +486,87 @@ describe('2단계 — LOST 시 타이머 정지와 남은 시간 보존 (3단계
 });
 
 // ---------------------------------------------------------------------
-describe('3단계 — Figma 자동 일시정지 화면 · 5초 복귀 · 재개', () => {
-  test('1~5, 10. 횟수 운동: LOST 화면 → 20초 대기 → RECOVERED 5초 복귀 화면 → 37초부터 재개', async () => {
+describe('07-A — ExerciseSessionController lifecycle · 프레임당 측정 1회 · watchdog 정리', () => {
+  test('L1. 세트당 Controller 1개, 분석기는 Controller만 호출: active 프레임마다 정확히 1회(이중 측정 없음)', async () => {
+    const root = await startWith(SQUAT_60());
+    testTracking.user = 'present'; feedFrames = true;
+    await advance(5 * 1000);
+    assert.equal(controllerLog.instances.length, 1, '렌더마다 새로 만들지 않음');
+    const frames = controllerLog.frames.get(controllerLog.instances[0]);
+    assert.ok(frames >= 38, `카메라 프레임이 Controller로 전달 (${frames})`);
+    // 안정화(300ms) 전 프레임은 측정하지 않고, 이후 모든 프레임은 분석기로 1회씩
+    assert.ok(analyzerCalls.count > 0 && analyzerCalls.count <= frames && frames - analyzerCalls.count <= 4,
+      `분석기 호출 ${analyzerCalls.count} ≤ Controller 프레임 ${frames} (차이 = 안정화 프레임)`);
+    const before = analyzerCalls.count;
+    await act(async () => { mock.timers.tick(10); pushEmptyFrame(); }); await settle();
+    assert.equal(analyzerCalls.count, before + 1, '프레임 1개 = 분석기 1회');
+    await unmount(root);
+  });
+
+  test('L2. 수동 일시정지 중에도 카메라 프레임은 Controller로 계속(관측), 분석기 측정은 0회, 자동 재개 없음', async () => {
+    const root = await startWith(SQUAT_60());
+    testTracking.user = 'present'; feedFrames = true;
+    await advance(3 * 1000);
+    await act(async () => { ui.stage.onPressMenu(); }); await settle();
+    const ctl = controllerLog.instances[0];
+    const frames0 = controllerLog.frames.get(ctl), calls0 = analyzerCalls.count;
+    await advance(5 * 1000);
+    assert.ok(controllerLog.frames.get(ctl) - frames0 >= 38, '일시정지 중에도 Controller 관측');
+    assert.equal(analyzerCalls.count, calls0, '일시정지 중 분석기 측정 없음');
+    assert.equal(ui.stage.pause, 'paused');
+    await unmount(root);
+  });
+
+  test('L3. 세트 전환: 이전 세트 Controller·watchdog 잔존 없음, 다음 세트는 새 Controller(카운트·상태 carry-over 없음)', async () => {
+    const root = await startWith(routine({ exerciseId: 'squat', measurementType: 'REPS', sets: [{ reps: 3, rest: 10 }, { reps: 3 }] }));
+    testTracking.user = 'present'; feedFrames = true; testMeasure.value = { count: 3 }; testMeasure.summary = { count: 3 };
+    await advance(1000);
+    assert.equal(ui.stage.phase.kind, 'resting', '1세트 완료');
+    const first = controllerLog.instances[0];
+    const ticks0 = controllerLog.ticks.get(first) ?? 0;
+    testMeasure.value = null; testMeasure.summary = null; feedFrames = false;
+    await advance(5 * 1000);
+    assert.equal(controllerLog.ticks.get(first) ?? 0, ticks0, '휴식 중 이전 세트 watchdog 없음');
+    for (let i = 0; i < 80 && !(ui.stage.phase.kind === 'exercising' && ui.stage.phase.set === 2); i += 1) await advance(250);
+    assert.equal(ui.stage.phase.set, 2);
+    await advance(3 * 1000); // 2세트: 프레임 없음 → 새 Controller 없음, 이전 Controller watchdog도 없음
+    assert.equal(controllerLog.ticks.get(first) ?? 0, ticks0, '다음 세트에서도 이전 watchdog 없음');
+    assert.equal(controllerLog.instances.length, 1, '프레임이 오기 전에는 새 Controller를 만들지 않음');
+    assert.ok(!isAutoPauseScreen(), '이전 세트 상태를 이어받지 않음');
+    assert.equal(ui.stage.currentReps, null, '이전 세트 측정값 초기화');
+    feedFrames = true;
+    await advance(1000);
+    assert.equal(controllerLog.instances.length, 2, '2세트 Controller 새로 생성');
+    assert.notEqual(controllerLog.instances[1], first);
+    assert.equal(ui.stage.currentReps, 0, '새 분석기 count 0부터');
+    await unmount(root);
+  });
+
+  test('L4. 화면 unmount 시 watchdog 정리: 이후 tick 없음', async () => {
+    const root = await startWith(SQUAT_60());
+    testTracking.user = 'present'; feedFrames = true;
+    await advance(2 * 1000);
+    const ctl = controllerLog.instances[0];
+    assert.ok((controllerLog.ticks.get(ctl) ?? 0) > 0, '운동 중 watchdog 동작(약 100ms)');
+    await unmount(root);
+    const ticks = controllerLog.ticks.get(ctl);
+    await act(async () => { mock.timers.tick(3000); });
+    assert.equal(controllerLog.ticks.get(ctl), ticks, 'unmount 후 interval 없음');
+  });
+});
+
+// ---------------------------------------------------------------------
+describe('3단계 — Figma 자동 일시정지 화면 · 5초 복귀 · 재개 (Controller 상태 매핑)', () => {
+  test('1~5, 10. 횟수 운동: LOST 화면 → 20초 대기 → 재검출 → Controller countdown 5초 복귀 화면 → Controller active에서 37초부터 재개', async () => {
     const { root, before } = await loseAt23s();
-    assert.ok(isAutoPauseScreen(), '1. LOST → 자동 일시정지 화면');
     assert.equal(ui.overlay.subtitle, '세트 1 진행 중');
     assert.deepEqual(ui.overlay.alternate, { kind: 'reps', reps: ui.overlay.alternate.reps, target: 12, seconds: 37 });
-    testTracking.user = 'lost'; feedFrames = true;
     await advance(20 * 1000);
     assert.equal(remaining(), 37);
 
-    await signal('present');
-    assert.ok(isAutoResumeScreen(), '2. RECOVERED → 복귀 화면');
-    assert.equal(ui.hud.seconds, 5, '복귀 카운트다운 5초에서 시작');
+    await recoverToCountdown();
+    assert.equal(ui.hud.seconds, 5, '2. 복귀 화면 5초는 Controller countdown 진입 시점부터');
     assert.equal(remaining(), 37, '3. 복귀 카운트다운 중 운동 시간 유지');
-    feedFrames = true; // present 신호 계속 (중복 RECOVERED)
     await advance(4 * 1000);
     assert.ok(isAutoResumeScreen());
     assert.equal(ui.hud.seconds, 1);
@@ -417,7 +575,7 @@ describe('3단계 — Figma 자동 일시정지 화면 · 5초 복귀 · 재개'
 
     await advance(1000);
     assert.equal(ui.view, 'stage');
-    assert.equal(ui.stage.pause, 'none', '4. 카운트다운 종료 후 운동 재개');
+    assert.equal(ui.stage.pause, 'none', '4. Controller active → 운동 재개');
     assert.equal(remaining(), 37, '5. 재개 시점 남은 시간 37초');
     assert.deepEqual(position(), before, '10. 세트·운동 인덱스·phase 유지');
     await advance(2 * 1000);
@@ -428,15 +586,23 @@ describe('3단계 — Figma 자동 일시정지 화면 · 5초 복귀 · 재개'
     await unmount(root);
   });
 
+  test('FE 5초 표시 완료 이벤트는 전이 권한 없음: Controller가 active가 아니면 복귀 화면 유지', async () => {
+    const { root } = await loseAt23s();
+    await recoverToCountdown();
+    await act(async () => { ui.stage.onFinishResume(); }); await settle(); // 표시 쪽이 먼저 끝났다고 가정
+    assert.ok(isAutoResumeScreen(), 'FE 완료 이벤트만으로 재개하지 않음');
+    assert.equal(remaining(), 37);
+    await advance(5 * 1000);
+    assert.equal(ui.stage.pause, 'none', 'Controller active에서만 재개');
+    await unmount(root);
+  });
+
   test('시간 운동(플랭크): LOST → 복귀 → 37초부터 재개, 이후 정상 세트 완료 1회', async () => {
     const { root, before } = await loseAt23s(PLANK_60());
-    assert.ok(isAutoPauseScreen());
     assert.equal(ui.overlay.alternate.kind, 'duration');
     assert.equal(ui.overlay.alternate.seconds, 37);
     await advance(20 * 1000);
-    await signal('present');
-    assert.ok(isAutoResumeScreen());
-    feedFrames = true;
+    await recoverToCountdown();
     await advance(5 * 1000);
     assert.equal(ui.stage.pause, 'none');
     assert.equal(remaining(), 37);
@@ -448,24 +614,23 @@ describe('3단계 — Figma 자동 일시정지 화면 · 5초 복귀 · 재개'
     await unmount(root);
   });
 
-  test('6. 복귀 카운트다운 중 재이탈 → LOST 화면, 다시 복구 시 5초부터 새로 시작', async () => {
+  test('6. 복귀 카운트다운 중 재이탈 → 즉시 LOST 화면, 다시 재검출 시 5초부터 새로 시작', async () => {
     const { root } = await loseAt23s();
-    await signal('present');
-    assert.ok(isAutoResumeScreen());
-    await advance(3 * 1000);
-    assert.equal(ui.hud.seconds, 2);
-    await signal('lost');
-    assert.ok(isAutoPauseScreen(), '복귀 중 이탈 → LOST');
+    await recoverToCountdown();
+    await advance(2000);
+    assert.equal(ui.hud.seconds, 3);
+    testTracking.user = 'lost';
+    await advance(250);
+    assert.ok(isAutoPauseScreen(), '복귀 중 이탈 → Controller auto_paused (2초 대기 없이)');
     await advance(10 * 1000);
     assert.ok(isAutoPauseScreen(), '이전 복귀 카운트다운이 남아 재개시키지 않음');
     assert.equal(remaining(), 37);
-    await signal('present');
-    assert.ok(isAutoResumeScreen());
+    await recoverToCountdown();
     assert.equal(ui.hud.seconds, 5, '복귀 카운트다운 새로 5초');
     await advance(5 * 1000);
     assert.equal(ui.stage.pause, 'none');
     assert.equal(remaining(), 37);
-    assert.equal(breakCalls.length, 1, '복귀 중 재이탈은 이미 일시정지 상태라 연속성 끊기 추가 없음');
+    assert.equal(breakCalls.length, 1, '이미 측정이 멈춘 상태라 연속성 끊기 추가 없음');
     await unmount(root);
   });
 
@@ -473,16 +638,17 @@ describe('3단계 — Figma 자동 일시정지 화면 · 5초 복귀 · 재개'
     const root = await startWith(SQUAT_60());
     testTracking.user = 'present'; feedFrames = true;
     for (let i = 0; i < 3; i += 1) {
-      await advance(10 * 1000);
-      await signal('lost');
-      feedFrames = true;
-      await advance(7 * 1000); // lost 프레임 계속
-      await signal('present');
-      await advance(5 * 1000); // 복귀 카운트다운이 정확히 끝나는 시점까지
+      await advance(8 * 1000);
+      testTracking.user = 'lost';
+      await advance(2000); // 2초 이탈 확정(이 2초는 타이머 진행)
+      assert.ok(isAutoPauseScreen(), `${i + 1}회차 자동 일시정지`);
+      await advance(5 * 1000);
+      await recoverToCountdown();
+      await advance(5 * 1000);
       assert.equal(ui.stage.pause, 'none', `${i + 1}회차 복귀 완료`);
     }
     assert.equal(remaining(), 30, '운동 진행 30초 (일시정지·복귀 시간 제외)');
-    assert.equal(breakCalls.length, 3, 'LOST 3회 = 연속성 끊기 3회');
+    assert.equal(breakCalls.length, 3, '이탈 3회 = 연속성 끊기 3회');
     await advance(10 * 1000);
     assert.equal(remaining(), 20, '10초 후 정확히 10초 감소 (중복 타이머 없음)');
     await advance(20 * 1000 + 500);
@@ -492,60 +658,59 @@ describe('3단계 — Figma 자동 일시정지 화면 · 5초 복귀 · 재개'
     await unmount(root);
   });
 
-  test('8. 자동 일시정지 중 수동 일시정지: 수동 화면 우선, 자동 재개 없음, 수동 재개만으로 복구로 보지 않음', async () => {
+  test('8. 자동 일시정지 중 수동 일시정지: 수동 화면 우선, 재검출돼도 자동 재개 없음, 수동 재개도 Controller 재인식·5초 후에만 재개', async () => {
     const { root } = await loseAt23s();
     const rev0 = (await localSession()).revision;
     await act(async () => { ui.overlay.onPressMenu(); }); await settle();
     assert.equal(ui.view, 'stage');
     assert.equal(ui.stage.pause, 'paused', '메뉴 → 수동 일시정지 화면');
-    await signal('present'); // 수동 일시정지 중 재인식 신호
-    assert.equal(ui.stage.pause, 'paused', '수동 일시정지 화면이 자동 복귀 화면에 덮이지 않음');
-    feedFrames = true;
-    await advance(15 * 1000);
+    testTracking.user = 'present';
+    await advance(15 * 1000); // 수동 일시정지 중 재검출(카메라 관측은 계속)
     assert.equal(ui.stage.pause, 'paused', '수동 일시정지 중 자동 재개 없음');
     assert.equal(remaining(), 37);
     assert.equal((await localSession()).revision, rev0 + 1, '수동 PAUSED 1회');
 
     testTracking.user = 'lost';
-    await resumeLikeUser();
-    assert.ok(isAutoPauseScreen(), '수동 재개 후에도 재인식 전까지 자동 일시정지 화면');
+    await advance(500);
+    await act(async () => { ui.view = null; ui.stage.onPressResume(); }); await settle();
+    assert.ok(isAutoPauseScreen(), '수동 재개 후 재인식 전까지 기존 이탈 화면');
+    await advance(10 * 1000);
+    assert.ok(isAutoPauseScreen(), '미검출이 이어지면 재개하지 않음');
     assert.equal(remaining(), 37);
-    await signal('present');
-    assert.ok(isAutoResumeScreen());
-    await advance(5 * 1000 + 250);
-    assert.equal(ui.stage.pause, 'none');
+    await recoverToCountdown();
+    assert.equal(ui.stage.pause, 'resuming', 'Controller countdown부터 기존 수동 재개 5초 화면');
+    await advance(5 * 1000);
+    assert.equal(ui.stage.pause, 'none', 'Controller active → 재개');
     assert.equal(remaining(), 37);
     await unmount(root);
   });
 
   test('8b. 복귀 카운트다운 중 수동 일시정지 → 카운트다운 취소, 재개 후 새 재인식 필요', async () => {
     const { root } = await loseAt23s();
-    await signal('present');
-    assert.ok(isAutoResumeScreen());
-    await advance(2 * 1000);
+    await recoverToCountdown();
+    await advance(2000);
     await act(async () => { ui.stage.onPressMenu(); }); await settle();
     assert.equal(ui.stage.pause, 'paused');
     await advance(10 * 1000);
     assert.equal(ui.stage.pause, 'paused', '이전 복귀 카운트다운이 끝나도 재개되지 않음');
     assert.equal(remaining(), 37);
-    testTracking.user = 'unknown';
-    await resumeLikeUser();
-    assert.ok(isAutoPauseScreen(), '복귀가 취소되어 LOST 화면');
+    testTracking.user = 'lost';
+    await advance(500);
+    await act(async () => { ui.view = null; ui.stage.onPressResume(); }); await settle();
+    assert.ok(isAutoPauseScreen(), '복귀가 취소되어 이탈 화면');
     await advance(10 * 1000);
-    assert.ok(isAutoPauseScreen(), 'unknown 신호로는 복구되지 않음');
+    assert.ok(isAutoPauseScreen(), '미검출로는 복구되지 않음');
     assert.equal(remaining(), 37);
     await unmount(root);
   });
 
   test('9. 복귀 카운트다운 중 백그라운드 → 카운트다운 중단, 포그라운드 복귀 후에도 자동 재개 없음', async () => {
     const { root, before } = await loseAt23s();
-    await signal('present');
-    assert.ok(isAutoResumeScreen());
+    await recoverToCountdown();
     await advance(2 * 1000);
     await emitAppState('background');
     assert.equal(ui.stage.pause, 'paused');
     await emitAppState('active');
-    feedFrames = true;
     await advance(20 * 1000);
     assert.equal(ui.stage.pause, 'paused', '자동 재개 없음');
     assert.equal(remaining(), 37);
@@ -554,18 +719,18 @@ describe('3단계 — Figma 자동 일시정지 화면 · 5초 복귀 · 재개'
     await unmount(root);
   });
 
-  test('9b. LOST 중 백그라운드 → 포그라운드: 자동 재개 없음', async () => {
+  test('9b. LOST 중 백그라운드 → 포그라운드: 재검출돼도 자동 재개 없음', async () => {
     const { root } = await loseAt23s();
     await emitAppState('background');
     await emitAppState('active');
-    await signal('present');
+    testTracking.user = 'present';
     await advance(20 * 1000);
     assert.equal(ui.stage.pause, 'paused');
     assert.equal(remaining(), 37);
     await unmount(root);
   });
 
-  test('12, 14. 기본 어댑터(unknown): 자동 일시정지 없이 정상 횟수 운동 세트 완료', async () => {
+  test('12, 14. 정상 관측만: 자동 일시정지 없이 정상 횟수 운동 세트 완료', async () => {
     const root = await startWith(SQUAT_60());
     feedFrames = true;
     await advance(EXERCISE_DURATION_SECONDS * 1000 + 500);
@@ -576,7 +741,7 @@ describe('3단계 — Figma 자동 일시정지 화면 · 5초 복귀 · 재개'
     await unmount(root);
   });
 
-  test('13. 기본 어댑터(unknown): 정상 시간 운동 세트 완료', async () => {
+  test('13. 정상 관측만: 정상 시간 운동 세트 완료', async () => {
     const root = await startWith(PLANK_20());
     feedFrames = true;
     await advance(20 * 1000 + 500);
@@ -586,7 +751,7 @@ describe('3단계 — Figma 자동 일시정지 화면 · 5초 복귀 · 재개'
     await unmount(root);
   });
 
-  test('present 신호만 오는 경우 정상 세트 완료 후 휴식 타이머 진행', async () => {
+  test('정상 관측 후 세트 완료 → 휴식 타이머 진행', async () => {
     const root = await startWith(SQUAT_60());
     testTracking.user = 'present'; feedFrames = true;
     await advance(EXERCISE_DURATION_SECONDS * 1000 + 500);
@@ -597,18 +762,18 @@ describe('3단계 — Figma 자동 일시정지 화면 · 5초 복귀 · 재개'
     await unmount(root);
   });
 
-  test('경합: 세트 완료 저장 중 들어온 LOST는 무시되고, 다음 단계(휴식)는 자동 일시정지를 이어받지 않는다', async () => {
+  test('경합: 세트 완료 저장 중 이탈은 무시되고(Controller·watchdog 미전달), 다음 단계(휴식)는 자동 일시정지를 이어받지 않는다', async () => {
     const root = await startWith(SQUAT_60());
     const firstId = ui.stage.phase.id;
     testTracking.user = 'present'; feedFrames = true;
     await advance(EXERCISE_DURATION_SECONDS * 1000 - 1000);
-    feedFrames = false;
     let release; diskGate = { promise: new Promise((r) => { release = r; }) };
     await advance(1250); // 타이머 0초 → finishCurrentPoseSet → 저장 대기
     assert.equal(ui.stage.phase.id, firstId, 'HARNESS: 저장이 막혀 아직 같은 단계여야 합니다');
     assert.equal(remaining(), 0);
-    await signal('lost');
-    assert.ok(!isAutoPauseScreen(), '세트 완료 처리 중 LOST는 무시');
+    testTracking.user = 'lost';
+    await advance(3000);
+    assert.ok(!isAutoPauseScreen(), '세트 완료 처리 중 이탈은 무시');
     assert.equal(breakCalls.length, 0);
     diskGate = null; release();
     await settle(); await advance(250);
@@ -621,7 +786,7 @@ describe('3단계 — Figma 자동 일시정지 화면 · 5초 복귀 · 재개'
     await unmount(root);
   });
 
-  test('4단계 공존: 프레임 0개로 0초 → 운동 재개(재시도) → 새 세트에서 LOST·5초 복귀가 남은 시간 보존으로 동작', async () => {
+  test('4단계 공존: 프레임 0개로 0초 → 운동 재개(재시도) → 새 세트에서 이탈·Controller 복귀가 남은 시간 보존으로 동작', async () => {
     const root = await startWith(SQUAT_60());
     const stuck = ui.stage.phase;
     await advance(EXERCISE_DURATION_SECONDS * 1000 + 250); // 프레임 없음 → 0초 정지
@@ -632,24 +797,22 @@ describe('3단계 — Figma 자동 일시정지 화면 · 5초 복귀 · 재개'
     await act(async () => { ui.stage.onPressResume(); }); await settle();
     assert.equal(ui.stage.phase.id, stuck.id + 1, '재시도');
     assert.equal(ui.stage.pause, 'resuming');
-    assert.equal(ui.hud.title, '복귀', '기존 수동 재개 카운트다운(자동 복귀와 별개 상태)');
+    assert.equal(ui.hud.title, '복귀', 'Controller가 아직 없는 재시도 세트는 기존 수동 재개 카운트다운');
     await advance(5 * 1000);
     assert.equal(ui.stage.pause, 'none');
     assert.equal(remaining(), 60);
     testTracking.user = 'present'; feedFrames = true;
-    await advance(23 * 1000);
-    feedFrames = false;
-    await signal('lost');
+    await advance(21 * 1000);
+    testTracking.user = 'lost';
+    await advance(2000);
     assert.ok(isAutoPauseScreen());
     assert.equal(remaining(), 37);
     await advance(10 * 1000);
-    await signal('present');
-    assert.ok(isAutoResumeScreen());
+    await recoverToCountdown();
     await advance(5 * 1000);
     assert.equal(ui.stage.pause, 'none');
     assert.equal(remaining(), 37, '재시도 세트에서도 남은 시간 보존·복원');
     assert.equal(ui.stage.phase.id, stuck.id + 1);
-    feedFrames = true;
     await advance(37 * 1000 + 500);
     assert.equal(ui.stage.phase.kind, 'resting');
     assert.equal((await localSession()).sets.length, 1, '재시도 세트 결과 1회');
@@ -901,19 +1064,21 @@ describe('3-1b — 측정값 분리와 현재 세트 목표값', () => {
     testTracking.user = 'present';
     testMeasure.value = { count: 5, holdSeconds: null }; feedFrames = true;
     await advance(3 * 1000);
-    feedFrames = false;
-    await signal('lost');
+    // 07-A: 실제 이탈(사람 미검출 2초) → Controller auto_paused
+    testTracking.user = 'lost';
+    await advance(2000);
     assert.ok(isAutoPauseScreen());
     assert.deepEqual(ui.overlay.alternate, { kind: 'reps', reps: 5, target: 12, seconds: remaining() }, 'LOST 화면 = 누적 5회 / 현재 세트 12회');
-    await signal('present');
-    await advance(5 * 1000);
+    testTracking.user = 'present';
+    await advance(500 + 5 * 1000); // 재검출 → 안정화 → Controller countdown 5초 → active
     assert.equal(ui.stage.pause, 'none');
     assert.equal(ui.stage.currentReps, 5, '복귀 후 누적 횟수 유지');
     assert.equal(ui.stage.targetReps, 12);
     await act(async () => { ui.stage.onPressMenu(); }); await settle();
     assert.equal(ui.stage.pause, 'paused');
     assert.equal(ui.stage.currentReps, 5, '수동 일시정지 중 누적 횟수 유지');
-    await resumeLikeUser();
+    feedFrames = false;
+    await resumeWithFrames(() => VISIBLE_BODY(), 480, 640);
     assert.equal(ui.stage.currentReps, 5, '수동 재개 후 누적 횟수 유지');
     await measure({ count: 12 });
     assert.ok(ui.completeRenders > 0, '12회 → 마지막 세트 완료');
@@ -1316,11 +1481,28 @@ const { poseSupport, poseSupportForSnapshot, readinessAvailability, poseBodyView
 const events = [];
 let clock = 0;
 function resetRealReps() {
-  clock = 0; events.length = 0; testMeasure.value = null; testMeasure.summary = null;
+  clock = 0; events.length = 0; testMeasure.value = null; testMeasure.summary = null; warmedPhaseId = null;
   stores.tts.setState({ sendCoachEvent: (e) => { events.push(e); return false; } });
 }
-/** 동작 시작부터의 경과 시간(ms)으로 합성 관절을 만들고 100ms마다 실제 프레임 + 시계 진행 */
+/** 07-A: 같은 자세(생성기 시간 고정)로 프레임만 공급. 시계·타이머는 100ms씩 진행한다 */
+async function feedStatic(make, ms, width = 1000, height = 1000) {
+  const frozen = clock;
+  for (let t = 0; t < ms; t += 100) {
+    await act(async () => {
+      ui.camera.onPoseFrame({ timestampMs: 0, width, height, landmarks: make(frozen) }, { frameId: 0, inferenceMs: 1 });
+      mock.timers.tick(100);
+    });
+    if (t % 500 === 0) await settle();
+  }
+  await settle();
+}
+/**
+ * 동작 시작부터의 경과 시간(ms)으로 합성 관절을 만들고 100ms마다 실제 프레임 + 시계 진행.
+ * 07-A: 세트(phase)의 첫 공급이면 Controller 안정화(300ms) 동안 시작 자세를 먼저 보여 준다(동작 시간축은 그대로)
+ */
 async function feedUntil(untilMs, make, width = 1000, height = 1000) {
+  const id = ui.stage?.phase?.id;
+  if (id !== undefined && id !== warmedPhaseId) { warmedPhaseId = id; await feedStatic(make, WARM_FRAMES * 100, width, height); }
   while (clock < untilMs) {
     await act(async () => {
       clock += 100;
@@ -1512,6 +1694,10 @@ describe('3-3c — 버드독·데드버그 실제 분석기 연동', () => {
     const off = side === 'left' ? 0 : 1;
     const put = (i, x, y) => { points[i + off] = [x, y, 0, 1, 1]; };
     put(11, 0.2, 0.55); put(23, 0.5, 0.55); put(25, active ? 0.7 : 0.5, active ? 0.5 : 0.32); put(27, active ? 0.62 : 0.4, active ? 0.6 : 0.85);
+    // 07-A: AI readiness(dead_bug both·full)가 요구하는 반대쪽 시작 자세와 양팔(위로 든 팔꿈치·손목). 분석기 횟수는 직접 호출 결과와 동일
+    const other = 1 - off;
+    for (const [i, x, y] of [[11, 0.2, 0.55], [23, 0.5, 0.55], [25, 0.5, 0.32], [27, 0.4, 0.85]]) points[i + other] = [x, y, 0, 1, 1];
+    for (const o of [0, 1]) { points[13 + o] = [0.2, 0.4, 0, 1, 1]; points[15 + o] = [0.2, 0.25, 0, 1, 1]; }
     return points;
   };
   /** 1초 주기 왼쪽 → 오른쪽 → 왼쪽 교대 (0.4초 동작). AI는 복귀 시점마다 쪽과 무관하게 1회 합산 */
@@ -1678,6 +1864,8 @@ describe('3-4c — 마운틴 클라이머 실제 분석기 연동 (REPS)', () =>
     for (const j of [0, 1]) {
       place(11 + j, 0.3, 0.43); place(15 + j, 0.31, 0.76); place(23 + j, 0.6, 0.45);
       place(25 + j, (active && j === side) || (mode === 'hold' && j === 0) ? 0.47 : 0.75, 0.55); place(27 + j, 0.9, 0.69);
+      // 07-A: AI readiness(full)가 요구하는 팔꿈치. 실제 MediaPipe 입력에는 항상 있으며 분석기 횟수에는 영향 없음(직접 호출 결과 동일)
+      place(13 + j, 0.305, 0.6);
     }
     return lm;
   };
@@ -1791,7 +1979,7 @@ describe('3-4c — 마운틴 클라이머 실제 분석기 연동 (REPS)', () =>
     assert.equal(ui.stage.pause, 'paused');
     await feedMc(3000); // 일시정지 중 프레임은 측정하지 않음
     assert.equal(ui.stage.currentReps, 6, '일시정지 중 증가·손실 없음');
-    await resumeLikeUser();
+    await resumeWithFrames((t) => mcFrame(t, 'still'), 800, 600);
     assert.equal(ui.stage.currentReps, 6, '재개 후 누적 6회 유지');
     await feedMc(10900);
     assert.equal(ui.stage.phase.kind, 'resting', '16회 도달 → 종료');
@@ -1817,7 +2005,7 @@ describe('3-4c — 마운틴 클라이머 실제 분석기 연동 (REPS)', () =>
 
     root = await mount({ resume: '1' });
     assert.deepEqual([ui.stage.phase.set, ui.stage.targetReps], [2, 20], '이어하기: 2세트 목표 20회');
-    await resumeLikeUser();
+    await resumeWithFrames((t) => mcFrame(t, 'still'), 800, 600);
     await feedMc(1500);
     assert.deepEqual([ui.hud.kind, ui.hud.reps, ui.hud.target], ['reps', 1, 20], '이어하기 후 실제 분석기 count로 REPS 링');
     await feedMc(18 * 1000 + 400);
@@ -1834,7 +2022,7 @@ describe('3-4c — 마운틴 클라이머 실제 분석기 연동 (REPS)', () =>
     const root = await startWith(fx);
     // 앞 운동(스쿼트)은 기존 3-1b/3-1c 방식(실제 Squat 분석기 출력의 count만 지정)으로 2회 종료. 마운틴 클라이머는 주입 없이 실제 분석기
     testMeasure.value = { count: 2 }; testMeasure.summary = { count: 2 };
-    await act(async () => { feedFrames = true; pushEmptyFrame(); feedFrames = false; }); await settle();
+    await pushOneFrame(); // 07-A: Controller 안정화 후 측정
     testMeasure.value = null; testMeasure.summary = null;
     assert.notEqual(ui.stage.phase.kind, 'exercising', '스쿼트 세트 종료');
     await untilPhase(1, 1);
@@ -1853,7 +2041,7 @@ describe('3-4c — 마운틴 클라이머 실제 분석기 연동 (REPS)', () =>
     const fx = multi([{ exerciseId: 'squat', measurementType: 'REPS', sets: [{ reps: 2 }] }, LEGACY_MC]);
     const root = await startWith(fx);
     testMeasure.value = { count: 2 }; testMeasure.summary = { count: 2 }; // 앞 운동 스쿼트만 기존 방식으로 2회 종료
-    await act(async () => { feedFrames = true; pushEmptyFrame(); feedFrames = false; }); await settle();
+    await pushOneFrame(); // 07-A: Controller 안정화 후 측정
     testMeasure.value = null; testMeasure.summary = null;
     await untilPhase(1, 1);
     await feedMc(3000); // 실제 동작 프레임이 들어와도
@@ -1890,7 +2078,7 @@ describe('3-4c — 마운틴 클라이머 실제 분석기 연동 (REPS)', () =>
     stores.today.setState({ routineSnapshot: { ...legacy.snapshot, exercises: [exercise] },
       sessions: [{ ...legacy.sessions[0], measurementType: 'REPS', reps: 16 }] });
     root = await mount({ resume: '1' });
-    await resumeLikeUser();
+    await resumeWithFrames((t) => mcFrame(t, 'still'), 800, 600);
     await feedMc(EXERCISE_DURATION_SECONDS * 1000 + 500);
     assert.equal(ui.stage.currentReps, null, '세션 snapshot(DURATION)과 다른 화면 계약으로 분석기를 만들지 않음');
     assert.equal(stallAlerts().length, 1, '기존 M10 정지 경로');
@@ -1910,7 +2098,7 @@ describe('3-4c — 마운틴 클라이머 실제 분석기 연동 (REPS)', () =>
     await act(async () => { ui.stage.onConfirmStop(); }); await settle();
     await unmount(root);
     root = await mount({ resume: '1' });
-    await resumeLikeUser();
+    await resumeWithFrames((t) => mcFrame(t, 'still'), 800, 600);
     await feedMc(3000);
     assert.equal(ui.hud.kind, 'duration', 'legacy DURATION 표시 유지');
     await feedMc(17 * 1000 + 500);
@@ -2079,7 +2267,7 @@ describe('3-4d — 사이드 플랭크 (DURATION)', () => {
     await act(async () => { ui.stage.onPressMenu(); }); await settle();
     await feedSp(3000, 'left'); // 일시정지 중 프레임은 측정하지 않음
     assert.equal(ui.hud.holdSeconds ?? before, before, '일시정지 중 증가 없음');
-    await resumeLikeUser();
+    await resumeWithFrames(() => spLandmarks('left'));
     await feedSp(1000, 'left');
     assert.ok(ui.hud.holdSeconds >= before, `재개 후 기존 유지 시간 보존 (${ui.hud.holdSeconds} ≥ ${before})`);
     await feedSp(22 * 1000 + 500, 'left');
@@ -2111,7 +2299,7 @@ describe('3-4d — 사이드 플랭크 (DURATION)', () => {
     const fx = { snapshot: { ...parts[0].snapshot, exercises }, sessions: parts.map((p) => p.sessions[0]) };
     let root = await startWith(fx);
     testMeasure.value = { count: 2 }; testMeasure.summary = { count: 2 }; // 앞 운동 스쿼트만 기존 방식으로 2회 종료
-    await act(async () => { feedFrames = true; pushEmptyFrame(); feedFrames = false; }); await settle();
+    await pushOneFrame(); // 07-A: Controller 안정화 후 측정
     testMeasure.value = null; testMeasure.summary = null;
     await untilPhase(1, 1);
     await feedSp(20 * 1000 + 500, 'right');
@@ -2122,7 +2310,7 @@ describe('3-4d — 사이드 플랭크 (DURATION)', () => {
     assert.deepEqual([draft.exerciseId, draft.phase, draft.set], ['side-plank', 'exercising', 2]);
     await unmount(root);
     root = await mount({ resume: '1' });
-    await resumeLikeUser();
+    await resumeWithFrames(() => spLandmarks('left'));
     await feedSp(25 * 1000, 'left');
     assert.ok(ui.completeRenders > 0);
     const pose = await poseItems();
@@ -2286,7 +2474,7 @@ describe('05 — 실험 횟수 카운터 4종 실제 분석기 연동 (REPS)', (
       assert.equal(ui.stage.pause, 'paused');
       await feedPilot(c, 3000);
       assert.equal(ui.stage.currentReps, 1, '일시정지 중 증가·손실 없음');
-      await resumeLikeUser();
+      await resumeWithFrames(() => pilotLandmarks(c.poseId, 'rest'));
       assert.equal(ui.stage.currentReps, 1, '재개 후 1회 유지');
       await feedPilot(c, c.end + 300); // 재개 후 3회 추가(분석기는 미완료 동작을 버리고 새로 관측)
       assert.equal(ui.stage.phase.kind, 'resting', '1 + 3 = 목표 4회 → 종료');
@@ -2303,7 +2491,7 @@ describe('05 — 실험 횟수 카운터 4종 실제 분석기 연동 (REPS)', (
       const fx = multi([{ exerciseId: 'squat', measurementType: 'REPS', sets: [{ reps: 2 }] }, REPS(c, [3, 3]), { exerciseId: 'plank', measurementType: 'DURATION', sets: [{ seconds: 20 }] }]);
       let root = await startWith(fx);
       testMeasure.value = { count: 2 }; testMeasure.summary = { count: 2 }; // 앞 운동 스쿼트만 기존 방식으로 2회 종료
-      await act(async () => { feedFrames = true; pushEmptyFrame(); feedFrames = false; }); await settle();
+      await pushOneFrame(); // 07-A: Controller 안정화 후 측정
       testMeasure.value = null; testMeasure.summary = null;
       await untilPhase(1, 1);
       assert.equal(ui.stage.targetReps, 3);
@@ -2324,7 +2512,7 @@ describe('05 — 실험 횟수 카운터 4종 실제 분석기 연동 (REPS)', (
 
       root = await mount({ resume: '1' });
       assert.deepEqual([ui.stage.phase.set, ui.stage.targetReps], [2, 3], '이어하기: 2세트');
-      await resumeLikeUser();
+      await resumeWithFrames(() => pilotLandmarks(c.poseId, 'rest'));
       await feedPilot(c, c.end + 300);
       await untilPhase(2, 1);
       testMeasure.value = { count: null, holdSeconds: 5 }; testMeasure.summary = { count: null, holdSeconds: 5 };
@@ -2470,7 +2658,7 @@ describe('05 — 실험 횟수 카운터 4종 실제 분석기 연동 (REPS)', (
     assert.equal(ui.stage.pause, 'paused');
     await feedFlutter(3000);
     assert.equal(ui.stage.currentReps, 1, '일시정지 중 증가·손실 없음');
-    await resumeLikeUser();
+    await resumeWithFrames(() => flutterLandmarks(true));
     assert.equal(ui.stage.currentReps, 1);
     await feedFlutter(FK.end + 300);
     assert.equal(ui.stage.phase.kind, 'resting', '1 + 3 = 목표 4회 → 종료');
@@ -2485,7 +2673,7 @@ describe('05 — 실험 횟수 카운터 4종 실제 분석기 연동 (REPS)', (
     const fx = multi([{ exerciseId: 'squat', measurementType: 'REPS', sets: [{ reps: 2 }] }, REPS(FK, [3, 3]), { exerciseId: 'plank', measurementType: 'DURATION', sets: [{ seconds: 20 }] }]);
     let root = await startWith(fx);
     testMeasure.value = { count: 2 }; testMeasure.summary = { count: 2 };
-    await act(async () => { feedFrames = true; pushEmptyFrame(); feedFrames = false; }); await settle();
+    await pushOneFrame(); // 07-A: Controller 안정화 후 측정
     testMeasure.value = null; testMeasure.summary = null;
     await untilPhase(1, 1);
     { const t0 = clock;
@@ -2502,13 +2690,14 @@ describe('05 — 실험 횟수 카운터 4종 실제 분석기 연동 (REPS)', (
     await unmount(root);
     root = await mount({ resume: '1' });
     assert.deepEqual([ui.stage.phase.set, ui.stage.targetReps], [2, 3]);
-    await resumeLikeUser();
+    await resumeWithFrames(() => flutterLandmarks(true));
     await feedFlutter(FK.end + 300);
     await untilPhase(2, 1);
     testMeasure.value = { count: null, holdSeconds: 5 }; testMeasure.summary = { count: null, holdSeconds: 5 };
-    await feedFlutter(2000, flutterSeq(['L']));
+    // 플랭크 단계는 플랭크 readiness(팔꿈치·손목 포함 한쪽 6관절)를 만족하는 선 자세 프레임(K5와 동일)
+    await feedFlutter(2000, () => pilotLandmarks('burpee', 'rest'));
     assert.deepEqual([ui.hud.kind, ui.hud.holdSeconds], ['duration', 5], '다음 운동 플랭크는 자기 분석기 값');
-    await feedFlutter(18 * 1000 + 500, flutterSeq(['L']));
+    await feedFlutter(18 * 1000 + 500, () => pilotLandmarks('burpee', 'rest'));
     assert.ok(ui.completeRenders > 0);
     const session = await lastSession();
     assert.deepEqual(session.sets.map((x) => [x.routineSetId, x.actualReps, x.actualDurationSeconds]), [

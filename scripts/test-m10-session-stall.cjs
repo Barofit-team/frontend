@@ -102,6 +102,8 @@ const stores = {
   result: create(() => ({ openApiSession: () => {} })),
 };
 const sourceMocks = {
+  // 07-A: Controller 시간축. 실제 앱은 performance.now(), 테스트는 mock.timers가 제어하는 Date.now()로 프레임·watchdog을 같은 축에 둔다
+  'services/sessionClock': { sessionNow: () => Date.now(), SESSION_WATCHDOG_MS: 100 },
   'components/workout-preparation/palette': { PrepColors: { cameraBackground: '#000' } },
   'components/workout-session/sessionPalette': { SessionColors: { base: '#000' } },
   'components/workout-session/SessionStage': { SessionStage: (props) => { ui.stage = props; return null; } },
@@ -196,15 +198,22 @@ function routine({ exerciseId, measurementType, sets }) {
 async function settle() {
   for (let i = 0; i < 6; i += 1) await act(async () => { await new Promise((r) => setImmediate(r)); });
 }
+/**
+ * 07-A: 프레임 1개 주입. 기본은 33개 관절이 모두 보이는 프레임(Controller 관측 가능 → 300ms 안정 후 측정).
+ * bodyVisible = false면 사람 미검출(landmarks [])로 Controller가 이탈로 판정한다. 측정값은 기존처럼 testMeasure로만 지정한다.
+ */
+const VISIBLE_BODY = () => Array.from({ length: 33 }, () => [0.5, 0.5, 0, 1, 1]);
+let bodyVisible = true;
 function pushEmptyFrame() {
   if (!feedFrames || !ui.camera?.onPoseFrame) return;
   frameClock += 100;
-  ui.camera.onPoseFrame({ timestampMs: frameClock, width: 480, height: 640, landmarks: [] }, { frameId: frameClock, inferenceMs: 1 });
+  ui.camera.onPoseFrame({ timestampMs: frameClock, width: 480, height: 640, landmarks: bodyVisible ? VISIBLE_BODY() : [] }, { frameId: frameClock, inferenceMs: 1 });
 }
 /** 가짜 시계를 250ms씩 진행. feedFrames면 단계마다 빈 관절 프레임(사람 미검출)을 넣는다. */
 async function advance(ms) {
   for (let t = 0; t < ms; t += 250) {
-    await act(async () => { pushEmptyFrame(); pushEmptyFrame(); mock.timers.tick(250); });
+    // 125ms 간격 프레임(Controller 프레임 공백 기준 400ms 미만). 시계 진행 총량은 기존과 같다
+    await act(async () => { pushEmptyFrame(); mock.timers.tick(125); pushEmptyFrame(); mock.timers.tick(125); });
     await settle();
   }
 }
@@ -242,6 +251,7 @@ async function localSession() { return (await offline.getLocalWorkout(owner))?.s
 async function storedQueue() { return JSON.parse(disk.get(`barofit.workout.v1.${owner}`) ?? '{"queue":[]}').queue; }
 
 beforeEach(() => {
+  bodyVisible = true;
   mock.timers.enable({ apis: ['setInterval', 'setTimeout', 'Date'], now: Date.parse('2026-11-23T03:00:00Z') });
   ownerSeq += 1; owner = `m10-user-${ownerSeq}`;
   stores.auth.setState({ user: { id: owner } });

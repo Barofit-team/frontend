@@ -3,6 +3,7 @@ import {
   BulgarianSplitSquatAnalyzer,
   BurpeeAnalyzer,
   DeadBugAnalyzer,
+  ExerciseSessionController,
   FlutterKicksAnalyzer,
   GluteBridgeAnalyzer,
   InclinePushupAnalyzer,
@@ -22,6 +23,8 @@ import {
   SquatAnalyzer,
   StandingCalfRaiseAnalyzer,
   SupermanAnalyzer,
+  type PoseFrame,
+  type SessionState,
 } from '@barofit/pose';
 import type { PoseFrameResult } from '@/services/poseCoaching';
 import { createPoseCoach } from '@/services/poseCoaching';
@@ -98,25 +101,38 @@ export function createExerciseAnalyzer(routineExerciseId: string, measurementTyp
       return null;
   }
 }
-/** One analyzer and one stable result ID for one planned set. Call only after camera frames are available. */
+/**
+ * 한 세트 = Controller 1개 + 분석기 1개 + 결과 ID 1개. 분석기는 Controller만 호출한다(FE에서 직접 pushFrame하지 않음 → 프레임당 측정 1회).
+ * Controller(ExerciseSessionController)가 관측·이탈(2초)·재인식 안정화·5초 복귀·측정 차단의 단일 판정 주체다.
+ * 일시정지·복귀 중에도 카메라 프레임은 계속 pushFrame으로 전달한다(측정은 Controller가 active일 때만).
+ */
 export function createPosePipeline(options: {
   analyzer: PoseAnalyzer; owner: string; sessionId: string; routineSetId: string; resultId: string;
   isOwner: () => boolean; sendCoach: (event: CoachingEvent) => boolean; speak: (text: string) => void;
 }) {
   const coach = createPoseCoach(options.sendCoach, options.speak);
+  const controller = new ExerciseSessionController({
+    analyzer: options.analyzer as unknown as ConstructorParameters<typeof ExerciseSessionController>[0]['analyzer'],
+  });
   let result: Completed | null = null;
   let performedAt: string | null = null;
   return {
-    pushFrame(frame: unknown) {
+    /** frame.timestampMs는 sessionNow() 시간축이어야 한다(watchdog tick과 같은 축) */
+    pushFrame(frame: PoseFrame): SessionState {
       if (result) throw new Error('종료된 세트입니다.');
-      const output = options.analyzer.pushFrame(frame);
-      coach.process(output);
-      return output;
+      const state = controller.pushFrame(frame);
+      if (state.frameResult) coach.process(state.frameResult as unknown as PoseFrameResult);
+      return state;
     },
-    pause() { if (!result) options.analyzer.breakContinuity('pause'); },
+    /** 카메라 콜백이 멈춘 경우까지 감지하는 watchdog. 분석기 프레임을 합성하지 않는다 */
+    tick(nowMs: number): SessionState { return controller.tick(nowMs); },
+    pause(): SessionState { return controller.pause(); },
+    /** 수동 일시정지 해제. Controller는 재인식 안정화 → 5초 countdown → active 순서로만 측정을 재개한다 */
+    resume(): SessionState { return controller.resume(); },
+    state(): SessionState { return controller.getState(); },
     async finish() {
       if (!result) {
-        result = options.analyzer.finish().find(event => event.type === 'set.completed') ?? null;
+        result = (controller.finish() as Completed[]).find(event => event.type === 'set.completed') ?? null;
         if (!result) throw new Error('세트 결과를 생성하지 못했습니다.');
         performedAt = new Date().toISOString();
       }
