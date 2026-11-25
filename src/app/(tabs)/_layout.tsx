@@ -29,11 +29,6 @@ const TAB_CONFIG: Record<
     label: '기록',
     renderIcon: (color) => <ChartTabIcon color={color} size={22} />,
   },
-  workout: {
-    label: '코치',
-    accentColor: '#E53935',
-    renderIcon: (color) => <ChartTabIcon color={color} size={22} />,
-  },
   profile: {
     label: '나',
     renderIcon: (color) => <ProfileTabIcon color={color} size={22} />,
@@ -64,7 +59,7 @@ function FloatingTabBar({
           const isFocused = state.index === index;
 
           const tintColor =
-            config.accentColor ?? (isFocused ? '#111111' : '#A1A1AA');
+            config.accentColor ?? (isFocused ? '#1D61E7' : '#6B7280');
 
           const onPress = () => {
             const event = emitter.emit({
@@ -124,7 +119,7 @@ export default function TabsLayout() {
       }}>
       <Tabs.Screen name="home" options={{ title: '홈' }} />
       <Tabs.Screen name="record" options={{ title: '기록' }} />
-      <Tabs.Screen name="workout" options={{ title: '코치' }} />
+      <Tabs.Screen name="workout" options={{ href: null }} />
       <Tabs.Screen name="profile" options={{ title: '나' }} />
     </Tabs>
   );
@@ -133,14 +128,14 @@ export default function TabsLayout() {
 const styles = StyleSheet.create({
   wrapper: {
     position: 'absolute',
-    left: 44,
-    right: 44,
+    left: 0,
+    right: 0,
     alignItems: 'center',
   },
   pillContainer: {
-    width: '100%',
-    height: 66,
-    borderRadius: 33,
+    width: 234,
+    height: 62,
+    borderRadius: 31,
     backgroundColor: '#FFFFFF',
     borderWidth: 1,
     borderColor: '#EBEBED',
@@ -157,13 +152,13 @@ const styles = StyleSheet.create({
   tabItem: {
     flex: 1,
     height: '100%',
-    borderRadius: 28,
+    borderRadius: 26,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 3,
+    gap: 2,
   },
   tabItemActive: {
-    backgroundColor: '#F6F6F7',
+    backgroundColor: '#EEF3FF',
   },
   tabItemPressed: {
     opacity: 0.75,
