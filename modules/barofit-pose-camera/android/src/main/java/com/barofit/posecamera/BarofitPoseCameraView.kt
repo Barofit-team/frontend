@@ -61,6 +61,9 @@ class BarofitPoseCameraView(
   private var frameCounter = 0
   private var lastAnalyzeMs = 0L
 
+  /** start()/stop() 호출마다 증가. 지연 도착한 future 콜백이 이미 취소된 시도를 바인딩하지 않도록 막는 용도. */
+  private var generation = 0
+
   init {
     setBackgroundColor(Color.BLACK)
     addView(container, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
@@ -93,10 +96,12 @@ class BarofitPoseCameraView(
 
   override fun onAttachedToWindow() {
     super.onAttachedToWindow()
+    Log.d(TAG, "onAttachedToWindow isActiveProp=$isActiveProp")
     if (isActiveProp) start()
   }
 
   override fun onDetachedFromWindow() {
+    Log.d(TAG, "onDetachedFromWindow")
     stop()
     detector?.close()
     detector = null
@@ -143,8 +148,10 @@ class BarofitPoseCameraView(
   }
 
   private fun start() {
+    Log.d(TAG, "start() isBinding=$isBinding isActiveProp=$isActiveProp isAttachedToWindow=$isAttachedToWindow")
     if (isBinding) return
     if (!hasPerm()) {
+      Log.d(TAG, "start() aborted: no camera permission")
       emitStatus("permission_denied", "CAMERA permission is not granted")
       emitError("CAMERA_PERMISSION_DENIED", "CAMERA permission is required")
       return
@@ -153,21 +160,30 @@ class BarofitPoseCameraView(
 
     val owner = (appContext.currentActivity as? LifecycleOwner)
     if (owner == null) {
+      Log.d(TAG, "start() aborted: currentActivity is not a LifecycleOwner")
       emitError("NO_LIFECYCLE", "Current activity is not a LifecycleOwner")
       return
     }
 
     isBinding = true
+    val myGeneration = ++generation
     emitStatus("starting", null)
 
     val future = ProcessCameraProvider.getInstance(context)
     future.addListener({
       try {
+        if (myGeneration != generation) {
+          Log.d(TAG, "start() future callback stale (myGeneration=$myGeneration current=$generation), skipping bind")
+          isBinding = false
+          return@addListener
+        }
         val camProvider = future.get()
         provider = camProvider
         camProvider.unbindAll()
 
         if (!isAttachedToWindow || !isActiveProp) {
+          Log.d(TAG, "start() future callback: not attached/active anymore, skipping bind " +
+            "(isAttachedToWindow=$isAttachedToWindow isActiveProp=$isActiveProp)")
           isBinding = false
           return@addListener
         }
@@ -198,6 +214,7 @@ class BarofitPoseCameraView(
           previewView.requestLayout()
         }
         isBinding = false
+        Log.d(TAG, "start() bind success (generation=$myGeneration)")
         emitStatus("ready", null)
       } catch (t: Throwable) {
         Log.e(TAG, "bind failed", t)
@@ -209,7 +226,9 @@ class BarofitPoseCameraView(
   }
 
   private fun stop() {
+    Log.d(TAG, "stop() isBinding=$isBinding")
     isBinding = false
+    generation++ // 대기 중인 start() future 콜백을 무효화
     try {
       analysis?.clearAnalyzer()
       analysis = null
