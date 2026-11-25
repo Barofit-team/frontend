@@ -39,14 +39,18 @@ for (const bad of [undefined, null, '', 'reps', 'TIME', 20, {}]) {
 for (const [routineId, poseId] of Object.entries(SUPPORTED_16)) {
   for (const type of ['REPS', 'DURATION']) assert.deepEqual(poseSupportForSnapshot(routineId, type), { status: 'supported', poseId }, `${routineId} ${type}`);
 }
+// 04: 사이드 플랭크 supported. DURATION snapshot만 supported, 그 외(REPS·누락·잘못된 값)는 conflict
+assert.deepEqual(poseSupportForSnapshot('side-plank', 'DURATION'), { status: 'supported', poseId: 'side_plank' }, 'side-plank DURATION snapshot');
+for (const bad of ['REPS', undefined, null, '', 'duration', 'TIME', 20, {}]) {
+  assert.deepEqual(poseSupportForSnapshot('side-plank', bad), { status: 'conflict', poseId: 'side_plank' }, `side-plank 측정 유형 ${JSON.stringify(bad)}`);
+}
 for (const type of ['REPS', 'DURATION']) {
-  assert.deepEqual(poseSupportForSnapshot('side-plank', type), { status: 'incomplete', poseId: 'side_plank' });
   for (const id of ['jump-squat', 'reverse-crunch', 'flutter-kick', 'burpee', 'sit-up']) assert.deepEqual(poseSupportForSnapshot(id, type), { status: 'not_implemented', poseId: null }, id);
   for (const id of ['forward-lunge', 'pushup', 'toString']) assert.deepEqual(poseSupportForSnapshot(id, type), { status: 'unknown', poseId: null }, id);
 }
 assert.equal(poseExerciseId('mountain-climber'), 'mountain_climber', '기존 17종 매핑(결과 검증용)은 유지');
-assert.deepEqual(poseSupport('side-plank'), { status: 'incomplete', poseId: 'side_plank' });
-assert.equal(poseExerciseId('side-plank'), 'side_plank', '3-4d: 사이드 플랭크 정적 매핑(지원 상태는 incomplete 유지)');
+assert.deepEqual(poseSupport('side-plank'), { status: 'supported', poseId: 'side_plank' }, '04: 사이드 플랭크 정적 지원');
+assert.equal(poseExerciseId('side-plank'), 'side_plank', '3-4d: 사이드 플랭크 정적 매핑');
 for (const id of ['jump-squat', 'reverse-crunch', 'flutter-kick', 'burpee', 'sit-up']) {
   assert.deepEqual(poseSupport(id), { status: 'not_implemented', poseId: null }, id);
 }
@@ -67,19 +71,21 @@ assert.deepEqual(readinessAvailability('mountain-climber', hasProfile, 'TIME'), 
 assert.deepEqual(readinessAvailability('mountain-climber', () => false, 'REPS'), { availability: 'profile_unsupported', poseId: null }, '프로필 없으면 다른 프로필로 대체하지 않음');
 assert.ok(hasProfile('mountain_climber'), '현재 AI readiness 프로필 존재 mountain_climber');
 // 3-4d: Pose 49762dd부터 AI READINESS_PROFILES.side_plank가 존재한다(either·full 6관절 + 반대쪽 어깨 검사).
-// FE 최종 연동(04) 전까지 SPECIAL_SUPPORT incomplete가 우선하므로 프로필이 있어도 readiness는 계속 차단된다
+// 04: FE 지원 전환 후 DURATION snapshot은 AI side_plank 프로필로 readiness 실행, 그 외 snapshot은 contract_conflict
 assert.equal(hasProfile('side_plank'), true, 'AI side_plank readiness 프로필 존재(49762dd)');
 assert.deepEqual(JSON.parse(JSON.stringify(READINESS_PROFILES.side_plank)), { mode: 'either', joints: ['shoulder', 'elbow', 'wrist', 'hip', 'knee', 'ankle'] });
-for (const type of ['DURATION', 'REPS', undefined]) {
-  assert.deepEqual(readinessAvailability('side-plank', hasProfile, type), { availability: 'profile_unsupported', poseId: null }, `side-plank readiness ${type}`);
+assert.deepEqual(readinessAvailability('side-plank', hasProfile, 'DURATION'), { availability: 'available', poseId: 'side_plank' }, 'side-plank DURATION readiness');
+for (const type of ['REPS', 'TIME']) {
+  assert.deepEqual(readinessAvailability('side-plank', hasProfile, type), { availability: 'contract_conflict', poseId: 'side_plank' }, `side-plank readiness ${type}`);
 }
-assert.deepEqual(readinessAvailability('side-plank', hasProfile), { availability: 'profile_unsupported', poseId: null });
+assert.deepEqual(readinessAvailability('side-plank', hasProfile), { availability: 'contract_conflict', poseId: 'side_plank' }, '측정 유형 누락');
+assert.deepEqual(readinessAvailability('side-plank', () => false, 'DURATION'), { availability: 'profile_unsupported', poseId: null }, '프로필 없으면 다른 프로필로 대체하지 않음');
 assert.deepEqual(readinessAvailability('burpee', hasProfile), { availability: 'analyzer_unsupported', poseId: null });
 assert.deepEqual(readinessAvailability('forward-lunge', hasProfile), { availability: 'analyzer_unsupported', poseId: null });
 assert.deepEqual(readinessAvailability(undefined, hasProfile), { availability: 'analyzer_unsupported', poseId: null });
 assert.deepEqual(readinessAvailability('squat', () => false), { availability: 'profile_unsupported', poseId: null }, '분석기는 있어도 프로필이 없으면 다른 프로필을 쓰지 않음');
 for (const poseId of Object.values(SUPPORTED_16)) assert.ok(hasProfile(poseId), `현재 AI readiness 프로필 존재 ${poseId}`);
-console.log('PASS: 3-1a/3-4c support states (17 static supported, mountain-climber REPS-only snapshot contract / incomplete / 5 not_implemented / unknown) and readiness availability');
+console.log('PASS: 3-1a/3-4c/04 support states (18 static supported, mountain-climber REPS-only / side-plank DURATION-only snapshot contract / 5 not_implemented / unknown) and readiness availability');
 
 // ---------- 3-2: 촬영 방향(PD 구상도 근거 종목만) ----------
 const { poseBodyView } = m.exports;

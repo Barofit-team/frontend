@@ -166,51 +166,30 @@ export function useCameraReadiness({
     const isObservable = result?.observable ?? false;
     const selectedSide = result?.selectedSide ?? null;
     const candidateSide = result?.candidateSide ?? null;
-    const activeSide: 'left' | 'right' | 'both' | null =
-      selectedSide ?? candidateSide ?? (profile?.mode === 'both' ? 'both' : side);
+    // 표시 기준은 AI 공개 결과(Pose 4a57587 camera.readiness v1)만 사용한다:
+    //  evaluatedSide = 이번 프레임 missing/outOfFrame을 만든 실제 평가 쪽, checkedLandmarks = 실제 검사 관절 전체.
+    // FE는 쪽 추정·프로필 재구성·반대쪽 어깨 등 AI 검사 조건을 복제하지 않는다. 첫 프레임 전(result 없음)에는 검사 관절이 없다.
+    const activeSide: 'left' | 'right' | 'both' | null = result?.evaluatedSide ?? side;
 
     const missingLandmarks = result?.missingLandmarks ?? [];
     const outOfFrameLandmarks = result?.outOfFrameLandmarks ?? [];
 
-    let evaluatedSides: ('left' | 'right')[];
-    if (profile?.mode === 'both' || activeSide === 'both') {
-      evaluatedSides = ['left', 'right'];
-    } else if (activeSide === 'left' || activeSide === 'right') {
-      evaluatedSides = [activeSide];
-    } else {
-      const hasRightIssue = [...missingLandmarks, ...outOfFrameLandmarks].some(k =>
-        k.startsWith('right_')
-      );
-      evaluatedSides = [hasRightIssue ? 'right' : 'left'];
-    }
-
+    const checkedLandmarks = Array.from(new Set<string>(result?.checkedLandmarks ?? []));
     const missingSet = new Set(missingLandmarks);
     const outOfFrameSet = new Set(outOfFrameLandmarks);
-    const requiredJointNames = new Set<string>(profile?.joints ?? []);
+    const checkedSet = new Set(checkedLandmarks);
+
+    const requiredJointCount = checkedLandmarks.length;
+    const recognizedJointCount = checkedLandmarks.filter(k => !missingSet.has(k) && !outOfFrameSet.has(k)).length;
 
     const jointStates: Record<string, JointRecognitionState> = {};
-    let requiredJointCount = 0;
-    let recognizedJointCount = 0;
-
     for (const s of ['left', 'right'] as const) {
-      const sideActive = evaluatedSides.includes(s);
       for (const j of ALL_SILHOUETTE_JOINTS) {
         const key = `${s}_${j}`;
-        if (!sideActive || !requiredJointNames.has(j)) {
-          jointStates[key] = 'inactive';
-          continue;
-        }
-        requiredJointCount += 1;
-        if (!result || status === 'no_person') {
-          jointStates[key] = 'missing';
-        } else if (outOfFrameSet.has(key)) {
-          jointStates[key] = 'out_of_frame';
-        } else if (missingSet.has(key)) {
-          jointStates[key] = 'missing';
-        } else {
-          jointStates[key] = 'recognized';
-          recognizedJointCount += 1;
-        }
+        jointStates[key] = !checkedSet.has(key) ? 'inactive'
+          : outOfFrameSet.has(key) ? 'out_of_frame'
+          : missingSet.has(key) ? 'missing'
+          : 'recognized';
       }
     }
 
@@ -232,8 +211,10 @@ export function useCameraReadiness({
     } else if (missingLandmarks.length > 0) {
       const names = formatJointListKo(missingLandmarks);
       detailMessage = `인식 대기 신체 점: ${names.join(', ')} (${recognizedJointCount}/${requiredJointCount} 인식)`;
+    } else if (!result) {
+      detailMessage = '영역 안에 전신이 보이게 서주세요';
     } else {
-      detailMessage = `주요 신체 점 0/${requiredJointCount} 인식 · 영역 안에 전신이 보이게 서주세요`;
+      detailMessage = `주요 신체 점 ${recognizedJointCount}/${requiredJointCount} 인식 · 영역 안에 전신이 보이게 서주세요`;
     }
 
     return {

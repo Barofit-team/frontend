@@ -95,7 +95,8 @@ async function contract31c() {
   // 측정 유형·분석기 불일치, 계약 충돌·미지원
   await rejectsWithoutChange(pose('squat-1', 'plank', { count: null, holdSeconds: 10 }), '측정 유형과 맞지 않는 AI 결과');
   await rejectsWithoutChange(pose('mountain-climber-1', 'mountain_climber', { count: 20, holdSeconds: null }), '11. 마운틴 클라이머(conflict) 결과 저장 차단');
-  await rejectsWithoutChange(pose('side-plank-1', 'side_plank', { count: null, holdSeconds: 20 }), '사이드 플랭크(incomplete) 결과 저장 차단');
+  // 04: 사이드 플랭크 supported(DURATION). 주 측정값 holdSeconds 누락 결과는 count로 대체하지 않고 차단
+  await rejectsWithoutChange(pose('side-plank-1', 'side_plank', { count: 20, holdSeconds: null }), '사이드 플랭크 hold 누락(count를 초로 변환 금지)');
   // 7. 유효한 0은 결과로 저장(Workout은 0 허용, 수행 판정만 > 0), 누락과 구분
   await offline.commitPoseSet('c', pose('squat-1', 'squat', { count: 0, holdSeconds: null }));
   assert.deepEqual([(await setOf('squat-1')).actualReps, (await setOf('squat-1')).actualDurationSeconds], [0, null], '7. count 0은 유효한 결과');
@@ -116,6 +117,11 @@ async function contract31c() {
   assert.deepEqual(final.queue.filter(i => i.kind === 'pose').map(i => i.routineSetId),
     ['push-up-1', 'bird-dog-1', 'superman-1', 'plank-1', 'squat-1', 'plank-2', 'push-up-2'], '10. AI 결과 큐 순서 보존, 거부된 항목 없음');
   assert.equal(final.queue.filter(i => i.kind !== 'pose').length, 1 + 7, '10. 세션 동기화 항목 = 시작 1 + 저장 성공 7');
+  // 04: 사이드 플랭크 DURATION 저장 = actualReps null, actualDurationSeconds floor(holdSeconds), AI 원본(sideHoldSeconds) 보존
+  const sidePlank = pose('side-plank-1', 'side_plank', { count: null, holdSeconds: 20.7, observedSeconds: 24, details: { sideHoldSeconds: { left: 20.7, right: 0 } } });
+  await offline.commitPoseSet('c', sidePlank);
+  assert.deepEqual([(await setOf('side-plank-1')).actualReps, (await setOf('side-plank-1')).actualDurationSeconds], [null, 20], '04. 사이드 플랭크 hold 20.7 → 20초');
+  assert.deepEqual(JSON.parse(raw()).queue.filter(i => i.kind === 'pose' && i.routineSetId === 'side-plank-1').map(i => i.payload), [sidePlank.payload], '04. AI 원본 보존·1건');
   console.log('PASS: 3-1c primary measure (REPS count / DURATION hold), auxiliary values kept only in AI payload, validation and atomic commit');
 }
 

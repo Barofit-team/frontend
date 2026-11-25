@@ -303,7 +303,8 @@ afterEach(async () => { for (const root of [...liveRoots]) await unmount(root); 
 const SQUAT_60 = () => routine({ exerciseId: 'squat', measurementType: 'REPS', sets: [{ reps: 12 }, { reps: 12 }] });
 const PLANK_60 = () => routine({ exerciseId: 'plank', measurementType: 'DURATION', sets: [{ seconds: 60 }, { seconds: 60 }] });
 const PLANK_20 = () => routine({ exerciseId: 'plank', measurementType: 'DURATION', sets: [{ seconds: 20 }, { seconds: 20 }] });
-const UNSUPPORTED = () => routine({ exerciseId: 'side-plank', measurementType: 'DURATION', sets: [{ seconds: 20 }] });
+// 분석기 미지원 종목(DURATION). 04단계에서 사이드 플랭크가 supported가 되어 아직 not_implemented인 플러터킥(Routine DURATION)으로 교체
+const UNSUPPORTED = () => routine({ exerciseId: 'flutter-kick', measurementType: 'DURATION', sets: [{ seconds: 20 }] });
 
 /** 현재 화면에 표시된 운동 타이머 남은 시간 (자동 일시정지 화면이면 그 화면의 운동 상태 값) */
 const remaining = () => (ui.view === 'overlay' ? ui.overlay.alternate.seconds : ui.stage.remainingSeconds);
@@ -988,7 +989,7 @@ describe('3-1a — 분석기 생성과 readiness fallback 정리', () => {
   });
 
   test('A2. 미완성·미구현·미확인 ID는 분석기를 만들지 않음 (ID 통과 fallback 제거)', () => {
-    assert.equal(createExerciseAnalyzer('side-plank'), null, 'incomplete: SidePlankAnalyzer를 세션에 연결하지 않음');
+    assert.equal(createExerciseAnalyzer('side-plank'), null, 'conflict: 사이드 플랭크 측정 유형 누락 snapshot은 연결하지 않음(DURATION만 연결, D3)');
     // 3-4c: 마운틴 클라이머는 V13 REPS snapshot만 연결. legacy DURATION·측정 유형 누락/오류 snapshot은 conflict로 연결하지 않음
     assert.equal(createExerciseAnalyzer('mountain-climber', 'DURATION'), null, 'conflict: legacy DURATION snapshot');
     for (const bad of [undefined, null, 'TIME', 'reps']) assert.equal(createExerciseAnalyzer('mountain-climber', bad), null, `conflict: 측정 유형 ${String(bad)}`);
@@ -1032,17 +1033,18 @@ describe('3-1a — 분석기 생성과 readiness fallback 정리', () => {
   const probe = { r: null, ready: 0 };
   function Probe(props) { probe.r = useCameraReadiness({ ...props, onReady: () => { probe.ready += 1; } }); return null; }
   const fullBody = (t) => ({ timestampMs: t, width: 480, height: 640, landmarks: Array.from({ length: 33 }, () => [0.5, 0.5, 0, 1, 1]) });
-  async function runReadiness(exercise, frameAt = fullBody) {
+  async function runReadiness(exercise, frameAt = fullBody, props = {}) {
     probe.r = null; probe.ready = 0;
     const root = createRoot(makeContainer()); liveRoots.add(root);
-    await act(async () => { root.render(React.createElement(Probe, { exercise, stableMs: 100 })); });
+    await act(async () => { root.render(React.createElement(Probe, { exercise, stableMs: 100, ...props })); });
     await settle();
     const returned = [];
     for (let i = 0; i < 10; i += 1) {
       await act(async () => { returned.push(probe.r.pushFrame(frameAt(1000 + i * 50))); });
     }
     await settle();
-    const snapshot = { ready: probe.ready, isReady: probe.r.isReady, required: probe.r.requiredJointCount, returned };
+    const { isReady, requiredJointCount: required, recognizedJointCount: recognized, jointStates, detailMessage, activeSide } = probe.r;
+    const snapshot = { ready: probe.ready, isReady, required, recognized, jointStates, detailMessage, activeSide, returned };
     await unmount(root);
     return snapshot;
   }
@@ -1055,13 +1057,13 @@ describe('3-1a — 분석기 생성과 readiness fallback 정리', () => {
     assert.equal(pushup.ready, 1); assert.equal(pushup.required, 6, '푸시업 full 프로필(한쪽 6관절)');
   });
 
-  // Pose 49762dd: READINESS_PROFILES.side_plank = either·full 6관절 + CameraReadiness가 반대쪽 어깨를 추가 검사.
-  // 훅은 AI 프로필을 그대로 사용한다(FE 복사·푸시업 대체 없음). FE 준비 화면 차단은 incomplete 상태(P2)가 담당한다
+  // Pose: READINESS_PROFILES.side_plank = either·full 6관절 + CameraReadiness가 반대쪽 어깨를 추가 검사(checkedLandmarks 7개).
+  // 훅은 AI 프로필·결과를 그대로 사용한다(FE 복사·푸시업 대체 없음)
   test('R2. 사이드 플랭크는 AI side_plank 프로필로 readiness 실행(푸시업 대체 아님): 반대쪽 어깨까지 보여야 준비 완료', async () => {
     const r = await runReadiness('side_plank');
     assert.equal(r.ready, 1, '전신 관절 → 준비 완료 1회');
     assert.equal(r.isReady, true);
-    assert.equal(r.required, 6, 'FE 표시 관절 수 = AI 프로필 joints(한쪽 6). 반대쪽 어깨는 AI 내부 검사');
+    assert.equal(r.required, 7, 'FE 표시 관절 수 = AI checkedLandmarks(한쪽 6 + 반대쪽 어깨)');
     assert.ok(r.returned.every((x) => x && x.exercise === 'side_plank'), 'AI side_plank readiness 결과');
     // 왼쪽 어깨(11)만 가린 프레임: 푸시업은 오른쪽 6관절로 준비 완료, 사이드 플랭크는 양쪽 어깨 조건으로 준비 안 됨
     const noLeftShoulder = (t) => { const f = fullBody(t); f.landmarks[11] = [0.5, 0.5, 0, 0, 0]; return f; };
@@ -1083,6 +1085,80 @@ describe('3-1a — 분석기 생성과 readiness fallback 정리', () => {
   test('R4. 계약 충돌(마운틴 클라이머)은 AI 프로필이 있어 기존 readiness 유지', async () => {
     const r = await runReadiness('mountain_climber');
     assert.equal(r.ready, 1); assert.equal(r.required, 6);
+  });
+
+  // 04-B: 표시 = AI 공개 결과(evaluatedSide·checkedLandmarks·missing·outOfFrame)만 사용. FE 쪽 추정·조건 복제 없음
+  const hide = (...ids) => (t) => { const f = fullBody(t); for (const i of ids) f.landmarks[i] = [0.5, 0.5, 0, 0, 0]; return f; };
+  // 왼쪽 지지 사이드 플랭크 근사: 왼쪽 6관절 + 위쪽(오른쪽) 어깨만 존재, 나머지 오른쪽 관절 없음
+  const leftSupport = (hideUpperShoulder) => (t) => {
+    const f = fullBody(t);
+    for (const i of [14, 16, 24, 26, 28, 30, 32]) f.landmarks[i] = [null, null, null, null, null];
+    if (hideUpperShoulder(t)) f.landmarks[12] = [0.5, 0.5, 0, 0.1, 1];
+    return f;
+  };
+  const SP_LEFT = ['left_shoulder', 'left_elbow', 'left_wrist', 'left_hip', 'left_knee', 'left_ankle', 'right_shoulder'];
+  test('R5. blocker: 쪽 선택 전 사이드 플랭크 반대쪽 어깨 누락 → AI evaluatedSide 왼쪽, 6/7 표시(5/6 아님)', async () => {
+    const sp = await runReadiness('side_plank', leftSupport(() => true));
+    const last = sp.returned.at(-1);
+    assert.deepEqual([last.selectedSide, last.candidateSide, last.evaluatedSide], [null, null, 'left'], 'AI 공개 결과');
+    assert.deepEqual(last.checkedLandmarks, SP_LEFT);
+    assert.deepEqual(last.missingLandmarks, ['right_shoulder']);
+    assert.equal(sp.ready, 0); assert.equal(sp.isReady, false);
+    assert.equal(sp.required, 7); assert.equal(sp.recognized, 6);
+    assert.equal(sp.activeSide, 'left', '표시 쪽 = evaluatedSide');
+    assert.equal(sp.jointStates.left_elbow, 'recognized');
+    assert.equal(sp.jointStates.right_shoulder, 'missing', '반대쪽 어깨 누락 표시');
+    for (const j of ['elbow', 'wrist', 'hip', 'knee', 'ankle']) assert.equal(sp.jointStates[`right_${j}`], 'inactive', `AI가 검사하지 않은 right_${j}는 인식됨으로 표시하지 않음`);
+    assert.match(sp.detailMessage, /\(6\/7 인식\)/, sp.detailMessage);
+    assert.ok(!sp.detailMessage.includes('5/6'));
+  });
+  test('R6. 사이드 플랭크 안정화 → 준비 완료 → 반대쪽 어깨 가림(유예·해제): 표시가 AI 판정과 일치', async () => {
+    // lockOnReady:false로 준비 후 변화까지 관찰(준비 화면은 lockOnReady:true라 준비 완료 결과를 고정한다)
+    probe.r = null; probe.ready = 0;
+    const root = createRoot(makeContainer()); liveRoots.add(root);
+    await act(async () => { root.render(React.createElement(Probe, { exercise: 'side_plank', stableMs: 300, lockOnReady: false })); });
+    await settle();
+    const frameAt = leftSupport((t) => t >= 1500);
+    const at = async (t) => { let out; await act(async () => { out = probe.r.pushFrame(frameAt(t)); }); await settle(); return { out, r: probe.r }; };
+    let { out, r } = await at(1000);
+    assert.deepEqual([out.status, out.candidateSide, out.evaluatedSide], ['stabilizing', 'left', 'left']);
+    assert.deepEqual([r.requiredJointCount, r.recognizedJointCount, r.activeSide], [7, 7, 'left'], '안정화 중 7/7');
+    assert.match(r.detailMessage, /7\/7 인식됨/);
+    ({ out, r } = await at(1100)); ({ out, r } = await at(1200)); ({ out, r } = await at(1300));
+    assert.deepEqual([out.status, out.selectedSide, out.evaluatedSide], ['ready', 'left', 'left']);
+    assert.equal(r.isReady, true); assert.equal(probe.ready, 1);
+    assert.match(r.detailMessage, /7\/7\) 인식 완료/);
+    ({ out, r } = await at(1500)); // 반대쪽 어깨 가림: lostMs(500) 유예 중
+    assert.deepEqual([out.ready, out.observable, out.selectedSide, out.evaluatedSide], [true, false, 'left', 'left']);
+    assert.deepEqual([r.requiredJointCount, r.recognizedJointCount], [7, 6], '유예 중에도 누락 어깨 반영');
+    assert.equal(r.jointStates.right_shoulder, 'missing');
+    for (let t = 1600; t <= 2000; t += 100) ({ out, r } = await at(t));
+    assert.deepEqual([out.ready, out.selectedSide, out.candidateSide, out.evaluatedSide], [false, null, null, 'left'], 'lostMs 후 해제');
+    assert.deepEqual([r.isReady, r.requiredJointCount, r.recognizedJointCount, r.activeSide], [false, 7, 6, 'left']);
+    assert.match(r.detailMessage, /인식 대기 신체 점: 어깨 \(6\/7 인식\)/);
+    await unmount(root);
+  });
+  test('R7. 다른 운동 표시 회귀: 표시 관절 = AI checkedLandmarks(추가 검사 없음)', async () => {
+    const pushup = await runReadiness('pushup', hide(12), { side: 'left' });
+    assert.equal(pushup.ready, 1); assert.equal(pushup.required, 6); assert.equal(pushup.recognized, 6);
+    assert.equal(pushup.jointStates.right_shoulder, 'inactive', '고정 쪽 밖 관절은 검사하지 않음');
+    const squat = await runReadiness('squat', hide(25)); // 왼쪽 무릎 가림 → AI가 오른쪽 선택
+    assert.equal(squat.ready, 1); assert.equal(squat.required, 4); assert.equal(squat.recognized, 4);
+    assert.equal(squat.jointStates.right_knee, 'recognized'); assert.equal(squat.jointStates.left_knee, 'inactive');
+    const bird = await runReadiness('bird_dog', hide(25)); // 양쪽
+    assert.equal(bird.ready, 0); assert.equal(bird.required, 12); assert.equal(bird.recognized, 11);
+    assert.equal(bird.jointStates.left_knee, 'missing');
+    const jack = await runReadiness('jumping_jack');
+    assert.equal(jack.ready, 1); assert.equal(jack.required, 12);
+    const calf = await runReadiness('standing_calf_raise');
+    assert.equal(calf.ready, 1); assert.equal(calf.required, 6, '어깨·골반·무릎·발목·뒤꿈치·발끝');
+    // 첫 프레임 전: AI 검사 결과가 없으므로 관절 수를 만들지 않음
+    probe.r = null;
+    const root = createRoot(makeContainer()); liveRoots.add(root);
+    await act(async () => { root.render(React.createElement(Probe, { exercise: 'squat', stableMs: 100 })); });
+    await settle();
+    assert.deepEqual([probe.r.requiredJointCount, probe.r.recognizedJointCount], [0, 0]);
+    await unmount(root);
   });
 });
 
@@ -1231,7 +1307,7 @@ describe('3-2 — 대표 운동 실제 분석기 연동 (스쿼트·플랭크·�
 // 실제 분석기 REPS 통합 검증 공통 (3-3a·3-3b). 3-3a 본문을 옮긴 것이며 단언은 동일하다.
 // c: { routineId, poseId, cls, mode, view, make(t), mid, end, width?, height? }
 // ---------------------------------------------------------------------
-const { poseSupport, readinessAvailability, poseBodyView } = src('services/poseExerciseIds.ts');
+const { poseSupport, poseSupportForSnapshot, readinessAvailability, poseBodyView } = src('services/poseExerciseIds.ts');
 const events = [];
 let clock = 0;
 function resetRealReps() {
@@ -1858,9 +1934,9 @@ describe('3-4c — 마운틴 클라이머 실제 분석기 연동 (REPS)', () =>
 // 3-4d: 사이드 플랭크 (DURATION, 주 측정값 holdSeconds)
 // 합성 관절: 1000×1000 px 기준 전완 지지 사이드 플랭크. 아래쪽(지지) 어깨 11+d, 위쪽 어깨 11+(1−d)로 좌우를 만든다.
 // mode: ok(정상) | drop(골반 처짐) | bent(무릎 굽힘). 실제 사람 관절 기록이 아니며 자세 정확도·실기기 검증을 뜻하지 않는다.
-// Pose 49762dd부터 AI READINESS_PROFILES.side_plank가 있으나, FE 최종 연동(04단계) 전이므로 FE 지원 상태는 incomplete다.
-//  - P1·P2: 지금 실행(실제 분석기·readiness 출력 계약, incomplete 상태의 FE 차단)
-//  - D1~D4: supported가 된 뒤에만 실행(그 전에는 SKIP). FE DURATION 세션 연동 검증용
+// 04단계: Pose 49762dd READINESS_PROFILES.side_plank로 FE 지원 상태 supported(DURATION snapshot만 연결).
+//  - P1: 실제 분석기·readiness 출력 계약 / P2: 지원 상태·snapshot 계약
+//  - D1~D5: FE DURATION 세션 연동(HUD·세트 종료·저장·일시정지·conflict·운동 전환·checkpoint)
 // ---------------------------------------------------------------------
 describe('3-4d — 사이드 플랭크 (DURATION)', () => {
   const spLandmarks = (support = 'left', mode = 'ok') => {
@@ -1895,7 +1971,7 @@ describe('3-4d — 사이드 플랭크 (DURATION)', () => {
   const lastSession = async () => (await storedQueue()).filter((i) => i.session).at(-1).session;
   const feedbacks = () => events.filter((e) => e.eventType === 'SET_FEEDBACK');
   const SP_SUPPORTED = poseSupport('side-plank').status === 'supported';
-  const WHEN_SUPPORTED = { skip: !SP_SUPPORTED && 'side-plank incomplete: FE 최종 연동(04) 전 (supported 전환 후 실행)' };
+  const WHEN_SUPPORTED = { skip: !SP_SUPPORTED && 'side-plank가 supported가 아님(지원 상태 회귀)' };
   beforeEach(resetRealReps);
   afterEach(() => { stores.tts.setState({ sendCoachEvent: () => false }); });
 
@@ -1941,19 +2017,20 @@ describe('3-4d — 사이드 플랭크 (DURATION)', () => {
     }
   });
 
-  test('P2. incomplete 상태: DURATION·REPS snapshot 모두 분석기 미연결, 실제 정상 프레임이어도 결과 없음, 기존 M10 정지', async () => {
-    assert.deepEqual(poseSupport('side-plank'), { status: 'incomplete', poseId: 'side_plank' });
-    for (const type of ['DURATION', 'REPS', undefined]) assert.equal(createExerciseAnalyzer('side-plank', type), null, `analyzer ${type}`);
+  test('P2. supported 상태 계약: DURATION snapshot만 분석기·readiness 연결, REPS·누락·잘못된 값은 conflict, 촬영 방향 미확정', () => {
+    assert.deepEqual(poseSupport('side-plank'), { status: 'supported', poseId: 'side_plank' });
+    assert.ok(createExerciseAnalyzer('side-plank', 'DURATION') instanceof poseModule.SidePlankAnalyzer, 'DURATION → SidePlankAnalyzer');
+    for (const type of ['REPS', undefined, null, 'TIME', 'duration']) {
+      assert.deepEqual(poseSupportForSnapshot('side-plank', type), { status: 'conflict', poseId: 'side_plank' }, `snapshot ${String(type)}`);
+      assert.equal(createExerciseAnalyzer('side-plank', type), null, `analyzer ${String(type)}`);
+    }
     const hasProfile = (id) => Object.prototype.hasOwnProperty.call(poseModule.READINESS_PROFILES, id);
-    assert.deepEqual(readinessAvailability('side-plank', hasProfile, 'DURATION'), { availability: 'profile_unsupported', poseId: null }, '다른 운동 프로필로 대체하지 않음');
-    assert.equal(poseBodyView('side-plank'), null, '촬영 방향 미확정');
-    const root = await startWith(routine(SP([20])));
-    await feedSp(20 * 1000 + 500, 'left');
-    assert.equal(ui.stage.currentReps, null);
-    assert.equal(stallAlerts().length, 1, '기존 M10 미지원 정지');
-    assert.equal((await poseItems()).length, 0);
-    assert.equal((await localSession()).sets.length, 0);
-    await unmount(root);
+    assert.deepEqual(readinessAvailability('side-plank', hasProfile, 'DURATION'), { availability: 'available', poseId: 'side_plank' }, 'AI side_plank 프로필 사용');
+    for (const type of ['REPS', undefined, 'TIME']) {
+      assert.deepEqual(readinessAvailability('side-plank', hasProfile, type), { availability: 'contract_conflict', poseId: 'side_plank' }, `readiness ${String(type)}`);
+    }
+    assert.deepEqual(readinessAvailability('side-plank', () => false, 'DURATION'), { availability: 'profile_unsupported', poseId: null }, '프로필이 없으면 다른 운동 프로필로 대체하지 않음');
+    assert.equal(poseBodyView('side-plank'), null, '촬영 방향 미확정(AI 문서 근거 부족)');
   });
 
   test('D1. DURATION 세트 20·30초: 시간형 HUD, 타이머 만료 종료, holdSeconds ≠ 경과 시간, 좌·우 측정, 저장·SET_FEEDBACK', WHEN_SUPPORTED, async () => {
@@ -2049,6 +2126,32 @@ describe('3-4d — 사이드 플랭크 (DURATION)', () => {
     assert.deepEqual(session.sets.map((x) => x.routineSetId), [exercises[0].sets[0].id, ...exercises[1].sets.map((x) => x.id)]);
     assert.deepEqual(session.sets.slice(1).map((x, i) => [x.actualReps, x.actualDurationSeconds]),
       pose.slice(1).map((i) => [null, Math.floor(i.payload.summary.holdSeconds)]));
+    await unmount(root);
+  });
+
+  test('D5. 사이드 플랭크 → 다음 운동(플랭크) 전환: 사이드 플랭크 결과 1건 저장 후 다음 운동은 자기 분석기·측정값 사용', WHEN_SUPPORTED, async () => {
+    const parts = [routine(SP([20])), routine({ exerciseId: 'plank', measurementType: 'DURATION', sets: [{ seconds: 20 }] })];
+    const exercises = parts.map((p, i) => ({ ...p.exercise, order: i + 1 }));
+    const fx = { snapshot: { ...parts[0].snapshot, exercises }, sessions: parts.map((p) => p.sessions[0]) };
+    const root = await startWith(fx);
+    await feedSp(20 * 1000 + 500, 'left');
+    assert.equal((await poseItems()).length, 1, '사이드 플랭크 세트 종료 시 1건');
+    await untilPhase(1, 1);
+    // 플랭크는 기존 3-1b 방식(실제 PlankAnalyzer 출력의 holdSeconds만 지정)으로 측정값 출처를 구분한다
+    testMeasure.value = { count: null, holdSeconds: 5 }; testMeasure.summary = { count: null, holdSeconds: 5 };
+    await feedSp(3000, 'left');
+    assert.equal(ui.hud.kind, 'duration');
+    assert.equal(ui.hud.holdSeconds, 5, '플랭크 분석기 값(사이드 플랭크 누적값이 이어지지 않음)');
+    await feedSp(17 * 1000 + 500, 'left');
+    assert.ok(ui.completeRenders > 0, '마지막 운동 타이머 만료 → 완료');
+    const pose = await poseItems();
+    assert.deepEqual(pose.map((i) => i.payload.exercise), ['side_plank', 'plank'], '운동별 결과 1건씩, 중복 없음');
+    const session = await lastSession();
+    assert.deepEqual(session.sets.map((x) => [x.routineSetId, x.actualReps, x.actualDurationSeconds]), [
+      [exercises[0].sets[0].id, null, Math.floor(pose[0].payload.summary.holdSeconds)],
+      [exercises[1].sets[0].id, null, 5],
+    ]);
+    assert.ok(pose[0].payload.summary.holdSeconds > 0 && pose[0].payload.summary.count === null);
     await unmount(root);
   });
 });
