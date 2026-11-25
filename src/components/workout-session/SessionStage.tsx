@@ -41,7 +41,13 @@ type SessionStageProps = {
   getPauseSummary: () => PauseSummary;
   busy: boolean;
   onPressMenu: () => void;
+  /** Controller 없는 세트(분석기 미연결·프레임 없음 M10 재시도)의 수동 재개 5초 완료. Controller 세트에서는 호출되지 않는다 */
   onFinishResume: () => void;
+  /**
+   * 07-B: Controller countdown 표시 초(Math.ceil(countdownRemainingMs/1000)). 값이 있으면 복귀 화면은 이 값만 표시하고
+   * 자체 타이머를 돌리지 않는다(복귀 확정은 Controller active). null/undefined면 기존 수동 재개 5초 타이머(Controller 없는 세트 전용)
+   */
+  resumeCountdownSeconds?: number | null;
   onPressStop: () => void;
   onPressResume: () => void;
   onConfirmStop: () => void;
@@ -55,6 +61,15 @@ export function SessionStage(props: SessionStageProps) {
   const pill = (subtitle: string) => (
     <SessionStatusPill exerciseName={props.exerciseName} subtitle={subtitle} onPressMenu={props.onPressMenu} />
   );
+
+  if (pause === 'resuming' && typeof props.resumeCountdownSeconds === 'number') {
+    return (
+      <>
+        <SessionHud tone="accent" content={{ kind: 'title-timer', title: '복귀', seconds: props.resumeCountdownSeconds }} />
+        {pill(props.resumeSubtitle)}
+      </>
+    );
+  }
 
   if (pause === 'resuming') {
     return (

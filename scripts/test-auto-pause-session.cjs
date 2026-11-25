@@ -122,17 +122,6 @@ const sourceMocks = {
   'stores/useTtsStore': { useTtsStore: stores.tts },
   'stores/useTodayRoutineStore': { useTodayRoutineStore: stores.today },
   'stores/useWorkoutResultStore': { useWorkoutResultStore: stores.result },
-  // 07-A 이후 화면은 이 어댑터를 쓰지 않는다(Controller가 판정). 어댑터 단위 테스트(기본값 확인)용으로만 남아 있다
-  'services/trackingSignalAdapter': {
-    get createTrackingSignalAdapter() {
-      const real = load(path.join(SRC, 'services/trackingSignalAdapter.ts'));
-      return (options) => {
-        if (testTracking.user === null) return real.createTrackingSignalAdapter(options);
-        const fake = () => testTracking.user;
-        return real.createTrackingSignalAdapter({ ...options, interpretUser: fake, interpretPausedFrame: fake });
-      };
-    },
-  },
 };
 const realSources = new Set([
   'app/workout-session',
@@ -141,8 +130,6 @@ const realSources = new Set([
   'components/workout-session/sessionProgress',
   'services/offlineWorkout', 'services/workoutSessionService', 'services/posePipeline',
   'services/poseCoaching', 'services/poseExerciseIds', 'stores/useWorkoutDraftStore',
-  // 자동 일시정지 2단계에서 화면이 import (기본 어댑터는 'unknown'만 반환 → M10 시나리오 동작 불변)
-  'components/workout-session/autoPauseMachine', 'services/trackingSignalAdapter',
   // 3-1a: 준비 화면 readiness 훅(실제 @barofit/pose CameraReadiness 사용)
   'hooks/useCameraReadiness',
 ]);
@@ -583,6 +570,69 @@ describe('3단계 — Figma 자동 일시정지 화면 · 5초 복귀 · 재개 
     assert.equal(await draftRemaining(), 35, '체크포인트와 화면 일치');
     assert.equal(breakCalls.length, 1);
     assert.equal((await localSession()).sets.length, 0, '복귀만으로 세트 결과 없음');
+    await unmount(root);
+  });
+
+  /** 현재 세트 Controller의 실제 countdown 표시 초 (Pose 문서: Math.ceil(countdownRemainingMs/1000)) */
+  const controllerSeconds = () => {
+    const st = controllerLog.instances.at(-1).getState();
+    return st.phase === 'countdown' ? Math.ceil(st.countdownRemainingMs / 1000) : null;
+  };
+  /** countdown 진입부터 active까지 250ms마다 화면 초 = Controller 초인지 확인하고 본 초를 순서대로 반환 */
+  async function watchCountdown() {
+    const seen = [];
+    for (let i = 0; i < 40 && isCountdownScreen(); i += 1) {
+      const c = controllerSeconds();
+      if (c !== null && c > 0) assert.equal(ui.hud.seconds, c, `화면 ${ui.hud.seconds}초 = Controller ${c}초`);
+      if (seen.at(-1) !== ui.hud.seconds) seen.push(ui.hud.seconds);
+      await advance(250);
+    }
+    return seen;
+  }
+  const isCountdownScreen = () => ui.view === 'stage' && ui.stage.pause === 'resuming';
+
+  test('D. 자동 복귀 countdown 표시 = Controller countdownRemainingMs: 5→4→3→2→1, FE 독립 타이머 없음, active에서만 종료', async () => {
+    const { root } = await loseAt23s();
+    await recoverToCountdown();
+    const seen = await watchCountdown();
+    assert.deepEqual(seen, [5, 4, 3, 2, 1], '사용자가 보는 숫자 흐름');
+    assert.equal(ui.stage.pause, 'none', 'Controller active → 복귀 화면 종료');
+    assert.equal(controllerLog.instances.at(-1).getState().phase, 'active');
+    assert.equal(remaining(), 37, 'countdown 동안 PhaseTimer 정지');
+    await unmount(root);
+  });
+
+  test('D2. 수동 재개 countdown 표시도 Controller 값: 재인식 안정화 전에는 숫자를 깎지 않고, countdown 진입 시 5부터', async () => {
+    const { root } = await loseAt23s();
+    await act(async () => { ui.overlay.onPressMenu(); }); await settle();
+    testTracking.user = 'present';
+    await advance(3000);
+    await act(async () => { ui.view = null; ui.stage.onPressResume(); }); await settle();
+    assert.ok(isAutoPauseScreen(), '안정화 전: 숫자 없는 재인식 대기 화면');
+    await advance(250);
+    for (let i = 0; i < 4 && !isCountdownScreen(); i += 1) await advance(125);
+    assert.ok(isCountdownScreen(), 'Controller countdown 진입');
+    const seen = await watchCountdown();
+    assert.deepEqual(seen, [5, 4, 3, 2, 1]);
+    assert.equal(ui.stage.pause, 'none');
+    assert.equal(remaining(), 37);
+    await unmount(root);
+  });
+
+  test('D3. countdown 만료 직후 프레임이 아직 없으면(400ms 미만 공백) Controller는 countdown 유지 → 화면도 0초·자체 종료 없이 1초에서 대기, 다음 새 프레임에서 active', async () => {
+    const { root } = await loseAt23s();
+    await recoverToCountdown(); // 재검출 375ms 뒤 countdown 진입, 지금은 countdown 125ms 경과
+    await advance(4750); // countdown 4875ms 경과, 마지막 프레임은 125ms 전
+    feedFrames = false;
+    await advance(250); // countdown 5000ms 넘김(5125ms), 프레임 공백 375ms → watchdog tick만으로는 재개하지 않음
+    const st = controllerLog.instances.at(-1).getState();
+    assert.deepEqual([st.phase, st.countdownRemainingMs], ['countdown', 0], 'Controller: 만료됐지만 새 프레임 전이라 countdown');
+    assert.ok(isCountdownScreen(), '복귀 화면 유지 (FE가 먼저 끝내지 않음)');
+    assert.equal(ui.hud.seconds, 1, '0초를 표시하지 않음');
+    assert.equal(remaining(), 37, 'PhaseTimer 정지 유지');
+    feedFrames = true;
+    await advance(250);
+    assert.equal(ui.stage.pause, 'none', '다음 새 유효 프레임에서 Controller active → 재개');
     await unmount(root);
   });
 
@@ -2226,6 +2276,31 @@ describe('3-4d — 사이드 플랭크 (DURATION)', () => {
     assert.equal(poseBodyView('side-plank'), null, '촬영 방향 미확정(AI 문서 근거 부족)');
   });
 
+  test('D6. 자동 일시정지·복귀(실제 Controller): holdSeconds 보존·이어서 누적, 이탈·복귀 중 증가 없음, 자세 경고는 새 프레임에서만(이전 HIP_DROP 재사용 없음)', async () => {
+    const root = await startWith(routine(SP([60])));
+    await feedSp(3000, 'left');
+    const held = ui.hud.holdSeconds;
+    assert.ok(held >= 2, `정상 유지 누적 (${held})`);
+    await feedSp(1500, 'left', 'drop');
+    const warned = events.filter((e) => e.eventType === 'REP_FEEDBACK' && e.feedbackCode === 'HIP_DROP').length;
+    assert.equal(warned, 1, '골반 처짐 경고 1회');
+    assert.equal(ui.hud.holdSeconds, held, '잘못된 자세 동안 유지 시간 증가 없음');
+    const lost = () => [];
+    await feedStatic(lost, 2100);
+    assert.ok(isAutoPauseScreen(), '2초 이탈 → 자동 일시정지');
+    const frozen = remaining();
+    await feedStatic(lost, 12 * 1000); // 코칭 간격(10초)보다 길게: 멈춘 동안 경고·유지 시간 없음
+    assert.equal(remaining(), frozen, '타이머 정지');
+    await feedStatic(() => spLandmarks('left', 'ok'), 300 + 5000 + 300);
+    assert.equal(ui.stage.pause, 'none', 'Controller active 복귀');
+    assert.equal(events.filter((e) => e.eventType === 'REP_FEEDBACK').length, warned, '이탈 전 HIP_DROP이 복귀 후 다시 나오지 않음');
+    await feedSp(3000, 'left');
+    assert.ok(ui.hud.holdSeconds > held, `복귀 후 기존 ${held}초에서 이어서 누적 (${ui.hud.holdSeconds})`);
+    await feedSp(1500, 'left', 'drop');
+    assert.equal(events.filter((e) => e.eventType === 'REP_FEEDBACK' && e.feedbackCode === 'HIP_DROP').length, warned + 1, '새 프레임의 경고는 다시 동작');
+    await unmount(root);
+  });
+
   test('D1. DURATION 세트 20·30초: 시간형 HUD, 타이머 만료 종료, holdSeconds ≠ 경과 시간, 좌·우 측정, 저장·SET_FEEDBACK', WHEN_SUPPORTED, async () => {
     const fx = routine(SP([20, 30]));
     const root = await startWith(fx);
@@ -2666,6 +2741,26 @@ describe('05 — 실험 횟수 카운터 4종 실제 분석기 연동 (REPS)', (
     const pose = await poseItems();
     assert.equal(pose.length, 1);
     assertPilotPayload(pose[0].payload, FK, 4);
+    await unmount(root);
+  });
+
+  test('F8. flutter-kick 자동 일시정지·복귀(실제 Controller): 완료 count 보존, 이탈 중 증가 없음, 복귀 후 이어서 누적', async () => {
+    const root = await startWith(routine(REPS(FK, [6, 6])));
+    await feedFlutter(FK.end + 300);
+    assert.equal(ui.stage.currentReps, 3);
+    await feedStatic(() => [], 2100);
+    assert.ok(isAutoPauseScreen());
+    const frozen = remaining();
+    await feedStatic(() => [], 3000);
+    assert.equal(ui.stage.currentReps, 3, '이탈 중 증가 없음');
+    await feedStatic(() => flutterLandmarks(true), 300 + 5000 + 300);
+    assert.equal(ui.stage.pause, 'none');
+    assert.equal(remaining(), frozen, '복귀 전까지 타이머 정지');
+    assert.equal(ui.stage.currentReps, 3, '복귀 후 3회 유지');
+    await feedFlutter(FK.end + 300);
+    assert.equal(ui.stage.phase.kind, 'resting', '3 + 3 = 목표 6회');
+    assert.deepEqual((await localSession()).sets.map((x) => [x.actualReps, x.actualDurationSeconds]), [[6, null]]);
+    assert.equal((await poseItems()).length, 1);
     await unmount(root);
   });
 

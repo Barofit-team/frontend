@@ -1,5 +1,5 @@
 /** 서버 운동 세션과 코칭 연결 화면. AI 측정 결과 연동 전에는 세트 완료를 추정하지 않습니다. */
-import type { PoseFrame, SessionPhase as ControllerPhase, SessionState as ControllerState } from '@barofit/pose';
+import { SESSION_CONFIG, type PoseFrame, type SessionPhase as ControllerPhase, type SessionState as ControllerState } from '@barofit/pose';
 import { randomUUID } from 'expo-crypto';
 import { router, useLocalSearchParams } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
@@ -11,7 +11,6 @@ import { PrepColors } from '@/components/workout-preparation/palette';
 import { ExerciseCameraArea } from '@/components/workout-session/ExerciseCameraArea';
 import { AutoPauseOverlay } from '@/components/workout-session/AutoPauseOverlay';
 import { PhaseTimer } from '@/components/workout-session/PhaseTimer';
-import type { AutoPauseState } from '@/components/workout-session/autoPauseMachine';
 import { SessionStage } from '@/components/workout-session/SessionStage';
 import { SessionColors } from '@/components/workout-session/sessionPalette';
 import { countSets, estimateRemainingSeconds } from '@/components/workout-session/sessionProgress';
@@ -293,13 +292,15 @@ export default function WorkoutSessionScreen() {
   const [controllerPhase, setControllerPhase] = useState<ControllerPhase | null>(null);
   const controllerPhaseRef = useRef<ControllerPhase | null>(null);
   const controllerStateRef = useRef<ControllerState | null>(null);
+  /** 07-B: Controller countdown 표시 초. Controller countdown 중에만 값이 있고 FE는 시간을 따로 세지 않는다 */
+  const [countdownSeconds, setCountdownSeconds] = useState<number | null>(null);
   /**
    * 자동 일시정지 화면 상태는 Controller phase를 기존 화면에 최소 매핑한 값이다(서버 상태는 바꾸지 않음).
    *  - auto_paused → LOST(AutoPauseOverlay, PhaseTimer 정지) / countdown → RECOVERING(기존 복귀 화면, PhaseTimer 정지)
    *  - recognition_lost(2초 미만)·waiting_for_pose·active → TRACKING (측정 차단 여부는 Controller가 결정)
    * 수동 일시정지·재개 중(pause !== 'none')에는 수동 화면이 우선이다.
    */
-  const autoPause: AutoPauseState = pause !== 'none' || phase.kind !== 'exercising' ? 'TRACKING'
+  const autoPause: 'TRACKING' | 'LOST' | 'RECOVERING' = pause !== 'none' || phase.kind !== 'exercising' ? 'TRACKING'
     : controllerPhase === 'auto_paused' ? 'LOST' : controllerPhase === 'countdown' ? 'RECOVERING' : 'TRACKING';
   const autoPaused = autoPause !== 'TRACKING';
   const [exiting, setExiting] = useState(false);
@@ -333,6 +334,7 @@ export default function WorkoutSessionScreen() {
     controllerPhaseRef.current = null;
     controllerStateRef.current = null;
     setControllerPhase(null);
+    setCountdownSeconds(null);
   }, [phase]);
   useEffect(() => {
     if (!sessionReady || pause !== 'none' || autoPaused || phase.kind === 'completed') return;
@@ -425,6 +427,11 @@ export default function WorkoutSessionScreen() {
   const applyControllerState = useCallback((state: ControllerState) => {
     if (state.ignored) return;
     controllerStateRef.current = state;
+    // countdown 표시 = Controller countdownRemainingMs (5 → 1, Pose 문서 Math.ceil). countdown이 끝나거나 취소되면 바로 비움.
+    // countdown 만료 후 다음 카메라 프레임에서 active가 되기 전(watchdog tick)까지 0이 보이지 않도록 1에서 멈춘다
+    const seconds = state.phase === 'countdown' && state.countdownRemainingMs !== null
+      ? Math.max(1, Math.ceil(state.countdownRemainingMs / 1000)) : null;
+    setCountdownSeconds(prev => (prev === seconds ? prev : seconds));
     if (state.phase !== controllerPhaseRef.current) {
       controllerPhaseRef.current = state.phase;
       setControllerPhase(state.phase);
@@ -614,8 +621,8 @@ export default function WorkoutSessionScreen() {
     setPause(p => (p === 'resuming' ? 'none' : p));
   }, [markPauseChange]);
   /**
-   * SessionStage 복귀 5초 표시 종료. 상태 전이 권한이 없다: Controller가 있는 세트는 Controller active에서만 재개·복귀가 확정된다.
-   * Controller가 없는 단계(분석기 미연결·프레임 없음 M10 재시도)만 기존처럼 수동 재개 카운트다운으로 종료한다.
+   * Controller가 없는 세트(분석기 미연결·프레임 없음 M10 재시도)의 수동 재개 5초 종료만 처리한다.
+   * Controller 세트의 복귀 화면은 countdownRemainingMs만 표시하고 자체 타이머가 없어 이 콜백이 오지 않으며, 재개·복귀는 Controller active에서만 확정된다.
    */
   const handleResumeCountdownFinished = useCallback(() => {
     if (pause === 'none' || controllerPhaseRef.current !== null) return;
@@ -737,7 +744,7 @@ export default function WorkoutSessionScreen() {
     // SessionStage의 currentReps: 횟수 운동 = AI 횟수, 시간 운동 = AI 유효 자세 유지 시간(타이머 잔여 시간과 별개)
     const displayedMeasure = isDuration ? measuredHoldSeconds : measuredCount;
     // 수동 일시정지 화면이 항상 우선. 자동 일시정지는 pause === 'none'일 때만 표시.
-    // 수동 재개 중(Controller 있는 세트)에는 Controller가 countdown에 들어가기 전까지 기존 이탈 화면, countdown부터 기존 5초 화면
+    // 수동 재개 중(Controller 있는 세트)에는 Controller가 countdown에 들어가기 전까지 기존 이탈 화면, countdown부터 복귀 화면(Controller 초 표시)
     const controlledResume = pause === 'resuming' && current.kind === 'exercising' && controllerPhase !== null;
     if ((pause === 'none' && autoPause === 'LOST') || (controlledResume && controllerPhase !== 'countdown')) {
       return (
@@ -754,7 +761,6 @@ export default function WorkoutSessionScreen() {
     const stagePause = pause !== 'none' ? pause : autoPause === 'RECOVERING' ? 'resuming' : 'none';
     return (
       <SessionStage
-        // 자동 복귀·Controller 수동 재개 5초 표시는 Controller countdown 진입 시점에 새 인스턴스로 시작 (07-B에서 countdownRemainingMs로 교체)
         key={pause === 'none' && autoPause === 'RECOVERING' ? 'auto-resume' : controlledResume ? 'controller-resume' : 'stage'}
         phase={current}
         pause={stagePause}
@@ -765,6 +771,10 @@ export default function WorkoutSessionScreen() {
         currentReps={displayedMeasure}
         isDuration={isDuration}
         resumeSubtitle={describePause(current, exercise.name).subtitle}
+        // Controller 세트의 복귀(자동·수동 재개) 화면 초 = Controller countdownRemainingMs. Controller 없는 세트만 기존 5초 타이머
+        // (countdown 진입과 같은 갱신에서 값이 채워지며, 없으면 Pose SESSION_CONFIG 기준 시작값. FE 타이머로 대체하지 않음)
+        resumeCountdownSeconds={(pause === 'none' && autoPause === 'RECOVERING') || controlledResume
+          ? countdownSeconds ?? Math.ceil(SESSION_CONFIG.countdownMs / 1000) : null}
         getPauseSummary={() => {
           const sets = countSets(current, activeRoutine);
           const spent = currentElapsed();

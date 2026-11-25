@@ -125,8 +125,6 @@ const realSources = new Set([
   'components/workout-session/sessionProgress',
   'services/offlineWorkout', 'services/workoutSessionService', 'services/posePipeline',
   'services/poseCoaching', 'services/poseExerciseIds', 'stores/useWorkoutDraftStore',
-  // 자동 일시정지 2단계에서 화면이 import (기본 어댑터는 'unknown'만 반환 → M10 시나리오 동작 불변)
-  'components/workout-session/autoPauseMachine', 'services/trackingSignalAdapter',
 ]);
 const realPackages = {
   react: () => require(nm('react')),
