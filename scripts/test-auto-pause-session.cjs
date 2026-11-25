@@ -303,7 +303,8 @@ afterEach(async () => { for (const root of [...liveRoots]) await unmount(root); 
 const SQUAT_60 = () => routine({ exerciseId: 'squat', measurementType: 'REPS', sets: [{ reps: 12 }, { reps: 12 }] });
 const PLANK_60 = () => routine({ exerciseId: 'plank', measurementType: 'DURATION', sets: [{ seconds: 60 }, { seconds: 60 }] });
 const PLANK_20 = () => routine({ exerciseId: 'plank', measurementType: 'DURATION', sets: [{ seconds: 20 }, { seconds: 20 }] });
-// 분석기 미지원 종목(DURATION). 04단계에서 사이드 플랭크가 supported가 되어 아직 not_implemented인 플러터킥(Routine DURATION)으로 교체
+// 분석기를 연결하지 않는 종목(DURATION). 06 이후 23종 모두 supported이므로 V15 이전 DURATION 플러터킥 snapshot(계약 충돌)을 쓴다.
+// conflict는 not_implemented와 같은 기존 M10 미지원 경로(분석기 미연결)를 탄다
 const UNSUPPORTED = () => routine({ exerciseId: 'flutter-kick', measurementType: 'DURATION', sets: [{ seconds: 20 }] });
 
 /** 현재 화면에 표시된 운동 타이머 남은 시간 (자동 일시정지 화면이면 그 화면의 운동 상태 값) */
@@ -993,8 +994,9 @@ describe('3-1a — 분석기 생성과 readiness fallback 정리', () => {
     // 3-4c: 마운틴 클라이머는 V13 REPS snapshot만 연결. legacy DURATION·측정 유형 누락/오류 snapshot은 conflict로 연결하지 않음
     assert.equal(createExerciseAnalyzer('mountain-climber', 'DURATION'), null, 'conflict: legacy DURATION snapshot');
     for (const bad of [undefined, null, 'TIME', 'reps']) assert.equal(createExerciseAnalyzer('mountain-climber', bad), null, `conflict: 측정 유형 ${String(bad)}`);
-    assert.equal(createExerciseAnalyzer('flutter-kick', 'DURATION'), null, 'not_implemented flutter-kick (06 전)');
-    assert.equal(createExerciseAnalyzer('flutter-kick', 'REPS'), null, 'not_implemented flutter-kick (06 전)');
+    // 06: 플러터킥은 V15 REPS snapshot만 연결. V15 이전 DURATION snapshot은 conflict
+    assert.equal(createExerciseAnalyzer('flutter-kick', 'DURATION'), null, 'conflict: V15 이전 DURATION 플러터킥');
+    assert.ok(createExerciseAnalyzer('flutter-kick', 'REPS') instanceof poseModule.FlutterKicksAnalyzer);
     // 05: 실험 카운터 4종은 REPS snapshot만 연결. 측정 유형 누락 snapshot은 conflict
     for (const id of ['jump-squat', 'reverse-crunch', 'burpee', 'sit-up']) {
       assert.equal(createExerciseAnalyzer(id), null, `conflict(측정 유형 누락) ${id}`);
@@ -2363,9 +2365,177 @@ describe('05 — 실험 횟수 카운터 4종 실제 분석기 연동 (REPS)', (
     }
   });
 
-  test('K7. 범위: 플러터킥은 미지원 유지(Routine DURATION·AI REPS 계약 불일치, 06에서 처리)', () => {
-    assert.deepEqual(poseSupport('flutter-kick'), { status: 'not_implemented', poseId: null });
-    for (const type of ['REPS', 'DURATION']) assert.equal(createExerciseAnalyzer('flutter-kick', type), null);
-    assert.equal(poseBodyView('flutter-kick'), null);
+  // ---- 06: 플러터킥 (REPS, 양측 관절) ----
+  // pilots.test.mjs frame('flutter_kicks', stage): 양쪽 어깨·골반·무릎·발목, 'rest'=왼다리 위 / 'active'=오른다리 위
+  const flutterLandmarks = (leftUp) => {
+    const lm = Array.from({ length: 33 }, () => [null, null, null, null, null]);
+    for (const o of [0, 1]) {
+      lm[11 + o] = [0.2, 0.65, 0, 1, 1]; lm[23 + o] = [0.5, 0.65, 0, 1, 1]; lm[25 + o] = [0.65, 0.6, 0, 1, 1];
+      lm[27 + o] = [0.85, (o === 0) === leftUp ? 0.35 : 0.65, 0, 1, 1];
+    }
+    return lm;
+  };
+  /** 다리 순서(L/R)를 단계마다 stepMs씩. 순서 끝 이후는 마지막 자세 유지 */
+  const flutterSeq = (seq, stepMs = 400) => (t) => flutterLandmarks(seq[Math.min(seq.length - 1, Math.floor(t / stepMs))] === 'L');
+  /** 정상 교대: 400ms마다 L/R. AI 실제 출력(합성 관절): 1·2·3회 완료 시점 1.0·1.8·2.6초 */
+  const flutterCycle = (first = 'L') => (t) => flutterLandmarks((Math.floor(t / 400) % 2 === 0) === (first === 'L'));
+  const FK = { routineId: 'flutter-kick', poseId: 'flutter_kicks', cls: 'FlutterKicksAnalyzer', mode: 'both', view: 'side',
+    make: flutterCycle('L'), mid: 1400, end: 2600, width: 1000, height: 1000 };
+  async function feedFlutter(ms, make = FK.make) { const t0 = clock; await feedUntil(clock + ms, (t) => make(t - t0)); }
+
+  test('F1. flutter-kick: 공통 하니스(지원·분석기·양측 readiness·측면 안내·REPS 링·목표 3회 종료·SET_FEEDBACK·Workout·AI 원본, 중복 없음)', async () => {
+    await verifyRealRepsExercise(FK);
+    assertPilotPayload((await poseItems()).at(-1).payload, FK, 3);
+    assert.deepEqual(feedbacks().map((e) => [e.exerciseId, e.actualReps, e.actualDurationSeconds]), [['flutter-kick', 3, undefined]]);
+  });
+
+  test('F2. 실제 FlutterKicksAnalyzer 횟수 규칙: 좌→우→좌·우→좌→우 = 1회, 누적, 정지·좌→우만·빠른 교대·일시정지로 끊긴 반쪽 동작은 0', () => {
+    const run = (make, ms, analyzer = new poseModule.FlutterKicksAnalyzer(), start = 0) => {
+      let r;
+      for (let t = 100; t <= ms; t += 100) r = analyzer.pushFrame({ timestampMs: 10000 + start + t, width: 1000, height: 1000, landmarks: make(t) });
+      return { analyzer, r };
+    };
+    assert.equal(run(flutterSeq(['L', 'R', 'L']), 1200).r.count, 1, '좌→우→좌 = 1회');
+    assert.equal(run(flutterSeq(['R', 'L', 'R']), 1200).r.count, 1, '우→좌→우 = 1회');
+    assert.equal(run(flutterSeq(['L', 'R', 'L', 'R', 'L', 'R', 'L']), 2800).r.count, 3, '이후 교대 한 쌍마다 +1');
+    assert.equal(run(flutterSeq(['L']), 4000).r.count, 0, '정지(한쪽 다리 든 채)');
+    assert.equal(run(flutterSeq(['L', 'R']), 4000).r.count, 0, '좌→우만 하고 멈춤');
+    assert.equal(run(flutterSeq(['L', 'R', 'L', 'R', 'L', 'R', 'L', 'R'], 100), 2000).r.count, 0, '100ms 빠른 교대는 자세 확인 전이라 0');
+    // 좌→우 후 일시정지: 재개 뒤 좌 한 번으로 이전 반쪽 동작이 이어지지 않음, 새로 좌→우→좌를 해야 1회
+    const { analyzer } = run(flutterSeq(['L', 'R']), 800);
+    analyzer.breakContinuity('pause');
+    let r = run(flutterSeq(['L']), 800, analyzer, 5000).r;
+    assert.equal(r.count, 0, '일시정지 전 반쪽 동작 + 재개 후 좌 = 0');
+    r = run(flutterSeq(['L', 'R', 'L']), 1200, analyzer, 6000).r;
+    assert.equal(r.count, 1, '재개 후 완전한 교대 1회');
+    const s = analyzer.finish()[0].summary;
+    assert.deepEqual([s.count, s.holdSeconds, s.engineVersion, s.items.form.compliancePct, s.items.form.unknown], [1, null, 'five-exercise-pilot-0.1', null, 1]);
+    assert.throws(() => new poseModule.FlutterKicksAnalyzer({ side: 'left' }), RangeError, '측면 고정 없음(양측)');
+  });
+
+  test('F3. 양측 readiness: AI checkedLandmarks 6(양쪽 어깨·골반·발목), 오른발목 누락 → FE 표시 5/6·준비 안 됨', async () => {
+    assert.deepEqual(JSON.parse(JSON.stringify(poseModule.READINESS_PROFILES.flutter_kicks)), { mode: 'both', joints: ['shoulder', 'hip', 'ankle'] });
+    const hasProfile = (id) => Object.prototype.hasOwnProperty.call(poseModule.READINESS_PROFILES, id);
+    assert.deepEqual(readinessAvailability('flutter-kick', hasProfile, 'REPS'), { availability: 'available', poseId: 'flutter_kicks' });
+    const { useCameraReadiness } = src('hooks/useCameraReadiness.ts');
+    const probe = { r: null, ready: 0 };
+    function Probe(props) { probe.r = useCameraReadiness({ ...props, onReady: () => { probe.ready += 1; } }); return null; }
+    const view = async (mutate) => {
+      probe.r = null; probe.ready = 0;
+      const root = createRoot(makeContainer()); liveRoots.add(root);
+      await act(async () => { root.render(React.createElement(Probe, { exercise: 'flutter_kicks', stableMs: 300 })); });
+      await settle();
+      let out;
+      for (let t = 0; t <= 1000; t += 100) {
+        const lm = flutterLandmarks(true); mutate(lm);
+        await act(async () => { out = probe.r.pushFrame({ timestampMs: 1000 + t, width: 1000, height: 1000, landmarks: lm }); });
+      }
+      await settle();
+      const { requiredJointCount, recognizedJointCount, isReady, activeSide, jointStates, detailMessage } = probe.r;
+      await unmount(root);
+      return { out, ready: probe.ready, requiredJointCount, recognizedJointCount, isReady, activeSide, jointStates, detailMessage };
+    };
+    const ok = await view(() => {});
+    assert.deepEqual([ok.out.evaluatedSide, ok.out.checkedLandmarks], ['both',
+      ['left_shoulder', 'left_hip', 'left_ankle', 'right_shoulder', 'right_hip', 'right_ankle']]);
+    assert.deepEqual([ok.ready, ok.isReady, ok.requiredJointCount, ok.recognizedJointCount, ok.activeSide], [1, true, 6, 6, 'both']);
+    assert.equal(ok.jointStates.left_knee, 'inactive', 'AI가 검사하지 않는 무릎은 표시하지 않음');
+    const noAnkle = await view((lm) => { lm[28] = [null, null, null, null, null]; });
+    assert.deepEqual([noAnkle.out.ready, noAnkle.out.missingLandmarks], [false, ['right_ankle']], 'AI 판정');
+    assert.deepEqual([noAnkle.ready, noAnkle.isReady, noAnkle.requiredJointCount, noAnkle.recognizedJointCount], [0, false, 6, 5], 'FE 표시 = AI 결과');
+    assert.equal(noAnkle.jointStates.right_ankle, 'missing');
+    assert.match(noAnkle.detailMessage, /\(5\/6 인식\)/);
+  });
+
+  test('F4. flutter-kick 세션: 정지·좌→우만·빠른 교대 0회, 정상 교대만 AI count 그대로 HUD 반영', async () => {
+    const root = await startWith(routine(REPS(FK, [12, 12])));
+    await feedFlutter(3000, flutterSeq(['L']));
+    assert.equal(ui.stage.currentReps, 0, '정지');
+    await feedFlutter(3000, flutterSeq(['L', 'R']));
+    assert.equal(ui.stage.currentReps, 0, '좌→우만');
+    await feedFlutter(2000, flutterSeq(Array.from({ length: 20 }, (_, i) => (i % 2 ? 'R' : 'L')), 100));
+    assert.equal(ui.stage.currentReps, 0, '빠른 교대');
+    await feedFlutter(3000, flutterCycle('R')); // 우→좌→우…: 1.0·1.8·2.6초
+    assert.equal(ui.stage.currentReps, 3, '정상 교대 3회');
+    assert.equal(ui.hud.reps, 3, 'HUD = AI count');
+    assert.deepEqual([ui.hud.kind, ui.hud.target, ui.stage.phase.kind], ['reps', 12, 'exercising']);
+    await unmount(root);
+  });
+
+  test('F5. flutter-kick: 수동 일시정지·재개 후 누적 count 유지, 일시정지 중 증가 없음, 결과 1건', async () => {
+    const root = await startWith(routine(REPS(FK, [4, 4])));
+    await feedFlutter(FK.mid);
+    assert.equal(ui.stage.currentReps, 1);
+    await act(async () => { ui.stage.onPressMenu(); }); await settle();
+    assert.equal(ui.stage.pause, 'paused');
+    await feedFlutter(3000);
+    assert.equal(ui.stage.currentReps, 1, '일시정지 중 증가·손실 없음');
+    await resumeLikeUser();
+    assert.equal(ui.stage.currentReps, 1);
+    await feedFlutter(FK.end + 300);
+    assert.equal(ui.stage.phase.kind, 'resting', '1 + 3 = 목표 4회 → 종료');
+    assert.deepEqual((await localSession()).sets.map((x) => [x.actualReps, x.actualDurationSeconds]), [[4, null]]);
+    const pose = await poseItems();
+    assert.equal(pose.length, 1);
+    assertPilotPayload(pose[0].payload, FK, 4);
+    await unmount(root);
+  });
+
+  test('F6. 스쿼트 → flutter-kick 2세트(checkpoint·이어하기) → 플랭크 전환, 세트별 결과 1건·count 오염 없음', async () => {
+    const fx = multi([{ exerciseId: 'squat', measurementType: 'REPS', sets: [{ reps: 2 }] }, REPS(FK, [3, 3]), { exerciseId: 'plank', measurementType: 'DURATION', sets: [{ seconds: 20 }] }]);
+    let root = await startWith(fx);
+    testMeasure.value = { count: 2 }; testMeasure.summary = { count: 2 };
+    await act(async () => { feedFrames = true; pushEmptyFrame(); feedFrames = false; }); await settle();
+    testMeasure.value = null; testMeasure.summary = null;
+    await untilPhase(1, 1);
+    { const t0 = clock;
+      await feedUntil(t0 + FK.mid, (t) => FK.make(t - t0));
+      assert.deepEqual([ui.hud.kind, ui.hud.reps, ui.hud.target], ['reps', 1, 3], '스쿼트 2회가 이어지지 않고 플러터킥 자기 count');
+      await feedUntil(t0 + FK.end + 300, (t) => FK.make(t - t0)); }
+    assert.equal(ui.stage.phase.kind, 'resting');
+    await untilPhase(1, 2);
+    await feedFlutter(FK.mid);
+    assert.equal(ui.stage.currentReps, 1);
+    await stopAndSaveDraft();
+    const draft = useWorkoutDraftStore.getState().draft;
+    assert.deepEqual([draft.exerciseId, draft.phase, draft.set, draft.targetReps], ['flutter-kick', 'exercising', 2, 3]);
+    await unmount(root);
+    root = await mount({ resume: '1' });
+    assert.deepEqual([ui.stage.phase.set, ui.stage.targetReps], [2, 3]);
+    await resumeLikeUser();
+    await feedFlutter(FK.end + 300);
+    await untilPhase(2, 1);
+    testMeasure.value = { count: null, holdSeconds: 5 }; testMeasure.summary = { count: null, holdSeconds: 5 };
+    await feedFlutter(2000, flutterSeq(['L']));
+    assert.deepEqual([ui.hud.kind, ui.hud.holdSeconds], ['duration', 5], '다음 운동 플랭크는 자기 분석기 값');
+    await feedFlutter(18 * 1000 + 500, flutterSeq(['L']));
+    assert.ok(ui.completeRenders > 0);
+    const session = await lastSession();
+    assert.deepEqual(session.sets.map((x) => [x.routineSetId, x.actualReps, x.actualDurationSeconds]), [
+      [fx.exercises[0].sets[0].id, 2, null], [fx.exercises[1].sets[0].id, 3, null], [fx.exercises[1].sets[1].id, 3, null], [fx.exercises[2].sets[0].id, null, 5]]);
+    const pose = await poseItems();
+    assert.deepEqual(pose.map((i) => i.payload.exercise), ['squat', 'flutter_kicks', 'flutter_kicks', 'plank']);
+    for (const item of pose.slice(1, 3)) assertPilotPayload(item.payload, FK, 3);
+    await unmount(root);
+  });
+
+  test('F7. snapshot 호환: V15 REPS만 연결, V15 이전 DURATION·누락·잘못된 값은 conflict(자동 변환 없음, 결과 없음, 기존 M10 정지)', async () => {
+    const hasProfile = (id) => Object.prototype.hasOwnProperty.call(poseModule.READINESS_PROFILES, id);
+    assert.deepEqual(poseSupportForSnapshot('flutter-kick', 'REPS'), { status: 'supported', poseId: 'flutter_kicks' });
+    for (const bad of ['DURATION', undefined, null, '', 'reps', 'TIME', 'duration', 20, {}]) {
+      assert.deepEqual(poseSupportForSnapshot('flutter-kick', bad), { status: 'conflict', poseId: 'flutter_kicks' }, String(bad));
+      assert.equal(createExerciseAnalyzer('flutter-kick', bad), null);
+    }
+    assert.deepEqual(readinessAvailability('flutter-kick', hasProfile, 'DURATION'), { availability: 'contract_conflict', poseId: 'flutter_kicks' });
+    for (const id of ['unknown-exercise', 'flutter_kicks', 'scissor-kick', 'toString']) assert.equal(createExerciseAnalyzer(id, 'REPS'), null, `미확인 ID ${id}`);
+    const before = stallAlerts().length;
+    const root = await startWith(routine({ exerciseId: 'flutter-kick', measurementType: 'DURATION', sets: [{ seconds: 20 }] }));
+    await feedFlutter(20 * 1000 + 500);
+    assert.equal(ui.hud.kind, 'duration', '과거 snapshot 표시는 DURATION 그대로(REPS로 강제 변환 없음)');
+    assert.equal(ui.stage.currentReps, null, '분석기 미연결');
+    assert.equal(stallAlerts().length - before, 1, '기존 M10 안내로 정지');
+    assert.equal((await poseItems()).length, 0);
+    assert.equal((await localSession()).sets.length, 0);
+    await unmount(root);
   });
 });

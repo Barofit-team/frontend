@@ -250,7 +250,8 @@ beforeEach(() => {
 });
 afterEach(() => { mock.timers.reset(); });
 
-// 분석기 미지원 종목(DURATION). 04단계에서 사이드 플랭크가 supported가 되어 아직 not_implemented인 플러터킥(Routine DURATION)으로 교체
+// 분석기를 연결하지 않는 종목(DURATION). 06 이후 23종 모두 supported이므로 V15 이전 DURATION 플러터킥 snapshot(계약 충돌)을 쓴다.
+// conflict는 not_implemented와 같은 기존 M10 미지원 경로(분석기 미연결)를 탄다
 const UNSUPPORTED = () => routine({ exerciseId: 'flutter-kick', measurementType: 'DURATION', sets: [{ seconds: 20 }] });
 const SUPPORTED_REPS = (count = 1) => routine({ exerciseId: 'squat', measurementType: 'REPS', sets: Array.from({ length: count }, () => ({ reps: 12 })) });
 
@@ -268,7 +269,7 @@ async function finishResumeCountdown() {
 
 describe('그룹 A — 0초 도달 시 동작', () => {
   test('A. 분석기 미지원 종목: 재시도하지 않음(무의미한 반복 방지) — 0초 정지 유지, 별도 정책 대상', async () => {
-    assert.equal(createExerciseAnalyzer('flutter-kick', 'DURATION'), null, 'flutter-kick은 분석기 매핑이 없어야 합니다');
+    assert.equal(createExerciseAnalyzer('flutter-kick', 'DURATION'), null, 'V15 이전 DURATION 플러터킥 snapshot은 분석기를 연결하지 않아야 합니다(conflict)');
     const root = await startWith(UNSUPPORTED());
     const stuckPhaseId = ui.stage.phase.id;
     feedFrames = true;

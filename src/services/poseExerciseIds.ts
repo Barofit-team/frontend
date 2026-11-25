@@ -23,6 +23,8 @@ export const POSE_EXERCISE_IDS = {
   'reverse-crunch': 'reverse_crunch',
   'burpee': 'burpee',
   'sit-up': 'situp',
+  // 06: Routine V15로 REPS 전환. AI 1회 = 위쪽 다리 좌→우→좌 또는 우→좌→우 교대(실험 카운터, 양측 관절)
+  'flutter-kick': 'flutter_kicks',
 } as const;
 
 export function poseExerciseId(routineExerciseId: string): string | null {
@@ -43,10 +45,8 @@ export function poseExerciseId(routineExerciseId: string): string | null {
 export type PoseSupportStatus = 'supported' | 'conflict' | 'incomplete' | 'not_implemented' | 'unknown';
 export interface PoseSupport { status: PoseSupportStatus; poseId: string | null }
 
-const SPECIAL_SUPPORT: Readonly<Record<string, PoseSupport>> = {
-  // 플러터킥: AI FlutterKicksAnalyzer는 REPS(count, holdSeconds null)인데 Routine은 DURATION → Routine 계약 변경(06) 전까지 연결하지 않음
-  'flutter-kick': { status: 'not_implemented', poseId: null },
-};
+// 06 이후 23종 모두 supported라 비어 있다. 이후 분석기 없는 종목이 생기면 not_implemented/incomplete로 여기에 둔다
+const SPECIAL_SUPPORT: Readonly<Record<string, PoseSupport>> = {};
 
 export function poseSupport(routineExerciseId: string): PoseSupport {
   if (Object.prototype.hasOwnProperty.call(SPECIAL_SUPPORT, routineExerciseId)) {
@@ -71,6 +71,8 @@ const REQUIRED_MEASUREMENT: Readonly<Record<string, 'REPS' | 'DURATION'>> = {
   'reverse-crunch': 'REPS',
   'burpee': 'REPS',
   'sit-up': 'REPS',
+  // 06: 플러터킥 AI count(holdSeconds null) ↔ Routine V15 REPS. V15 이전 DURATION snapshot·누락·잘못된 값은 conflict(자동 변환 없음)
+  'flutter-kick': 'REPS',
 };
 
 /**
@@ -123,6 +125,7 @@ export function readinessAvailability(
  *  - 마운틴 클라이머(측면): AI팀 기술 문서(MOUNTAIN_CLIMBER_V01 "전신 측면에서", 정면 구도 클립은 0회 보류)
  *  - 점프 스쿼트·리버스 크런치·싯업(측면): AI팀 기술 문서(FIVE_EXERCISE_RUNTIME "측면·사선"). 수퍼맨과 같이 측면으로 둔다
  *  - 버피(측면): AI팀 기술 문서(FIVE_EXERCISE_RUNTIME "전신 측면. 정면 미지원")
+ *  - 플러터킥(측면): AI팀 기술 문서(FIVE_EXERCISE_RUNTIME "양쪽 골반·발목·어깨가 보이는 측면·사선"). 양측 관절 요구는 readiness가 판정
  */
 export type BodyView = 'front' | 'side';
 const BODY_VIEWS: Readonly<Record<string, BodyView>> = {
@@ -141,6 +144,7 @@ const BODY_VIEWS: Readonly<Record<string, BodyView>> = {
   'reverse-crunch': 'side',
   'burpee': 'side',
   'sit-up': 'side',
+  'flutter-kick': 'side',
 };
 
 export function poseBodyView(routineExerciseId: string): BodyView | null {

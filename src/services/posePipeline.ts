@@ -3,6 +3,7 @@ import {
   BulgarianSplitSquatAnalyzer,
   BurpeeAnalyzer,
   DeadBugAnalyzer,
+  FlutterKicksAnalyzer,
   GluteBridgeAnalyzer,
   InclinePushupAnalyzer,
   JumpingJackAnalyzer,
@@ -37,8 +38,8 @@ export interface PoseAnalyzer {
 
 /**
  * Routine exerciseId + 진행 세션 snapshot의 measurementType → 분석기. 입력은 Routine ID만 받는다(AI ID·미확인 ID를 그대로 통과시키지 않음).
- *  - supported: 명시 매핑된 분석기 생성 (마운틴 클라이머·실험 카운터 4종은 REPS, 사이드 플랭크는 DURATION snapshot만)
- *  - conflict(V13 이전 DURATION 마운틴 클라이머, 측정 유형 누락·잘못된 값): 잘못된 단위의 결과를 만들지 않도록
+ *  - supported: 명시 매핑된 분석기 생성 (마운틴 클라이머·실험 카운터 5종은 REPS, 사이드 플랭크는 DURATION snapshot만)
+ *  - conflict(V13 이전 DURATION 마운틴 클라이머·V15 이전 DURATION 플러터킥, 측정 유형 누락·잘못된 값): 잘못된 단위의 결과를 만들지 않도록
  *    분석기를 연결하지 않고 기존 M10 미지원 경로(측정 없이 진행 → 기존 안내 후 정지, 재시도 없음)를 쓴다. 다른 분석기로 대체하지 않음
  *  - incomplete·not_implemented·unknown: null (기존 M10 미지원 경로)
  */
@@ -91,6 +92,8 @@ export function createExerciseAnalyzer(routineExerciseId: string, measurementTyp
       return new BurpeeAnalyzer() as unknown as PoseAnalyzer;
     case 'situp':
       return new SitupAnalyzer() as unknown as PoseAnalyzer;
+    case 'flutter_kicks': // 양쪽 다리를 함께 관측(측면 옵션 없음)
+      return new FlutterKicksAnalyzer() as unknown as PoseAnalyzer;
     default:
       return null;
   }
