@@ -18,6 +18,11 @@ export const POSE_EXERCISE_IDS = {
   'standing-calf-raise': 'standing_calf_raise',
   'dead-bug': 'dead_bug',
   'side-plank': 'side_plank',
+  // 05: Pose 실험 횟수 카운터(five-exercise-pilot-0.1, items.form unknown·compliancePct null). 자세 평가기가 아님
+  'jump-squat': 'jump_squat',
+  'reverse-crunch': 'reverse_crunch',
+  'burpee': 'burpee',
+  'sit-up': 'situp',
 } as const;
 
 export function poseExerciseId(routineExerciseId: string): string | null {
@@ -39,11 +44,8 @@ export type PoseSupportStatus = 'supported' | 'conflict' | 'incomplete' | 'not_i
 export interface PoseSupport { status: PoseSupportStatus; poseId: string | null }
 
 const SPECIAL_SUPPORT: Readonly<Record<string, PoseSupport>> = {
-  'jump-squat': { status: 'not_implemented', poseId: null },
-  'reverse-crunch': { status: 'not_implemented', poseId: null },
+  // 플러터킥: AI FlutterKicksAnalyzer는 REPS(count, holdSeconds null)인데 Routine은 DURATION → Routine 계약 변경(06) 전까지 연결하지 않음
   'flutter-kick': { status: 'not_implemented', poseId: null },
-  'burpee': { status: 'not_implemented', poseId: null },
-  'sit-up': { status: 'not_implemented', poseId: null },
 };
 
 export function poseSupport(routineExerciseId: string): PoseSupport {
@@ -64,6 +66,11 @@ const REQUIRED_MEASUREMENT: Readonly<Record<string, 'REPS' | 'DURATION'>> = {
   'mountain-climber': 'REPS',
   // 사이드 플랭크: AI holdSeconds(좌우 정상 유지 합계, count null) ↔ Routine DURATION. REPS·누락·잘못된 값은 conflict
   'side-plank': 'DURATION',
+  // 05: 실험 카운터 4종은 AI count만 제공(holdSeconds null) ↔ Routine V5 REPS. DURATION·누락·잘못된 값은 conflict
+  'jump-squat': 'REPS',
+  'reverse-crunch': 'REPS',
+  'burpee': 'REPS',
+  'sit-up': 'REPS',
 };
 
 /**
@@ -114,6 +121,8 @@ export function readinessAvailability(
  *  - 런지(측면): AI팀 분석 프로토타입(analysis/lunge "측면 전신 영상용", "측면·단독 인물 전제")
  *  - 글루트 브리지(측면): AI팀 기술 문서(GLUTE_BRIDGE "측면·전신 촬영")
  *  - 마운틴 클라이머(측면): AI팀 기술 문서(MOUNTAIN_CLIMBER_V01 "전신 측면에서", 정면 구도 클립은 0회 보류)
+ *  - 점프 스쿼트·리버스 크런치·싯업(측면): AI팀 기술 문서(FIVE_EXERCISE_RUNTIME "측면·사선"). 수퍼맨과 같이 측면으로 둔다
+ *  - 버피(측면): AI팀 기술 문서(FIVE_EXERCISE_RUNTIME "전신 측면. 정면 미지원")
  */
 export type BodyView = 'front' | 'side';
 const BODY_VIEWS: Readonly<Record<string, BodyView>> = {
@@ -128,6 +137,10 @@ const BODY_VIEWS: Readonly<Record<string, BodyView>> = {
   'lunge': 'side',
   'glute-bridge': 'side',
   'mountain-climber': 'side',
+  'jump-squat': 'side',
+  'reverse-crunch': 'side',
+  'burpee': 'side',
+  'sit-up': 'side',
 };
 
 export function poseBodyView(routineExerciseId: string): BodyView | null {

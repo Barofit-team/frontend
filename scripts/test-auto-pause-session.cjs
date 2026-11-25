@@ -993,8 +993,11 @@ describe('3-1a — 분석기 생성과 readiness fallback 정리', () => {
     // 3-4c: 마운틴 클라이머는 V13 REPS snapshot만 연결. legacy DURATION·측정 유형 누락/오류 snapshot은 conflict로 연결하지 않음
     assert.equal(createExerciseAnalyzer('mountain-climber', 'DURATION'), null, 'conflict: legacy DURATION snapshot');
     for (const bad of [undefined, null, 'TIME', 'reps']) assert.equal(createExerciseAnalyzer('mountain-climber', bad), null, `conflict: 측정 유형 ${String(bad)}`);
-    for (const id of ['jump-squat', 'reverse-crunch', 'flutter-kick', 'burpee', 'sit-up']) {
-      assert.equal(createExerciseAnalyzer(id), null, `not_implemented ${id}`);
+    assert.equal(createExerciseAnalyzer('flutter-kick', 'DURATION'), null, 'not_implemented flutter-kick (06 전)');
+    assert.equal(createExerciseAnalyzer('flutter-kick', 'REPS'), null, 'not_implemented flutter-kick (06 전)');
+    // 05: 실험 카운터 4종은 REPS snapshot만 연결. 측정 유형 누락 snapshot은 conflict
+    for (const id of ['jump-squat', 'reverse-crunch', 'burpee', 'sit-up']) {
+      assert.equal(createExerciseAnalyzer(id), null, `conflict(측정 유형 누락) ${id}`);
     }
     for (const id of ['forward-lunge', 'reverse-lunge', 'jumping-lunge', 'unknown-exercise', 'toString']) {
       assert.equal(createExerciseAnalyzer(id), null, `unknown ${id}`);
@@ -2153,5 +2156,216 @@ describe('3-4d — 사이드 플랭크 (DURATION)', () => {
     ]);
     assert.ok(pose[0].payload.summary.holdSeconds > 0 && pose[0].payload.summary.count === null);
     await unmount(root);
+  });
+});
+
+// ---------------------------------------------------------------------
+// 05: 실험 횟수 카운터 4종 (점프 스쿼트·리버스 크런치·버피·싯업, REPS)
+// 프레임은 barofit-pose tests/js/pilots.test.mjs frame(id, stage, t, side)의 합성 관절을 그대로 쓴다(왼쪽 관절만 입력, AI가 측면 선택).
+// 단계는 400ms(Pose 테스트의 4프레임)씩이며, 점프 스쿼트·버피 기준 자세 보정(서 있는 자세 300ms)을 위해 시작 600ms는 선 자세다.
+// AI 결과는 자세 평가가 아닌 후보 횟수다(items.form unknown, compliancePct null, postureAssessment 'unreviewed').
+// 합성 관절 기반 FE 연동 검증이며 실제 횟수 정확도·실기기 검증을 뜻하지 않는다.
+// ---------------------------------------------------------------------
+describe('05 — 실험 횟수 카운터 4종 실제 분석기 연동 (REPS)', () => {
+  const pilotLandmarks = (id, stage) => {
+    const lm = Array.from({ length: 33 }, () => [null, null, null, null, null]);
+    const put = (i, x, y) => { lm[i] = [x, y, 0, 1, 1]; };
+    let s = [0.45, 0.2], h = [0.45, 0.4], k = [0.45, 0.6], a = [0.45, 0.85], w = [0.4, 0.5];
+    if (id === 'jump_squat') {
+      if (stage === 'active') { h = [0.45, 0.5]; k = [0.65, 0.65]; }
+      if (stage === 'air') { s = [s[0], s[1] - 0.1]; h = [h[0], h[1] - 0.1]; k = [k[0], k[1] - 0.1]; a = [a[0], a[1] - 0.1]; }
+    } else if (id === 'burpee') {
+      if (stage === 'active') { s = [0.2, 0.75]; h = [0.45, 0.75]; k = [0.65, 0.75]; a = [0.85, 0.75]; w = [0.2, 0.9]; }
+      if (stage === 'crouch') { s = [0.45, 0.65]; h = [0.45, 0.75]; k = [0.65, 0.75]; }
+    } else {
+      s = [0.2, 0.65]; h = [0.5, 0.65]; k = [0.75, 0.65]; a = [0.85, 0.65];
+      if (id === 'reverse_crunch' && stage === 'active') k = [0.55, 0.45];
+      if (id === 'situp') { k = [0.62, 0.48]; a = [0.78, 0.65]; if (stage === 'active') s = [0.36, 0.4]; }
+    }
+    for (const [i, p] of [[11, s], [23, h], [25, k], [27, a], [15, w], [13, [0.4, 0.4]]]) put(i, ...p);
+    return lm;
+  };
+  const LEAD = 600;
+  const cycleOf = (id, steps) => (t) => (t < LEAD ? pilotLandmarks(id, 'rest') : pilotLandmarks(id, steps[Math.floor((t - LEAD) / 400) % steps.length]));
+  // AI 실제 출력(합성 관절): 1·2·3회 완료 시점 — 점프 스쿼트 1.9·3.5·5.1초, 리버스 크런치 1.6·2.8·4.0초, 버피·싯업 1.5·2.7·3.9초
+  const CASES = [
+    { routineId: 'jump-squat', poseId: 'jump_squat', cls: 'JumpSquatAnalyzer', steps: ['rest', 'active', 'air', 'rest'], period: 1600, mid: 2500, end: 5100, joints: 4,
+      negative: { label: '공중 단계 없는 스쿼트(앉았다 일어서기)', steps: ['rest', 'active', 'rest'] } },
+    { routineId: 'reverse-crunch', poseId: 'reverse_crunch', cls: 'ReverseCrunchAnalyzer', steps: ['rest', 'active', 'rest'], period: 1200, mid: 2000, end: 4000, joints: 4,
+      negative: { label: '무릎을 당긴 채 유지(복귀 없음)', steps: ['active'], completesOnReturn: true } },
+    { routineId: 'burpee', poseId: 'burpee', cls: 'BurpeeAnalyzer', steps: ['rest', 'active', 'rest'], period: 1200, mid: 2000, end: 3900, joints: 6,
+      negative: { label: '바닥 자세 없는 쪼그려 앉기만 반복', steps: ['rest', 'crouch', 'rest'] } },
+    { routineId: 'sit-up', poseId: 'situp', cls: 'SitupAnalyzer', steps: ['rest', 'active', 'rest'], period: 1200, mid: 2000, end: 3900, joints: 4,
+      negative: { label: '몸통을 일으킨 채 유지(복귀 없음)', steps: ['active'], completesOnReturn: true } },
+  ].map((c) => ({ ...c, mode: 'either', view: 'side', make: cycleOf(c.poseId, c.steps), width: 1000, height: 1000 }));
+
+  /** 호출 시점부터의 경과 시간으로 프레임 생성(새 세트·재개 후 분석기가 선 자세부터 관측하도록) */
+  async function feedPilot(c, ms, steps = c.steps) { const t0 = clock; const make = cycleOf(c.poseId, steps); await feedUntil(clock + ms, (t) => make(t - t0)); }
+  async function untilPhase(exerciseIndex, set) {
+    for (let i = 0; i < 600; i += 1) {
+      const ph = ui.stage?.phase;
+      if (ph?.kind === 'exercising' && ph.exerciseIndex === exerciseIndex && ph.set === set) return;
+      await advance(250);
+    }
+    assert.fail(`HARNESS: ${exerciseIndex}번 운동 ${set}세트에 도달하지 않음`);
+  }
+  function multi(items) {
+    const parts = items.map((it) => routine(it));
+    const exercises = parts.map((part, i) => ({ ...part.exercise, order: i + 1 }));
+    return { snapshot: { ...parts[0].snapshot, exercises }, sessions: parts.map((part) => part.sessions[0]), exercises };
+  }
+  async function stopAndSaveDraft() {
+    await act(async () => { ui.stage.onPressMenu(); }); await settle();
+    await advance(500);
+    await act(async () => { ui.stage.onPressStop(); }); await settle();
+    await advance(500);
+    await act(async () => { ui.stage.onConfirmStop(); }); await settle();
+  }
+  const REPS = (c, sets) => ({ exerciseId: c.routineId, measurementType: 'REPS', sets: sets.map((reps) => ({ reps })) });
+  const poseItems = async () => (await storedQueue()).filter((i) => i.kind === 'pose');
+  const lastSession = async () => (await storedQueue()).filter((i) => i.session).at(-1).session;
+  const feedbacks = () => events.filter((e) => e.eventType === 'SET_FEEDBACK');
+  /** 실험 카운터 AI 원본 의미 보존: 자세 평가가 아님 */
+  function assertPilotPayload(payload, c, count) {
+    assert.deepEqual([payload.exercise, payload.engineVersion, payload.summary.count, payload.summary.holdSeconds], [c.poseId, 'five-exercise-pilot-0.1', count, null]);
+    assert.deepEqual(payload.summary.items.form, { aggregationBasis: 'repetition', unit: 'repetitions', compliant: 0, warning: 0, unknown: count, notApplicable: 0, evaluated: 0, compliancePct: null },
+      'items.form 미평가(unknown)·compliancePct null 그대로 — 정상 자세·점수로 변환하지 않음');
+    assert.deepEqual([payload.summary.details.experimental, payload.summary.details.postureAssessment], [true, 'unreviewed']);
+    assert.equal(payload.summary.details.repetitions.length, count);
+    assert.ok(payload.summary.details.repetitions.every((r) => r.items.form === 'unknown'));
+  }
+  beforeEach(resetRealReps);
+  afterEach(() => { stores.tts.setState({ sendCoachEvent: () => false }); testMeasure.value = null; testMeasure.summary = null; });
+
+  for (const c of CASES) {
+    test(`K1. ${c.routineId}: 공통 하니스(지원·분석기·readiness·측면 안내·REPS 링·목표 3회 종료·SET_FEEDBACK·Workout·AI 원본, 중복 없음)`, async () => {
+      await verifyRealRepsExercise(c);
+      const pose = await poseItems();
+      assertPilotPayload(pose.at(-1).payload, c, 3);
+      assert.deepEqual(feedbacks().map((e) => [e.exerciseId, e.actualReps, e.actualDurationSeconds]), [[c.routineId, 3, undefined]]);
+    });
+  }
+
+  test('K2. readiness: 4종 모두 자기 AI 프로필로 준비 완료, 표시 관절 = AI checkedLandmarks(버피 6·나머지 4)', () => {
+    const hasProfile = (id) => Object.prototype.hasOwnProperty.call(poseModule.READINESS_PROFILES, id);
+    for (const c of CASES) {
+      assert.deepEqual(readinessAvailability(c.routineId, hasProfile, 'REPS'), { availability: 'available', poseId: c.poseId });
+      const readiness = new poseModule.CameraReadiness({ exercise: c.poseId });
+      let r;
+      for (let t = 0; t <= 1500; t += 100) r = readiness.pushFrame({ timestampMs: t, width: 1000, height: 1000, landmarks: pilotLandmarks(c.poseId, 'rest') });
+      assert.deepEqual([r.ready, r.exercise, r.evaluatedSide, r.checkedLandmarks.length], [true, c.poseId, 'left', c.joints], `${c.poseId} readiness`);
+      assert.ok(r.checkedLandmarks.every((n) => n.startsWith('left_')), '추가 검사 관절 없음');
+    }
+  });
+
+  for (const c of CASES) {
+    test(`K3. ${c.routineId}: 정지 자세·${c.negative.label}은 횟수 아님, 정상 반복만 +1 (AI count 그대로)`, async () => {
+      const root = await startWith(routine(REPS(c, [12, 12])));
+      await feedPilot(c, 4000, ['rest']);
+      assert.equal(ui.stage.currentReps, 0, '정지 자세 0회');
+      await feedPilot(c, 4000, c.negative.steps);
+      assert.equal(ui.stage.currentReps, 0, `${c.negative.label} 0회`);
+      // 유지형 negative는 이후 시작 자세로 돌아오는 순간 AI 정의(동작 → 복귀)대로 그 1회가 완료된다
+      const carried = c.negative.completesOnReturn ? 1 : 0;
+      await feedPilot(c, c.end + 300);
+      assert.equal(ui.stage.currentReps, 3 + carried, `정상 반복 3회${carried ? ' + 유지 후 복귀 1회' : ''}`);
+      assert.equal(ui.hud.reps, ui.stage.currentReps, 'HUD 횟수 = AI count');
+      assert.equal(ui.stage.phase.kind, 'exercising', '목표 12회 미만 → 진행');
+      await unmount(root);
+    });
+  }
+
+  for (const c of CASES) {
+    test(`K4. ${c.routineId}: 수동 일시정지·재개 후 누적 count 유지, 일시정지 중 증가 없음, 결과 1건`, async () => {
+      const root = await startWith(routine(REPS(c, [4, 4])));
+      await feedPilot(c, c.mid);
+      assert.equal(ui.stage.currentReps, 1);
+      await act(async () => { ui.stage.onPressMenu(); }); await settle();
+      assert.equal(ui.stage.pause, 'paused');
+      await feedPilot(c, 3000);
+      assert.equal(ui.stage.currentReps, 1, '일시정지 중 증가·손실 없음');
+      await resumeLikeUser();
+      assert.equal(ui.stage.currentReps, 1, '재개 후 1회 유지');
+      await feedPilot(c, c.end + 300); // 재개 후 3회 추가(분석기는 미완료 동작을 버리고 새로 관측)
+      assert.equal(ui.stage.phase.kind, 'resting', '1 + 3 = 목표 4회 → 종료');
+      assert.deepEqual((await localSession()).sets.map((x) => [x.actualReps, x.actualDurationSeconds]), [[4, null]]);
+      const pose = await poseItems();
+      assert.equal(pose.length, 1);
+      assertPilotPayload(pose[0].payload, c, 4);
+      await unmount(root);
+    });
+  }
+
+  for (const c of CASES) {
+    test(`K5. ${c.routineId}: 스쿼트 → ${c.routineId} 2세트(checkpoint·이어하기) → 플랭크 전환, 세트별 결과 1건`, async () => {
+      const fx = multi([{ exerciseId: 'squat', measurementType: 'REPS', sets: [{ reps: 2 }] }, REPS(c, [3, 3]), { exerciseId: 'plank', measurementType: 'DURATION', sets: [{ seconds: 20 }] }]);
+      let root = await startWith(fx);
+      testMeasure.value = { count: 2 }; testMeasure.summary = { count: 2 }; // 앞 운동 스쿼트만 기존 방식으로 2회 종료
+      await act(async () => { feedFrames = true; pushEmptyFrame(); feedFrames = false; }); await settle();
+      testMeasure.value = null; testMeasure.summary = null;
+      await untilPhase(1, 1);
+      assert.equal(ui.stage.targetReps, 3);
+      { // 한 세트는 끊김 없는 하나의 시간축으로 공급
+        const t0 = clock;
+        await feedUntil(t0 + c.mid, (t) => c.make(t - t0));
+        assert.deepEqual([ui.hud.kind, ui.hud.reps, ui.hud.target], ['reps', 1, 3], '다른 운동 → 실험 카운터: REPS 링');
+        await feedUntil(t0 + c.end + 300, (t) => c.make(t - t0));
+      }
+      assert.equal(ui.stage.phase.kind, 'resting', '1세트 3회 도달 → 종료');
+      await untilPhase(1, 2);
+      await feedPilot(c, c.mid);
+      assert.equal(ui.stage.currentReps, 1);
+      await stopAndSaveDraft();
+      const draft = useWorkoutDraftStore.getState().draft;
+      assert.deepEqual([draft.exerciseId, draft.phase, draft.set, draft.targetReps], [c.routineId, 'exercising', 2, 3], 'checkpoint = 2세트 목표 3회');
+      await unmount(root);
+
+      root = await mount({ resume: '1' });
+      assert.deepEqual([ui.stage.phase.set, ui.stage.targetReps], [2, 3], '이어하기: 2세트');
+      await resumeLikeUser();
+      await feedPilot(c, c.end + 300);
+      await untilPhase(2, 1);
+      testMeasure.value = { count: null, holdSeconds: 5 }; testMeasure.summary = { count: null, holdSeconds: 5 };
+      await feedPilot(c, 2000, ['rest']);
+      assert.deepEqual([ui.hud.kind, ui.hud.holdSeconds], ['duration', 5], '다음 운동 플랭크는 자기 분석기 값');
+      await feedPilot(c, 18 * 1000 + 500, ['rest']);
+      assert.ok(ui.completeRenders > 0, '루틴 완료');
+      const session = await lastSession();
+      assert.deepEqual(session.sets.map((x) => [x.routineSetId, x.actualReps, x.actualDurationSeconds]), [
+        [fx.exercises[0].sets[0].id, 2, null], [fx.exercises[1].sets[0].id, 3, null], [fx.exercises[1].sets[1].id, 3, null], [fx.exercises[2].sets[0].id, null, 5]]);
+      const pose = await poseItems();
+      assert.deepEqual(pose.map((i) => i.payload.exercise), ['squat', c.poseId, c.poseId, 'plank'], '세트별 AI 결과 1건, 중복 없음');
+      for (const item of pose.slice(1, 3)) assertPilotPayload(item.payload, c, 3);
+      await unmount(root);
+    });
+  }
+
+  test('K6. 잘못된 snapshot: REPS만 연결, DURATION·누락·잘못된 값은 conflict(분석기 미연결·결과 없음·기존 M10 정지)', async () => {
+    const hasProfile = (id) => Object.prototype.hasOwnProperty.call(poseModule.READINESS_PROFILES, id);
+    for (const c of CASES) {
+      assert.deepEqual(poseSupportForSnapshot(c.routineId, 'REPS'), { status: 'supported', poseId: c.poseId });
+      for (const bad of ['DURATION', undefined, null, '', 'reps', 'TIME']) {
+        assert.deepEqual(poseSupportForSnapshot(c.routineId, bad), { status: 'conflict', poseId: c.poseId }, `${c.routineId} ${String(bad)}`);
+        assert.equal(createExerciseAnalyzer(c.routineId, bad), null);
+      }
+      assert.deepEqual(readinessAvailability(c.routineId, hasProfile, 'DURATION'), { availability: 'contract_conflict', poseId: c.poseId });
+    }
+    for (const c of CASES) {
+      resetRealReps();
+      const alertsBefore = stallAlerts().length;
+      const root = await startWith(routine({ exerciseId: c.routineId, measurementType: 'DURATION', sets: [{ seconds: 20 }] }));
+      await feedPilot(c, 20 * 1000 + 500);
+      assert.equal(ui.stage.currentReps, null, `${c.routineId}: DURATION snapshot → 측정값 없음`);
+      assert.equal(stallAlerts().length - alertsBefore, 1, '기존 M10 안내로 정지');
+      assert.equal((await poseItems()).length, 0, 'AI 결과 저장 없음');
+      assert.equal((await localSession()).sets.length, 0);
+      await unmount(root);
+    }
+  });
+
+  test('K7. 범위: 플러터킥은 미지원 유지(Routine DURATION·AI REPS 계약 불일치, 06에서 처리)', () => {
+    assert.deepEqual(poseSupport('flutter-kick'), { status: 'not_implemented', poseId: null });
+    for (const type of ['REPS', 'DURATION']) assert.equal(createExerciseAnalyzer('flutter-kick', type), null);
+    assert.equal(poseBodyView('flutter-kick'), null);
   });
 });

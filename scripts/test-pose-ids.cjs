@@ -3,14 +3,16 @@ const source = fs.readFileSync(path.join(__dirname, '../src/services/poseExercis
 const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText;
 const m = { exports: {} }; new Function('module', 'exports', compiled)(m, m.exports);
 const { POSE_EXERCISE_IDS: ids, poseExerciseId } = m.exports;
-assert.equal(Object.keys(ids).length, 18, '3-4d: side-plank 매핑 추가로 18종');
-assert.equal(new Set(Object.values(ids)).size, 18);
+assert.equal(Object.keys(ids).length, 22, '05: 실험 카운터 4종 매핑 추가로 22종(플러터킥 제외)');
+assert.equal(new Set(Object.values(ids)).size, 22);
+assert.deepEqual(['jump-squat', 'reverse-crunch', 'burpee', 'sit-up'].map(poseExerciseId), ['jump_squat', 'reverse_crunch', 'burpee', 'situp'], '05: Routine V5 ID → AI ID');
+assert.equal(poseExerciseId('flutter-kick'), null, '플러터킥 매핑 없음(06 전)');
 assert.equal(poseExerciseId('push-up'), 'pushup');
 assert.equal(poseExerciseId('pike-push-up'), 'pike_pushup');
 assert.equal(poseExerciseId('incline-push-up'), 'incline_pushup');
 assert.equal(poseExerciseId('forward-lunge'), null);
 assert.equal(poseExerciseId('toString'), null);
-console.log('PASS: 18 explicit routine-to-pose IDs; unsupported variants rejected');
+console.log('PASS: 22 explicit routine-to-pose IDs; unsupported variants rejected');
 
 // ---------- 3-1a: 23종 지원 상태 · readiness 가능 여부 ----------
 // (구현 전에는 poseSupport/readinessAvailability가 없어 실패해야 한다)
@@ -44,16 +46,23 @@ assert.deepEqual(poseSupportForSnapshot('side-plank', 'DURATION'), { status: 'su
 for (const bad of ['REPS', undefined, null, '', 'duration', 'TIME', 20, {}]) {
   assert.deepEqual(poseSupportForSnapshot('side-plank', bad), { status: 'conflict', poseId: 'side_plank' }, `side-plank 측정 유형 ${JSON.stringify(bad)}`);
 }
+// 05: 실험 카운터 4종은 REPS snapshot만 supported, 그 외 conflict
+const PILOTS = { 'jump-squat': 'jump_squat', 'reverse-crunch': 'reverse_crunch', burpee: 'burpee', 'sit-up': 'situp' };
+for (const [id, poseId] of Object.entries(PILOTS)) {
+  assert.deepEqual(poseSupportForSnapshot(id, 'REPS'), { status: 'supported', poseId }, `${id} REPS`);
+  for (const bad of ['DURATION', undefined, null, '', 'reps', 'TIME', 20, {}]) {
+    assert.deepEqual(poseSupportForSnapshot(id, bad), { status: 'conflict', poseId }, `${id} 측정 유형 ${JSON.stringify(bad)}`);
+  }
+}
 for (const type of ['REPS', 'DURATION']) {
-  for (const id of ['jump-squat', 'reverse-crunch', 'flutter-kick', 'burpee', 'sit-up']) assert.deepEqual(poseSupportForSnapshot(id, type), { status: 'not_implemented', poseId: null }, id);
+  assert.deepEqual(poseSupportForSnapshot('flutter-kick', type), { status: 'not_implemented', poseId: null }, 'flutter-kick');
   for (const id of ['forward-lunge', 'pushup', 'toString']) assert.deepEqual(poseSupportForSnapshot(id, type), { status: 'unknown', poseId: null }, id);
 }
 assert.equal(poseExerciseId('mountain-climber'), 'mountain_climber', '기존 17종 매핑(결과 검증용)은 유지');
 assert.deepEqual(poseSupport('side-plank'), { status: 'supported', poseId: 'side_plank' }, '04: 사이드 플랭크 정적 지원');
 assert.equal(poseExerciseId('side-plank'), 'side_plank', '3-4d: 사이드 플랭크 정적 매핑');
-for (const id of ['jump-squat', 'reverse-crunch', 'flutter-kick', 'burpee', 'sit-up']) {
-  assert.deepEqual(poseSupport(id), { status: 'not_implemented', poseId: null }, id);
-}
+for (const [id, poseId] of Object.entries(PILOTS)) assert.deepEqual(poseSupport(id), { status: 'supported', poseId }, `05: ${id} 정적 지원`);
+assert.deepEqual(poseSupport('flutter-kick'), { status: 'not_implemented', poseId: null }, '플러터킥 미지원 유지');
 for (const id of ['forward-lunge', 'reverse-lunge', 'jumping-lunge', 'march-in-place', 'pushup', 'side_plank', 'toString', '']) {
   assert.deepEqual(poseSupport(id), { status: 'unknown', poseId: null }, `미확인 ID ${JSON.stringify(id)}`);
 }
@@ -80,12 +89,19 @@ for (const type of ['REPS', 'TIME']) {
 }
 assert.deepEqual(readinessAvailability('side-plank', hasProfile), { availability: 'contract_conflict', poseId: 'side_plank' }, '측정 유형 누락');
 assert.deepEqual(readinessAvailability('side-plank', () => false, 'DURATION'), { availability: 'profile_unsupported', poseId: null }, '프로필 없으면 다른 프로필로 대체하지 않음');
-assert.deepEqual(readinessAvailability('burpee', hasProfile), { availability: 'analyzer_unsupported', poseId: null });
+for (const [id, poseId] of Object.entries(PILOTS)) {
+  assert.deepEqual(readinessAvailability(id, hasProfile, 'REPS'), { availability: 'available', poseId }, `${id} readiness`);
+  assert.deepEqual(readinessAvailability(id, hasProfile, 'DURATION'), { availability: 'contract_conflict', poseId }, `${id} DURATION snapshot`);
+  assert.ok(hasProfile(poseId), `AI readiness 프로필 존재 ${poseId}`);
+}
+for (const type of ['REPS', 'DURATION', undefined]) {
+  assert.deepEqual(readinessAvailability('flutter-kick', hasProfile, type), { availability: 'analyzer_unsupported', poseId: null }, '플러터킥 readiness 미연결');
+}
 assert.deepEqual(readinessAvailability('forward-lunge', hasProfile), { availability: 'analyzer_unsupported', poseId: null });
 assert.deepEqual(readinessAvailability(undefined, hasProfile), { availability: 'analyzer_unsupported', poseId: null });
 assert.deepEqual(readinessAvailability('squat', () => false), { availability: 'profile_unsupported', poseId: null }, '분석기는 있어도 프로필이 없으면 다른 프로필을 쓰지 않음');
 for (const poseId of Object.values(SUPPORTED_16)) assert.ok(hasProfile(poseId), `현재 AI readiness 프로필 존재 ${poseId}`);
-console.log('PASS: 3-1a/3-4c/04 support states (18 static supported, mountain-climber REPS-only / side-plank DURATION-only snapshot contract / 5 not_implemented / unknown) and readiness availability');
+console.log('PASS: 3-1a/3-4c/04/05 support states (22 static supported, mountain-climber·4 pilots REPS-only / side-plank DURATION-only snapshot contract / flutter-kick not_implemented / unknown) and readiness availability');
 
 // ---------- 3-2: 촬영 방향(PD 구상도 근거 종목만) ----------
 const { poseBodyView } = m.exports;
@@ -106,7 +122,9 @@ for (const id of ['forward-lunge', 'reverse-lunge', 'jumping-lunge']) assert.equ
 // 3-4a: 글루트 브리지 측면(AI 문서)
 assert.equal(poseBodyView('glute-bridge'), 'side', 'AI 문서: 글루트 브리지 측면·전신');
 assert.equal(poseBodyView('mountain-climber'), 'side', 'AI 문서: 마운틴 클라이머 전신 측면(MOUNTAIN_CLIMBER_V01)');
-for (const id of ['push-up', 'side-plank', 'unknown', 'toString',
+// 05: AI 문서(FIVE_EXERCISE_RUNTIME) 점프 스쿼트·리버스 크런치·싯업 "측면·사선", 버피 "전신 측면. 정면 미지원"
+for (const id of ['jump-squat', 'reverse-crunch', 'burpee', 'sit-up']) assert.equal(poseBodyView(id), 'side', `AI 문서: ${id} 측면`);
+for (const id of ['push-up', 'side-plank', 'flutter-kick', 'unknown', 'toString',
   'split-squat', 'bulgarian-split-squat', 'standing-calf-raise', 'side-lying-leg-raise', 'dead-bug']) {
   assert.equal(poseBodyView(id), null, `근거 없는 종목은 미확정: ${id}`);
 }
