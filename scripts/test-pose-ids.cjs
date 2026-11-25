@@ -3,14 +3,14 @@ const source = fs.readFileSync(path.join(__dirname, '../src/services/poseExercis
 const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText;
 const m = { exports: {} }; new Function('module', 'exports', compiled)(m, m.exports);
 const { POSE_EXERCISE_IDS: ids, poseExerciseId } = m.exports;
-assert.equal(Object.keys(ids).length, 17);
-assert.equal(new Set(Object.values(ids)).size, 17);
+assert.equal(Object.keys(ids).length, 18, '3-4d: side-plank 매핑 추가로 18종');
+assert.equal(new Set(Object.values(ids)).size, 18);
 assert.equal(poseExerciseId('push-up'), 'pushup');
 assert.equal(poseExerciseId('pike-push-up'), 'pike_pushup');
 assert.equal(poseExerciseId('incline-push-up'), 'incline_pushup');
 assert.equal(poseExerciseId('forward-lunge'), null);
 assert.equal(poseExerciseId('toString'), null);
-console.log('PASS: 17 explicit routine-to-pose IDs; unsupported variants rejected');
+console.log('PASS: 18 explicit routine-to-pose IDs; unsupported variants rejected');
 
 // ---------- 3-1a: 23종 지원 상태 · readiness 가능 여부 ----------
 // (구현 전에는 poseSupport/readinessAvailability가 없어 실패해야 한다)
@@ -46,7 +46,7 @@ for (const type of ['REPS', 'DURATION']) {
 }
 assert.equal(poseExerciseId('mountain-climber'), 'mountain_climber', '기존 17종 매핑(결과 검증용)은 유지');
 assert.deepEqual(poseSupport('side-plank'), { status: 'incomplete', poseId: 'side_plank' });
-assert.equal(poseExerciseId('side-plank'), null, '사이드 플랭크는 FE 매핑에 추가하지 않음');
+assert.equal(poseExerciseId('side-plank'), 'side_plank', '3-4d: 사이드 플랭크 정적 매핑(지원 상태는 incomplete 유지)');
 for (const id of ['jump-squat', 'reverse-crunch', 'flutter-kick', 'burpee', 'sit-up']) {
   assert.deepEqual(poseSupport(id), { status: 'not_implemented', poseId: null }, id);
 }
@@ -66,6 +66,12 @@ assert.deepEqual(readinessAvailability('mountain-climber', hasProfile), { availa
 assert.deepEqual(readinessAvailability('mountain-climber', hasProfile, 'TIME'), { availability: 'contract_conflict', poseId: 'mountain_climber' }, '잘못된 측정 유형');
 assert.deepEqual(readinessAvailability('mountain-climber', () => false, 'REPS'), { availability: 'profile_unsupported', poseId: null }, '프로필 없으면 다른 프로필로 대체하지 않음');
 assert.ok(hasProfile('mountain_climber'), '현재 AI readiness 프로필 존재 mountain_climber');
+// 3-4d: AI READINESS_PROFILES에 side_plank가 없으면 incomplete 유지(다른 운동 프로필로 대체 금지).
+// AI 프로필이 추가되면 이 검사가 실패한다 → SPECIAL_SUPPORT의 side-plank 항목 제거·실제 프로필 검증 후 갱신할 것
+assert.equal(hasProfile('side_plank'), false, 'AI side_plank readiness 프로필 없음(현재 019d9e9)');
+for (const type of ['DURATION', 'REPS', undefined]) {
+  assert.deepEqual(readinessAvailability('side-plank', hasProfile, type), { availability: 'profile_unsupported', poseId: null }, `side-plank readiness ${type}`);
+}
 assert.deepEqual(readinessAvailability('side-plank', hasProfile), { availability: 'profile_unsupported', poseId: null });
 assert.deepEqual(readinessAvailability('burpee', hasProfile), { availability: 'analyzer_unsupported', poseId: null });
 assert.deepEqual(readinessAvailability('forward-lunge', hasProfile), { availability: 'analyzer_unsupported', poseId: null });

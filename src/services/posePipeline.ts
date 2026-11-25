@@ -11,6 +11,7 @@ import {
   PikePushupAnalyzer,
   PlankAnalyzer,
   PushupAnalyzer,
+  SidePlankAnalyzer,
   SideLegRaiseAnalyzer,
   SplitSquatAnalyzer,
   SquatAnalyzer,
@@ -75,6 +76,8 @@ export function createExerciseAnalyzer(routineExerciseId: string, measurementTyp
       return new SideLegRaiseAnalyzer() as unknown as PoseAnalyzer;
     case 'dead_bug':
       return new DeadBugAnalyzer() as unknown as PoseAnalyzer;
+    case 'side_plank': // supported(DURATION snapshot)일 때만 도달. 현재 readiness 미완성으로 incomplete
+      return new SidePlankAnalyzer() as unknown as PoseAnalyzer;
     default:
       return null;
   }

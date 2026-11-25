@@ -17,6 +17,7 @@ export const POSE_EXERCISE_IDS = {
   'side-lying-leg-raise': 'side_lying_leg_raise',
   'standing-calf-raise': 'standing_calf_raise',
   'dead-bug': 'dead_bug',
+  'side-plank': 'side_plank',
 } as const;
 
 export function poseExerciseId(routineExerciseId: string): string | null {
@@ -29,7 +30,8 @@ export function poseExerciseId(routineExerciseId: string): string | null {
  *  - supported: FE에서 기술적으로 연결 가능 (제품 출시 가능·실기기 검증 완료를 뜻하지 않음.
  *    글루트 브리지 PD 측정 유형, 버드독·수퍼맨 보조 측정값, 실험 분석기 검증 상태는 별도 미해결)
  *  - conflict: 정적 상태로는 쓰지 않는다. snapshot 측정 유형이 분석기 계약과 다를 때 poseSupportForSnapshot이 반환
- *  - incomplete: JS 분석기는 있으나 FE 연동·readiness 미완성 (사이드 플랭크)
+ *  - incomplete: JS 분석기·FE 매핑은 있으나 readiness 미완성 (사이드 플랭크: AI READINESS_PROFILES에 side_plank 없음.
+ *    프로필 추가 후 SPECIAL_SUPPORT 항목을 제거하면 REQUIRED_MEASUREMENT의 DURATION 계약으로 supported가 된다)
  *  - not_implemented: 현재 앱 의존성에 JS 분석기 없음
  *  - unknown: 23종에 없는 ID (유사한 이름도 다른 분석기에 연결하지 않음)
  */
@@ -37,6 +39,7 @@ export type PoseSupportStatus = 'supported' | 'conflict' | 'incomplete' | 'not_i
 export interface PoseSupport { status: PoseSupportStatus; poseId: string | null }
 
 const SPECIAL_SUPPORT: Readonly<Record<string, PoseSupport>> = {
+  // readiness 프로필 누락: 푸시업·플랭크 프로필로 대체하지 않는다. AI 프로필 추가 전까지 세션·저장에 연결하지 않음
   'side-plank': { status: 'incomplete', poseId: 'side_plank' },
   'jump-squat': { status: 'not_implemented', poseId: null },
   'reverse-crunch': { status: 'not_implemented', poseId: null },
@@ -61,6 +64,8 @@ export function poseSupport(routineExerciseId: string): PoseSupport {
  */
 const REQUIRED_MEASUREMENT: Readonly<Record<string, 'REPS' | 'DURATION'>> = {
   'mountain-climber': 'REPS',
+  // 사이드 플랭크: AI holdSeconds(좌우 정상 유지 합계, count null) ↔ Routine DURATION. 현재 incomplete라 적용 전 단계
+  'side-plank': 'DURATION',
 };
 
 /**

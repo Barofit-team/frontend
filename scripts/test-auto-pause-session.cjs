@@ -1843,3 +1843,182 @@ describe('3-4c — 마운틴 클라이머 실제 분석기 연동 (REPS)', () =>
     await unmount(root);
   });
 });
+
+// ---------------------------------------------------------------------
+// 3-4d: 사이드 플랭크 (DURATION, 주 측정값 holdSeconds)
+// 합성 관절: 1000×1000 px 기준 전완 지지 사이드 플랭크. 아래쪽(지지) 어깨 11+d, 위쪽 어깨 11+(1−d)로 좌우를 만든다.
+// mode: ok(정상) | drop(골반 처짐) | bent(무릎 굽힘). 실제 사람 관절 기록이 아니며 자세 정확도·실기기 검증을 뜻하지 않는다.
+// 현재 AI READINESS_PROFILES에 side_plank가 없어 FE 지원 상태는 incomplete다.
+//  - P1·P2: 지금 실행(실제 분석기 출력 계약, incomplete 상태의 FE 차단)
+//  - D1~D4: supported가 된 뒤에만 실행(그 전에는 SKIP). FE DURATION 세션 연동 검증용
+// ---------------------------------------------------------------------
+describe('3-4d — 사이드 플랭크 (DURATION)', () => {
+  const spLandmarks = (support = 'left', mode = 'ok') => {
+    const lm = Array.from({ length: 33 }, () => [null, null, null, null, null]);
+    const P = (i, x, y) => { lm[i] = [x / 1000, y / 1000, 0, 1, 1]; };
+    const d = support === 'left' ? 0 : 1;
+    P(11 + d, 300, 500); P(13 + d, 310, 580); P(15 + d, 200, 585);
+    P(23 + d, ...(mode === 'drop' ? [550, 585] : [550, 560]));
+    P(25 + d, ...(mode === 'bent' ? [660, 520] : [675, 590]));
+    P(27 + d, 800, 620);
+    P(11 + (1 - d), 300, 420);
+    return lm;
+  };
+  async function feedSp(ms, support = 'left', mode = 'ok') { await feedUntil(clock + ms, () => spLandmarks(support, mode)); }
+  async function untilPhase(exerciseIndex, set) {
+    for (let i = 0; i < 600; i += 1) {
+      const ph = ui.stage?.phase;
+      if (ph?.kind === 'exercising' && ph.exerciseIndex === exerciseIndex && ph.set === set) return;
+      await advance(250);
+    }
+    assert.fail(`HARNESS: ${exerciseIndex}번 운동 ${set}세트에 도달하지 않음`);
+  }
+  async function stopAndSaveDraft() {
+    await act(async () => { ui.stage.onPressMenu(); }); await settle();
+    await advance(500);
+    await act(async () => { ui.stage.onPressStop(); }); await settle();
+    await advance(500);
+    await act(async () => { ui.stage.onConfirmStop(); }); await settle();
+  }
+  const SP = (seconds, measurementType = 'DURATION') => ({ exerciseId: 'side-plank', measurementType, sets: seconds.map((s) => ({ seconds: s })) });
+  const poseItems = async () => (await storedQueue()).filter((i) => i.kind === 'pose');
+  const lastSession = async () => (await storedQueue()).filter((i) => i.session).at(-1).session;
+  const feedbacks = () => events.filter((e) => e.eventType === 'SET_FEEDBACK');
+  const SP_SUPPORTED = poseSupport('side-plank').status === 'supported';
+  const WHEN_SUPPORTED = { skip: !SP_SUPPORTED && 'side-plank incomplete: AI READINESS_PROFILES.side_plank 없음 (FE 지원 전환 후 실행)' };
+  beforeEach(resetRealReps);
+  afterEach(() => { stores.tts.setState({ sendCoachEvent: () => false }); });
+
+  test('P1. 실제 SidePlankAnalyzer 출력 계약(분석기 단독, FE 연동 아님): 좌·우 정상 유지만 holdSeconds 누적, count null', () => {
+    const run = (support, mode) => {
+      const a = new poseModule.SidePlankAnalyzer(); let r;
+      for (let t = 100; t <= 5000; t += 100) r = a.pushFrame({ timestampMs: 10000 + t, width: 1000, height: 1000, landmarks: spLandmarks(support, mode) });
+      return { r, s: a.finish()[0].summary };
+    };
+    for (const support of ['left', 'right']) {
+      const { r, s } = run(support, 'ok');
+      assert.equal(r.side, support, `${support} 지지 쪽 판정`);
+      assert.equal(s.count, null);
+      assert.ok(Math.abs(s.holdSeconds - 4.6) < 1e-6, `${support}: 4.9초 관측 중 확인 0.3초 제외 4.6초 (${s.holdSeconds})`);
+      assert.ok(s.holdSeconds < s.observedSeconds, '유효 유지 시간 < 관측 시간');
+      assert.deepEqual(s.details.sideHoldSeconds, support === 'left' ? { left: s.holdSeconds, right: 0 } : { left: 0, right: s.holdSeconds });
+    }
+    for (const [mode, code] of [['drop', 'HIP_DROP'], ['bent', 'KNEE_BENT']]) {
+      const { r, s } = run('left', mode);
+      assert.equal(s.holdSeconds, 0, `${mode}: 잘못된 자세는 유지 시간 0`);
+      assert.deepEqual(r.codes, [code]);
+    }
+    assert.equal(Object.prototype.hasOwnProperty.call(poseModule.READINESS_PROFILES, 'side_plank'), false, 'AI readiness 프로필 없음');
+  });
+
+  test('P2. incomplete 상태: DURATION·REPS snapshot 모두 분석기 미연결, 실제 정상 프레임이어도 결과 없음, 기존 M10 정지', async () => {
+    assert.deepEqual(poseSupport('side-plank'), { status: 'incomplete', poseId: 'side_plank' });
+    for (const type of ['DURATION', 'REPS', undefined]) assert.equal(createExerciseAnalyzer('side-plank', type), null, `analyzer ${type}`);
+    const hasProfile = (id) => Object.prototype.hasOwnProperty.call(poseModule.READINESS_PROFILES, id);
+    assert.deepEqual(readinessAvailability('side-plank', hasProfile, 'DURATION'), { availability: 'profile_unsupported', poseId: null }, '다른 운동 프로필로 대체하지 않음');
+    assert.equal(poseBodyView('side-plank'), null, '촬영 방향 미확정');
+    const root = await startWith(routine(SP([20])));
+    await feedSp(20 * 1000 + 500, 'left');
+    assert.equal(ui.stage.currentReps, null);
+    assert.equal(stallAlerts().length, 1, '기존 M10 미지원 정지');
+    assert.equal((await poseItems()).length, 0);
+    assert.equal((await localSession()).sets.length, 0);
+    await unmount(root);
+  });
+
+  test('D1. DURATION 세트 20·30초: 시간형 HUD, 타이머 만료 종료, holdSeconds ≠ 경과 시간, 좌·우 측정, 저장·SET_FEEDBACK', WHEN_SUPPORTED, async () => {
+    const fx = routine(SP([20, 30]));
+    const root = await startWith(fx);
+    await feedSp(5000, 'left');
+    assert.equal(ui.hud.kind, 'duration', '시간형 HUD(횟수 링 아님)');
+    assert.equal(ui.hud.seconds, remaining());
+    assert.equal(ui.hud.seconds, 15, '1세트 20초 목표 타이머');
+    assert.ok(ui.hud.progress > 0.2 && ui.hud.progress < 0.3, `가로 진행 바 = 타이머 경과 (${ui.hud.progress})`);
+    assert.equal(ui.hud.holdSeconds, 4, 'AI 유효 유지 4.x초 → 4 (타이머 경과 5초와 별개)');
+    assert.equal(ui.stage.currentReps, 4, '표시 측정값 = 유효 유지 시간(DURATION), count 아님');
+    await feedSp(15 * 1000 + 500, 'left');
+    assert.equal(ui.stage.phase.kind, 'resting', '기존 PhaseTimer 만료로만 종료');
+    await untilPhase(0, 2);
+    assert.equal(ui.stage.remainingSeconds, 30, '2세트 30초 목표');
+    await feedSp(10 * 1000, 'right', 'drop'); // 잘못된 자세 10초: 누적 없음
+    assert.ok([null, 0].includes(ui.hud.holdSeconds), `골반 처짐 동안 유지 시간 0 (${ui.hud.holdSeconds})`);
+    await feedSp(20 * 1000 + 500, 'right');
+    assert.ok(ui.completeRenders > 0, '마지막 세트 타이머 만료 → 운동 완료');
+    const pose = await poseItems();
+    assert.equal(pose.length, 2, '세트별 AI 결과 1건(중복 없음)');
+    const holds = pose.map((i) => i.payload.summary.holdSeconds);
+    assert.deepEqual(pose.map((i) => i.payload.summary.details.sideHoldSeconds.left > 0), [true, false], '1세트 왼쪽');
+    assert.deepEqual(pose.map((i) => i.payload.summary.details.sideHoldSeconds.right > 0), [false, true], '2세트 오른쪽');
+    assert.ok(holds[1] < 21, `2세트 유효 유지(${holds[1]}) < 타이머 30초: 경과 시간으로 대체하지 않음`);
+    assert.deepEqual(pose.map((i) => [i.payload.exercise, i.payload.summary.count]), [['side_plank', null], ['side_plank', null]], 'AI 원본 보존');
+    const session = await lastSession();
+    assert.deepEqual(session.sets.map((x) => [x.routineSetId, x.actualReps, x.actualDurationSeconds]),
+      fx.exercise.sets.map((x, i) => [x.id, null, Math.floor(holds[i])]), 'actualReps null, actualDurationSeconds = floor(holdSeconds)');
+    assert.deepEqual(feedbacks().map((e) => [e.exerciseId, e.actualReps, e.actualDurationSeconds]),
+      holds.map((h) => ['side-plank', undefined, Math.floor(h)]), 'SET_FEEDBACK 주 측정값 = floor(holdSeconds)');
+    await unmount(root);
+  });
+
+  test('D2. 수동 일시정지·재개 후 유효 유지 시간 보존, 결과 1건', WHEN_SUPPORTED, async () => {
+    const root = await startWith(routine(SP([30, 30])));
+    await feedSp(8000, 'left');
+    const before = ui.hud.holdSeconds;
+    assert.equal(before, 7);
+    await act(async () => { ui.stage.onPressMenu(); }); await settle();
+    await feedSp(3000, 'left'); // 일시정지 중 프레임은 측정하지 않음
+    assert.equal(ui.hud.holdSeconds ?? before, before, '일시정지 중 증가 없음');
+    await resumeLikeUser();
+    await feedSp(1000, 'left');
+    assert.ok(ui.hud.holdSeconds >= before, `재개 후 기존 유지 시간 보존 (${ui.hud.holdSeconds} ≥ ${before})`);
+    await feedSp(22 * 1000 + 500, 'left');
+    assert.equal(ui.stage.phase.kind, 'resting');
+    const pose = await poseItems();
+    assert.equal(pose.length, 1);
+    assert.ok(pose[0].payload.summary.holdSeconds > before, '재개 전후 유지 시간 합산은 AI 누적값 그대로');
+    assert.equal((await localSession()).sets[0].actualDurationSeconds, Math.floor(pose[0].payload.summary.holdSeconds));
+    await unmount(root);
+  });
+
+  test('D3. REPS·측정 유형 누락 snapshot의 사이드 플랭크는 conflict: 분석기 미연결·결과 없음·M10 정지', WHEN_SUPPORTED, async () => {
+    for (const type of ['REPS', undefined, 'TIME']) {
+      assert.equal(createExerciseAnalyzer('side-plank', type), null, `conflict ${type}`);
+    }
+    assert.ok(createExerciseAnalyzer('side-plank', 'DURATION') instanceof poseModule.SidePlankAnalyzer);
+    const fx = routine({ exerciseId: 'side-plank', measurementType: 'REPS', sets: [{ reps: 20 }] });
+    const root = await startWith(fx);
+    await feedSp(60 * 1000 + 500, 'left');
+    assert.equal(stallAlerts().length, 1);
+    assert.equal((await poseItems()).length, 0);
+    assert.equal((await localSession()).sets.length, 0);
+    await unmount(root);
+  });
+
+  test('D4. 다음 운동 전환(스쿼트 → 사이드 플랭크)·checkpoint 이어하기: 세션 snapshot 계약으로 재연결', WHEN_SUPPORTED, async () => {
+    const parts = [routine({ exerciseId: 'squat', measurementType: 'REPS', sets: [{ reps: 2 }] }), routine(SP([20, 20]))];
+    const exercises = parts.map((p, i) => ({ ...p.exercise, order: i + 1 }));
+    const fx = { snapshot: { ...parts[0].snapshot, exercises }, sessions: parts.map((p) => p.sessions[0]) };
+    let root = await startWith(fx);
+    testMeasure.value = { count: 2 }; testMeasure.summary = { count: 2 }; // 앞 운동 스쿼트만 기존 방식으로 2회 종료
+    await act(async () => { feedFrames = true; pushEmptyFrame(); feedFrames = false; }); await settle();
+    testMeasure.value = null; testMeasure.summary = null;
+    await untilPhase(1, 1);
+    await feedSp(20 * 1000 + 500, 'right');
+    await untilPhase(1, 2);
+    await feedSp(4000, 'left');
+    await stopAndSaveDraft();
+    const draft = useWorkoutDraftStore.getState().draft;
+    assert.deepEqual([draft.exerciseId, draft.phase, draft.set], ['side-plank', 'exercising', 2]);
+    await unmount(root);
+    root = await mount({ resume: '1' });
+    await resumeLikeUser();
+    await feedSp(25 * 1000, 'left');
+    assert.ok(ui.completeRenders > 0);
+    const pose = await poseItems();
+    assert.deepEqual(pose.map((i) => i.payload.exercise), ['squat', 'side_plank', 'side_plank']);
+    const session = await lastSession();
+    assert.deepEqual(session.sets.map((x) => x.routineSetId), [exercises[0].sets[0].id, ...exercises[1].sets.map((x) => x.id)]);
+    assert.deepEqual(session.sets.slice(1).map((x, i) => [x.actualReps, x.actualDurationSeconds]),
+      pose.slice(1).map((i) => [null, Math.floor(i.payload.summary.holdSeconds)]));
+    await unmount(root);
+  });
+});
