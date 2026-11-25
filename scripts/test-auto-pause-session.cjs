@@ -1032,14 +1032,14 @@ describe('3-1a — 분석기 생성과 readiness fallback 정리', () => {
   const probe = { r: null, ready: 0 };
   function Probe(props) { probe.r = useCameraReadiness({ ...props, onReady: () => { probe.ready += 1; } }); return null; }
   const fullBody = (t) => ({ timestampMs: t, width: 480, height: 640, landmarks: Array.from({ length: 33 }, () => [0.5, 0.5, 0, 1, 1]) });
-  async function runReadiness(exercise) {
+  async function runReadiness(exercise, frameAt = fullBody) {
     probe.r = null; probe.ready = 0;
     const root = createRoot(makeContainer()); liveRoots.add(root);
     await act(async () => { root.render(React.createElement(Probe, { exercise, stableMs: 100 })); });
     await settle();
     const returned = [];
     for (let i = 0; i < 10; i += 1) {
-      await act(async () => { returned.push(probe.r.pushFrame(fullBody(1000 + i * 50))); });
+      await act(async () => { returned.push(probe.r.pushFrame(frameAt(1000 + i * 50))); });
     }
     await settle();
     const snapshot = { ready: probe.ready, isReady: probe.r.isReady, required: probe.r.requiredJointCount, returned };
@@ -1055,12 +1055,22 @@ describe('3-1a — 분석기 생성과 readiness fallback 정리', () => {
     assert.equal(pushup.ready, 1); assert.equal(pushup.required, 6, '푸시업 full 프로필(한쪽 6관절)');
   });
 
-  test('R2. 프로필 없는 운동(사이드 플랭크)은 푸시업 프로필로 대체되지 않고 준비 완료가 되지 않음', async () => {
+  // Pose 49762dd: READINESS_PROFILES.side_plank = either·full 6관절 + CameraReadiness가 반대쪽 어깨를 추가 검사.
+  // 훅은 AI 프로필을 그대로 사용한다(FE 복사·푸시업 대체 없음). FE 준비 화면 차단은 incomplete 상태(P2)가 담당한다
+  test('R2. 사이드 플랭크는 AI side_plank 프로필로 readiness 실행(푸시업 대체 아님): 반대쪽 어깨까지 보여야 준비 완료', async () => {
     const r = await runReadiness('side_plank');
-    assert.equal(r.ready, 0, '준비 완료 콜백 없음');
-    assert.equal(r.isReady, false);
-    assert.equal(r.required, 0, '다른 운동(푸시업) 관절 프로필을 쓰지 않음');
-    assert.ok(r.returned.every((x) => x === null), '측정 결과를 만들지 않음');
+    assert.equal(r.ready, 1, '전신 관절 → 준비 완료 1회');
+    assert.equal(r.isReady, true);
+    assert.equal(r.required, 6, 'FE 표시 관절 수 = AI 프로필 joints(한쪽 6). 반대쪽 어깨는 AI 내부 검사');
+    assert.ok(r.returned.every((x) => x && x.exercise === 'side_plank'), 'AI side_plank readiness 결과');
+    // 왼쪽 어깨(11)만 가린 프레임: 푸시업은 오른쪽 6관절로 준비 완료, 사이드 플랭크는 양쪽 어깨 조건으로 준비 안 됨
+    const noLeftShoulder = (t) => { const f = fullBody(t); f.landmarks[11] = [0.5, 0.5, 0, 0, 0]; return f; };
+    const pushup = await runReadiness('pushup', noLeftShoulder);
+    assert.equal(pushup.ready, 1, '푸시업 프로필은 한쪽만 확인');
+    const sp = await runReadiness('side_plank', noLeftShoulder);
+    assert.equal(sp.ready, 0, '사이드 플랭크: 반대쪽 어깨 미인식 → 준비 완료 없음');
+    assert.equal(sp.isReady, false);
+    assert.ok(sp.returned.at(-1).missingLandmarks.includes('left_shoulder'), `반대쪽 어깨 누락 보고 (${sp.returned.at(-1).missingLandmarks})`);
   });
 
   test('R3. 운동 미지정(null)·미확인 ID도 준비 완료가 되지 않음', async () => {
@@ -1848,8 +1858,8 @@ describe('3-4c — 마운틴 클라이머 실제 분석기 연동 (REPS)', () =>
 // 3-4d: 사이드 플랭크 (DURATION, 주 측정값 holdSeconds)
 // 합성 관절: 1000×1000 px 기준 전완 지지 사이드 플랭크. 아래쪽(지지) 어깨 11+d, 위쪽 어깨 11+(1−d)로 좌우를 만든다.
 // mode: ok(정상) | drop(골반 처짐) | bent(무릎 굽힘). 실제 사람 관절 기록이 아니며 자세 정확도·실기기 검증을 뜻하지 않는다.
-// 현재 AI READINESS_PROFILES에 side_plank가 없어 FE 지원 상태는 incomplete다.
-//  - P1·P2: 지금 실행(실제 분석기 출력 계약, incomplete 상태의 FE 차단)
+// Pose 49762dd부터 AI READINESS_PROFILES.side_plank가 있으나, FE 최종 연동(04단계) 전이므로 FE 지원 상태는 incomplete다.
+//  - P1·P2: 지금 실행(실제 분석기·readiness 출력 계약, incomplete 상태의 FE 차단)
 //  - D1~D4: supported가 된 뒤에만 실행(그 전에는 SKIP). FE DURATION 세션 연동 검증용
 // ---------------------------------------------------------------------
 describe('3-4d — 사이드 플랭크 (DURATION)', () => {
@@ -1885,11 +1895,11 @@ describe('3-4d — 사이드 플랭크 (DURATION)', () => {
   const lastSession = async () => (await storedQueue()).filter((i) => i.session).at(-1).session;
   const feedbacks = () => events.filter((e) => e.eventType === 'SET_FEEDBACK');
   const SP_SUPPORTED = poseSupport('side-plank').status === 'supported';
-  const WHEN_SUPPORTED = { skip: !SP_SUPPORTED && 'side-plank incomplete: AI READINESS_PROFILES.side_plank 없음 (FE 지원 전환 후 실행)' };
+  const WHEN_SUPPORTED = { skip: !SP_SUPPORTED && 'side-plank incomplete: FE 최종 연동(04) 전 (supported 전환 후 실행)' };
   beforeEach(resetRealReps);
   afterEach(() => { stores.tts.setState({ sendCoachEvent: () => false }); });
 
-  test('P1. 실제 SidePlankAnalyzer 출력 계약(분석기 단독, FE 연동 아님): 좌·우 정상 유지만 holdSeconds 누적, count null', () => {
+  test('P1. 실제 SidePlankAnalyzer·readiness 계약(AI 단독, FE 연동 아님): 좌·우 정상 유지만 holdSeconds 누적, count null, side_plank 프로필', () => {
     const run = (support, mode) => {
       const a = new poseModule.SidePlankAnalyzer(); let r;
       for (let t = 100; t <= 5000; t += 100) r = a.pushFrame({ timestampMs: 10000 + t, width: 1000, height: 1000, landmarks: spLandmarks(support, mode) });
@@ -1908,7 +1918,27 @@ describe('3-4d — 사이드 플랭크 (DURATION)', () => {
       assert.equal(s.holdSeconds, 0, `${mode}: 잘못된 자세는 유지 시간 0`);
       assert.deepEqual(r.codes, [code]);
     }
-    assert.equal(Object.prototype.hasOwnProperty.call(poseModule.READINESS_PROFILES, 'side_plank'), false, 'AI readiness 프로필 없음');
+    // AI readiness 프로필(49762dd): either·full 6관절, 반대쪽 어깨 추가 검사
+    assert.deepEqual(JSON.parse(JSON.stringify(poseModule.READINESS_PROFILES.side_plank)),
+      { mode: 'either', joints: ['shoulder', 'elbow', 'wrist', 'hip', 'knee', 'ankle'] }, 'AI side_plank readiness 프로필');
+    const ready = (support, dropUpperShoulder) => {
+      const rd = new poseModule.CameraReadiness({ exercise: 'side_plank' }); let r;
+      for (let t = 0; t <= 1500; t += 100) {
+        const lm = spLandmarks(support, 'ok');
+        if (dropUpperShoulder) lm[11 + (support === 'left' ? 1 : 0)] = [null, null, null, null, null];
+        r = rd.pushFrame({ timestampMs: 20000 + t, width: 1000, height: 1000, landmarks: lm });
+      }
+      return r;
+    };
+    for (const support of ['left', 'right']) {
+      const ok = ready(support, false);
+      assert.equal(ok.ready, true, `${support} 지지: 지지쪽 6관절 + 위쪽 어깨 → 준비 완료`);
+      assert.equal(ok.selectedSide, support);
+      const other = support === 'left' ? 'right' : 'left';
+      const ng = ready(support, true);
+      assert.equal(ng.ready, false, `${support} 지지: 위쪽(반대쪽) 어깨 누락 → 준비 안 됨`);
+      assert.ok(ng.missingLandmarks.includes(`${other}_shoulder`), `${other}_shoulder 누락 보고 (${ng.missingLandmarks})`);
+    }
   });
 
   test('P2. incomplete 상태: DURATION·REPS snapshot 모두 분석기 미연결, 실제 정상 프레임이어도 결과 없음, 기존 M10 정지', async () => {

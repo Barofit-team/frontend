@@ -66,9 +66,10 @@ assert.deepEqual(readinessAvailability('mountain-climber', hasProfile), { availa
 assert.deepEqual(readinessAvailability('mountain-climber', hasProfile, 'TIME'), { availability: 'contract_conflict', poseId: 'mountain_climber' }, '잘못된 측정 유형');
 assert.deepEqual(readinessAvailability('mountain-climber', () => false, 'REPS'), { availability: 'profile_unsupported', poseId: null }, '프로필 없으면 다른 프로필로 대체하지 않음');
 assert.ok(hasProfile('mountain_climber'), '현재 AI readiness 프로필 존재 mountain_climber');
-// 3-4d: AI READINESS_PROFILES에 side_plank가 없으면 incomplete 유지(다른 운동 프로필로 대체 금지).
-// AI 프로필이 추가되면 이 검사가 실패한다 → SPECIAL_SUPPORT의 side-plank 항목 제거·실제 프로필 검증 후 갱신할 것
-assert.equal(hasProfile('side_plank'), false, 'AI side_plank readiness 프로필 없음(현재 019d9e9)');
+// 3-4d: Pose 49762dd부터 AI READINESS_PROFILES.side_plank가 존재한다(either·full 6관절 + 반대쪽 어깨 검사).
+// FE 최종 연동(04) 전까지 SPECIAL_SUPPORT incomplete가 우선하므로 프로필이 있어도 readiness는 계속 차단된다
+assert.equal(hasProfile('side_plank'), true, 'AI side_plank readiness 프로필 존재(49762dd)');
+assert.deepEqual(JSON.parse(JSON.stringify(READINESS_PROFILES.side_plank)), { mode: 'either', joints: ['shoulder', 'elbow', 'wrist', 'hip', 'knee', 'ankle'] });
 for (const type of ['DURATION', 'REPS', undefined]) {
   assert.deepEqual(readinessAvailability('side-plank', hasProfile, type), { availability: 'profile_unsupported', poseId: null }, `side-plank readiness ${type}`);
 }
