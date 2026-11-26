@@ -3,7 +3,7 @@
   "main": "expo-router/entry",
   "version": "1.0.0",
   "dependencies": {
-    "@barofit/pose": "github:Barofit-team/barofit-pose#main",
+    "@barofit/pose": "github:Barofit-team/barofit-pose#4a5758705f947c723bba55c024d0a9fccc5eae45",
     "@expo/ui": "~58.0.23",
     "@react-native-async-storage/async-storage": "2.2.0",
     "expo": "^58.0.0",

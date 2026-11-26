@@ -19,7 +19,7 @@ import {
   PencilIcon,
   StopwatchIcon,
 } from '@/components/home/HomeIcons';
-import { clearLocalWorkout } from '@/services/offlineWorkout';
+import { abandonLocalWorkout } from '@/services/offlineWorkout';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useWeeklyPlanStore } from '@/stores/useWeeklyPlanStore';
 import { useWorkoutDraftStore } from '@/stores/useWorkoutDraftStore';
@@ -50,7 +50,7 @@ export default function WeeklyPlanScreen() {
     if (draft) {
       Alert.alert(
         '진행 중인 운동 초기화',
-        '중단 중 주간 계획 변경을 시도하면 기존의 진행도는 저장되지 않습니다. 당일의 운동 계획을 초기화하고 계속 진행하시겠습니까?',
+        '진행 중인 운동이 종료됩니다. 완료한 세트의 운동 기록은 보존됩니다. 당일의 운동 계획을 초기화하고 계속 진행하시겠습니까?',
         [
           { text: '취소', style: 'cancel' },
           {
@@ -60,7 +60,8 @@ export default function WeeklyPlanScreen() {
               const owner = useAuthStore.getState().user?.id;
               useWorkoutDraftStore.getState().clearDraft();
               if (owner) {
-                await clearLocalWorkout(owner, draft.sessionId).catch(() => {});
+                // 서버에도 종료를 남긴다(미완료 세션 ABANDONED, 완료 세트 보존). 오프라인이면 큐에 보관
+                await abandonLocalWorkout(owner, draft.sessionId).catch(() => {});
               }
               router.push('/weekly-plan-edit', { dangerouslySingular: true });
             },

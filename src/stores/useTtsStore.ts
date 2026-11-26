@@ -15,6 +15,7 @@ import {
   CoachMessage,
   SocketConnectionStatus,
 } from '@/types/tts';
+import { devLog, devWarn } from '@/utils/devLog';
 
 let wsInstance: WebSocket | null = null;
 let activePlayer: AudioPlayer | null = null;
@@ -104,9 +105,11 @@ export const useTtsStore = create<TtsState>((set, get) => ({
     }
 
     if (!auth?.accessToken || !auth.sessionId) {
+      devWarn('WS', 'connect skipped: accessToken/sessionId 없음');
       set({ socketStatus: 'error', wsUrl: targetUrl });
       return;
     }
+    devLog('WS', `connecting ${targetUrl}`, { sessionId: auth.sessionId });
     set({ socketStatus: 'connecting', wsUrl: targetUrl });
 
     try {
@@ -126,9 +129,11 @@ export const useTtsStore = create<TtsState>((set, get) => ({
         try {
           const payload = JSON.parse(raw) as BackendCoachingPayload;
           if (payload.type === 'AUTH_OK') {
+            devLog('WS', 'AUTH_OK (connected)');
             if (wsInstance === ws) set({ socketStatus: 'connected' });
             return;
           }
+          devLog('WS', `← ${payload.type ?? 'UNKNOWN'}`, payload);
           if (!payload.text) return;
           const label = payload.text || '백엔드 코칭 음성';
           const type = payload.type || 'BACKEND_PUSH';
@@ -141,29 +146,41 @@ export const useTtsStore = create<TtsState>((set, get) => ({
           } else {
             get().playSpeech(label, type);
           }
-        } catch {
-          // 유효하지 않은 JSON 형식 무시
+        } catch (err) {
+          devWarn('WS', 'invalid message (JSON 파싱 실패)', { raw: raw.slice(0, 300), error: String(err) });
         }
       };
 
-      ws.onerror = () => {
+      ws.onerror = (event) => {
+        devWarn('WS', 'error', { message: (event as unknown as { message?: string }).message });
         if (wsInstance === ws) set({ socketStatus: 'error' });
       };
 
-      ws.onclose = () => {
+      ws.onclose = (event) => {
         if (wsInstance !== ws) return;
+        devLog('WS', 'closed', { code: event.code, reason: event.reason });
         set({ socketStatus: get().socketStatus === 'connecting' ? 'error' : 'disconnected' });
         wsInstance = null;
       };
-    } catch {
+    } catch (err) {
+      devWarn('WS', 'connect failed', err);
       set({ socketStatus: 'error' });
     }
   },
 
   sendCoachEvent: (event) => {
-    if (!wsInstance || wsInstance.readyState !== WebSocket.OPEN || get().socketStatus !== 'connected') return false;
-    try { wsInstance.send(JSON.stringify({ type: 'COACH_EVENT', ...event })); return true; }
-    catch { return false; }
+    if (!wsInstance || wsInstance.readyState !== WebSocket.OPEN || get().socketStatus !== 'connected') {
+      devLog('WS', `→ ${event.eventType} 미전송 (socket ${get().socketStatus}) → 로컬 폴백`);
+      return false;
+    }
+    try {
+      wsInstance.send(JSON.stringify({ type: 'COACH_EVENT', ...event }));
+      devLog('WS', `→ ${event.eventType}`, event);
+      return true;
+    } catch (err) {
+      devWarn('WS', `→ ${event.eventType} send failed`, err);
+      return false;
+    }
   },
 
   disconnectWebSocket: () => {
@@ -214,7 +231,7 @@ export const useTtsStore = create<TtsState>((set, get) => ({
       player.addListener('playbackStatusUpdate', (status) => {
         const statusWithError = status as typeof status & { error?: string | null };
         if (statusWithError.error) {
-          if (__DEV__) console.warn('[TTS] player error:', statusWithError.error);
+          devWarn('TTS', `MP3 error → Speech 폴백 (${type})`, { error: statusWithError.error });
           clearFallbackTimer();
           if (activePlayer === player && !started && text) {
             get().playSpeech(text, type);
@@ -222,7 +239,7 @@ export const useTtsStore = create<TtsState>((set, get) => ({
           return;
         }
         if (status.currentTime > 0.05) {
-          if (!started && __DEV__) console.log('[TTS] MP3 playback started:', status.currentTime, status.duration);
+          if (!started) devLog('TTS', `▶ MP3 ${type} (${status.duration.toFixed(1)}s): ${text}`);
           started = true;
           clearFallbackTimer();
         }
@@ -241,6 +258,7 @@ export const useTtsStore = create<TtsState>((set, get) => ({
               }
             }
           } else if (activePlayer === player && text) {
+            devWarn('TTS', `MP3 길이 0 → Speech 폴백 (${type})`);
             clearFallbackTimer();
             get().playSpeech(text, type);
           }
@@ -253,11 +271,13 @@ export const useTtsStore = create<TtsState>((set, get) => ({
         fallbackTimer = setTimeout(() => {
           fallbackTimer = null;
           if (activePlayer === player && !started) {
+            devWarn('TTS', `MP3 900ms 내 미시작 → Speech 폴백 (${type})`);
             get().playSpeech(text, type);
           }
         }, 900);
       }
-    } catch {
+    } catch (err) {
+      devWarn('TTS', `MP3 player 생성 실패 → Speech 폴백 (${type})`, err);
       if (text) get().playSpeech(text, type);
       else set({ isPlaying: false, currentText: '' });
     }
@@ -265,6 +285,7 @@ export const useTtsStore = create<TtsState>((set, get) => ({
 
   playSpeech: (text, type = 'LOCAL_SPEECH') => {
     if (!text.trim()) return;
+    devLog('TTS', `▶ Speech ${type}: ${text}`);
     releaseActivePlayer();
     const generation = ++speechGeneration;
     const msg: CoachMessage = { id: `${Date.now()}`, text, type,
@@ -276,7 +297,10 @@ export const useTtsStore = create<TtsState>((set, get) => ({
       Speech.speak(text, { language: 'ko-KR',
         onDone: () => { if (speechGeneration === generation) set({ isPlaying: false, currentText: '' }); },
         onStopped: () => { if (speechGeneration === generation) set({ isPlaying: false, currentText: '' }); },
-        onError: () => { if (speechGeneration === generation) set({ isPlaying: false }); },
+        onError: (err) => {
+          devWarn('TTS', `Speech error (${type})`, err);
+          if (speechGeneration === generation) set({ isPlaying: false });
+        },
       });
     };
     void Speech.stop().then(speakNow, speakNow);

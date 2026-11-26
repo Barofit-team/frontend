@@ -142,6 +142,7 @@ export function UserPositionCamera({
   const state: CameraState =
     errorFor === sessionKey ? 'error' : readyFor === sessionKey ? 'ready' : 'starting';
 
+  // 실제 mount/unmount 전환 시에만 기록 (권한·포커스 값 변화마다 찍지 않음)
   useEffect(() => {
     if (__DEV__)
       console.log(LOG, shouldMount ? 'mount CameraView' : 'unmount CameraView', {
@@ -149,7 +150,8 @@ export function UserPositionCamera({
         isFocused,
         appActive,
       });
-  }, [shouldMount, permissionState, isFocused, appActive]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shouldMount]);
 
   // 프레임 워치독: mount 상태인데(shouldMount) 네이티브가 onCameraStatus 신호 없이 조용히
   // 멈춰서 포즈 프레임이 끊긴 경우까지 잡기 위한 2중 안전망 (onCameraStatus('stopped') 처리와 별개)

@@ -3,6 +3,8 @@ const fs = require('node:fs');
 const ts = require('../node_modules/typescript');
 const source = fs.readFileSync(require('node:path').join(__dirname, '../src/services/offlineWorkout.ts'), 'utf8');
 const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+const kstJs = ts.transpileModule(fs.readFileSync(require('node:path').join(__dirname, '../src/services/kstDate.ts'), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+const kstDate = (() => { const m = { exports: {} }; new Function('require', 'module', 'exports', kstJs)(() => { throw Error('kstDate has no deps'); }, m, m.exports); return m.exports; })();
 const disk = new Map();
 const poseIds = { poseExerciseId: id => ({ 'push-up': 'pushup', 'pike-push-up': 'pike_pushup', 'incline-push-up': 'incline_pushup' })[id] ?? null };
 const storage = { getItem: async key => disk.get(key) ?? null, setItem: async (key, value) => { disk.set(key, value); } };
@@ -11,7 +13,7 @@ class ApiError extends Error { constructor(status) { super('error'); this.status
 const service = { syncWorkoutSession: async (id, body) => { calls.push({ id, body: JSON.parse(JSON.stringify(body)) }); if (!online) throw new ApiError(0); if (rejected) throw new ApiError(409); }, uploadPoseSetResult: async (...args) => { poseCalls.push(args.slice(0, 5)); if (!online) throw new ApiError(0); if (rejected) throw new ApiError(409); }, generateWorkoutReport: async id => { reportCalls.push(id); if (!online) throw new ApiError(0); if (rejected) throw new ApiError(409); } };
 function load() {
   const module = { exports: {} };
-  const deps = { '@react-native-async-storage/async-storage': { __esModule: true, default: storage }, '@/services/api': { ApiError }, '@/services/poseExerciseIds': poseIds, '@/services/workoutSessionService': service };
+  const deps = { '@react-native-async-storage/async-storage': { __esModule: true, default: storage }, '@/services/api': { ApiError }, '@/services/poseExerciseIds': poseIds, '@/services/workoutSessionService': service, '@/services/kstDate': kstDate };
   new Function('require', 'module', 'exports', compiled)(name => { if (!(name in deps)) throw Error(name); return deps[name]; }, module, module.exports);
   return module.exports;
 }
@@ -29,13 +31,19 @@ function load() {
   assert.equal((await offline.getLocalWorkout('alice')).draft.remainingSeconds, 4);
   assert.equal(await offline.getLocalWorkout('bob'), null);
   online = true; rejected = true;
-  await assert.rejects(offline.flushWorkoutQueue('alice', () => true), e => e.status === 409);
+  // 08-3: 409(같은 요청 재전송으로 해결되지 않는 계약 충돌)는 기록을 삭제·성공 처리하지 않고 보존하며, 이번 실행에서는 그 세션을 다시 보내지 않는다
+  await assert.rejects(offline.flushWorkoutQueue('alice', () => true), e => e.name === 'WorkoutSyncBlockedError' && e.sessionIds.includes('session'));
   assert.equal(await offline.pendingCount('alice'), 2);
+  assert.equal((await offline.blockedSessions('alice')).session.status, 409, '오류 원인 보존');
   rejected = false; calls = [];
+  await offline.flushWorkoutQueue('alice', () => true);
+  assert.equal(calls.length, 0, '같은 실행에서는 보존 세션을 다시 보내지 않음(같은 세션 후속 요청도 보내지 않음)');
+  offline = load(); // 앱 재실행: 보존한 세션을 한 번 더 보낸다(서버 수정 후 복구)
   await Promise.all([offline.flushWorkoutQueue('alice', () => true), offline.flushWorkoutQueue('alice', () => true)]);
   assert.deepEqual(calls.map(c => c.body.revision), [0, 1]);
   assert.deepEqual(calls[0].body, session);
   assert.equal(await offline.pendingCount('alice'), 0);
+  assert.deepEqual(await offline.blockedSessions('alice'), {}, '전송 성공 후 오류 기록 정리');
   assert.equal((await offline.getLocalWorkout('alice')).session.status, 'PAUSED');
   // A response lost after a server commit must replay the identical request.
   const again = { ...next, revision: 2 };
