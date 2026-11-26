@@ -40,7 +40,8 @@ export function StopConfirmSheet({ visible, onConfirm, onCancel, busy = false }:
             운동을 종료할까요?
           </Text>
           <Text style={styles.body}>
-            {'지금까지 운동한 기록은 임시저장됩니다.\n오늘 언제든 다시 시작할 수 있어요.'}
+            {/* 08-2 정책: 완료 세트는 보존, 진행 중이던 세트는 이어할 때 처음부터, 당일 이어하기 */}
+            {'완료한 세트의 운동 기록은 저장됩니다.\n오늘 안에 이어서 운동할 수 있고, 진행 중이던 세트는 처음부터 다시 시작해요.'}
           </Text>
           <Pressable
             accessibilityRole="button"
