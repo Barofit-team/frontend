@@ -72,10 +72,10 @@ export default function Index() {
 
   return (
     <View style={styles.container}>
-      <StatusBar style="light" />
+      <StatusBar style="dark" />
       <Image
-        source={require('@/assets/images/splash-wordmark.png')}
-        style={styles.wordmark}
+        source={require('@/assets/images/splash-logo.png')}
+        style={styles.logo}
         contentFit="contain"
         accessibilityLabel="Barofit"
       />
@@ -88,10 +88,10 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#3473F8',
+    backgroundColor: '#FFFFFF',
   },
-  wordmark: {
-    width: 176,
-    height: 55,
+  logo: {
+    width: 172,
+    height: 140,
   },
 });

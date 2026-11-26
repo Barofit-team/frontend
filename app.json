@@ -10,7 +10,6 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.4bujak.barofit",
-      "icon": "./assets/expo.icon",
       "infoPlist": {
         "NSCameraUsageDescription": "운동 준비 및 세션 중 전신 자세를 실시간으로 분석하기 위해 카메라를 사용합니다."
       }
@@ -18,7 +17,7 @@
     "android": {
       "package": "com.4bujak.barofit",
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#FFFFFF",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
@@ -37,9 +36,9 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#3473F8",
-          "image": "./assets/images/splash-wordmark.png",
-          "imageWidth": 176
+          "backgroundColor": "#FFFFFF",
+          "image": "./assets/images/splash-logo.png",
+          "imageWidth": 172
         }
       ],
       "expo-secure-store",
