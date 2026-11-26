@@ -21,6 +21,7 @@
  * 4단계(M10 수정) 이후:
  * 그룹 A: 0초 도달 시 동작 — 지원 종목은 '운동 재개'로 같은 세트 재시도, 미지원 종목은 재시도 없이 정지 유지(정책 미확정)
  * 그룹 B: 기대 동작·불변식. 남은 RED(B2, 미지원 종목)는 { todo } 로 표시해 실행은 하되 전체 결과를 실패로 만들지 않는다.
+ * 10-A: B9는 합성 관절 프레임으로 실제 검증. B2·B6·B7·B8은 제품·디자인 정책 결정 대기(사유는 각 항목 참고).
  */
 'use strict';
 const { describe, test, beforeEach, afterEach, mock } = require('node:test');
@@ -525,5 +526,36 @@ describe('그룹 B — 기대 동작 / 불변식', () => {
   test.todo('B6 0초 재시도 UI 확정 — 현재 기존 PauseView "운동 재개"를 재시도로 재사용(새 버튼·문구 없음). 디자인팀 확인 후 전용 문구/버튼 결정 시 갱신');
   test.todo('B7 건너뛰기 시 AI 결과 없이 다음 단계 이동 — 제품 정책 미확정 (B4 불변식 유지)');
   test.todo('B8 미지원 종목 UX(노출 제외/건너뛰기/대체 측정) — 정책 확정 후 작성. 현재는 재시도 미제공으로 무의미한 반복만 방지(그룹 A-A)');
-  test.skip('B9 목표 횟수 도달로 세트 종료(정상 경로) — 실제 스쿼트 관절 프레임 fixture가 저장소에 없어 보류');
+  // B9: 기존 SKIP 사유(실제 스쿼트 관절 fixture 없음)는 3-2(auto-pause S1)에서 쓰는 합성 관절 생성 방식(barofit-pose 자체 테스트와 같은 방식)으로 해소.
+  // 측정값 주입 없이 실제 SquatAnalyzer → Controller → 목표 도달 종료 → 세트·AI 결과 저장까지 확인한다(실제 사람 관절 기록은 아님)
+  test('B9 (GREEN) 목표 횟수 도달로 세트 종료(정상 경로) — 실제 분석기, 0초 정지·재시도 없이 세트 결과 1회', async () => {
+    const SIDE_IDS = { left: [11, 13, 15, 23, 25, 27], right: [12, 14, 16, 24, 26, 28] };
+    const squatFrame = (t, knee) => {
+      const p = Array.from({ length: 33 }, () => [0, 0, 0, 0, 0]);
+      for (const [side, q] of [['left', 0.9], ['right', 0.8]]) {
+        const a = (knee * Math.PI) / 180;
+        const pts = [[0.5, 0.15], [0.55, 0.25], [0.6, 0.35], [0.5, 0.35], [0.5, 0.6], [0.5 + 0.22 * Math.sin(a), 0.6 - 0.22 * Math.cos(a)]];
+        SIDE_IDS[side].forEach((id, i) => { p[id] = [...pts[i], 0, q, q]; });
+      }
+      return { timestampMs: t, width: 1000, height: 1000, landmarks: p };
+    };
+    let clock = 0;
+    const feed = async (ms, knee) => {
+      for (let t = 0; t < ms; t += 100) {
+        await act(async () => { clock += 100; ui.camera.onPoseFrame(squatFrame(clock, knee), { frameId: clock, inferenceMs: 1 }); mock.timers.tick(100); });
+        if (t % 500 === 400) await settle();
+      }
+      await settle();
+    };
+    const fixture = routine({ exerciseId: 'squat', measurementType: 'REPS', sets: [{ reps: 2 }, { reps: 2 }] });
+    const root = await startWith(fixture);
+    await feed(1500, 170);
+    for (let rep = 0; rep < 2; rep += 1) { await feed(1000, 90); await feed(1000, 170); }
+    assert.equal(ui.stage.phase.kind, 'resting', '목표 2회 도달로 세트 종료');
+    assert.equal(stallAlerts().length, 0, '측정이 있는 세트는 0초 정지 안내 없음');
+    const set = (await localSession()).sets[0];
+    assert.equal(set.actualReps, 2);
+    assert.equal((await storedQueue()).filter((i) => i.kind === 'pose').length, 1);
+    await unmount(root);
+  });
 });
