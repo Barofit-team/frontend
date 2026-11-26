@@ -1,0 +1,123 @@
+{
+  "generator": "OpenAI built-in image_gen",
+  "transparentBackground": true,
+  "format": "WebP",
+  "maxDimension": 512,
+  "exercises": [
+    {
+      "id": "push-up",
+      "file": "push-up.webp",
+      "prompt": "Use case: stylized-concept. Asset type: Barofit mobile exercise thumbnail, square composition. Create ONE full-body gender-neutral anatomically correct 3D fitness mannequin performing a PUSH-UP at the bottom position, hands on floor under shoulders, elbows bent, straight body from head to heels, toes on floor. Light gray skin, simple blue shorts, no shirt, no hair or facial detail. Clean polished soft matte 3D medical-fitness illustration, side three-quarter view, entire body visible with generous padding, centered. Transparent background. No floor plane, no text, no arrows, no logos, no additional figures. Accurate limbs: two arms and two legs. This will be displayed at 56px."
+    },
+    {
+      "id": "plank",
+      "file": "plank.webp",
+      "prompt": "Use case: stylized-concept. Asset type: square Barofit mobile fitness exercise thumbnail. ONE full-body anatomically correct gender-neutral mannequin performing forearm plank, elbows below shoulders, forearms and toes on ground, body held in a straight line. Light gray skin, blue shorts, no shirt, no hair or facial details. Soft matte polished 3D fitness illustration. Side three-quarter camera, centered entire body with padding, clearly recognizable exercise posture at small size. Transparent background. No floor plane, text, arrows, logos, extra figures or extra limbs. Only include bench if the exercise specifies it. Two arms and two legs. Accurate exercise posture."
+    },
+    {
+      "id": "squat",
+      "file": "squat.webp",
+      "prompt": "Use case: stylized-concept. Asset type: square Barofit mobile fitness exercise thumbnail. ONE full-body anatomically correct gender-neutral mannequin performing bodyweight squat at bottom, both feet flat shoulder width apart, knees bent about 90 degrees, hips back, arms forward. Light gray skin, blue shorts, no shirt, no hair or facial details. Soft matte polished 3D fitness illustration. Side three-quarter camera, centered entire body with padding, clearly recognizable exercise posture at small size. Transparent background. No floor plane, text, arrows, logos, extra figures or extra limbs. Only include bench if the exercise specifies it. Two arms and two legs. Accurate exercise posture."
+    },
+    {
+      "id": "bird-dog",
+      "file": "bird-dog.webp",
+      "prompt": "Use case: stylized-concept. Asset type: square Barofit mobile fitness exercise thumbnail. ONE full-body anatomically correct gender-neutral mannequin performing bird dog on all fours, right arm extended forward and left leg extended backwards, other hand and knee on ground. Light gray skin, blue shorts, no shirt, no hair or facial details. Soft matte polished 3D fitness illustration. Side three-quarter camera, centered entire body with padding, clearly recognizable exercise posture at small size. Transparent background. No floor plane, text, arrows, logos, extra figures or extra limbs. Only include bench if the exercise specifies it. Two arms and two legs. Accurate exercise posture."
+    },
+    {
+      "id": "jumping-jack",
+      "file": "jumping-jack.webp",
+      "prompt": "Use case: stylized-concept. Asset type: square Barofit mobile fitness exercise thumbnail. ONE full-body anatomically correct gender-neutral mannequin performing jumping jack open phase, standing legs spread and both arms raised above head. Light gray skin, blue shorts, no shirt, no hair or facial details. Soft matte polished 3D fitness illustration. Side three-quarter camera, centered entire body with padding, clearly recognizable exercise posture at small size. Transparent background. No floor plane, text, arrows, logos, extra figures or extra limbs. Only include bench if the exercise specifies it. Two arms and two legs. Accurate exercise posture."
+    },
+    {
+      "id": "lunge",
+      "file": "lunge.webp",
+      "prompt": "Use case: stylized-concept. Asset type: square Barofit mobile fitness exercise thumbnail. ONE full-body anatomically correct gender-neutral mannequin performing forward lunge bottom position, front knee bent 90 degrees and rear knee just above floor, upright torso. Light gray skin, blue shorts, no shirt, no hair or facial details. Soft matte polished 3D fitness illustration. Side three-quarter camera, centered entire body with padding, clearly recognizable exercise posture at small size. Transparent background. No floor plane, text, arrows, logos, extra figures or extra limbs. Only include bench if the exercise specifies it. Two arms and two legs. Accurate exercise posture."
+    },
+    {
+      "id": "leg-raise",
+      "file": "leg-raise.webp",
+      "prompt": "Use case: stylized-concept. Asset type: square Barofit mobile fitness exercise thumbnail. ONE full-body anatomically correct gender-neutral mannequin performing lying straight leg raise, back on floor, arms by sides, both straight legs raised 60 degrees. Light gray skin, blue shorts, no shirt, no hair or facial details. Soft matte polished 3D fitness illustration. Side three-quarter camera, centered entire body with padding, clearly recognizable exercise posture at small size. Transparent background. No floor plane, text, arrows, logos, extra figures or extra limbs. Only include bench if the exercise specifies it. Two arms and two legs. Accurate exercise posture."
+    },
+    {
+      "id": "side-lying-leg-raise",
+      "file": "side-lying-leg-raise.webp",
+      "prompt": "Use case: stylized-concept. Asset type: square Barofit mobile fitness exercise thumbnail. ONE full-body anatomically correct gender-neutral mannequin performing side lying leg raise, lying on right side, bottom leg straight on ground, top straight leg raised 40 degrees, head supported on bottom arm. Light gray skin, blue shorts, no shirt, no hair or facial details. Soft matte polished 3D fitness illustration. Side three-quarter camera, centered entire body with padding, clearly recognizable exercise posture at small size. Transparent background. No floor plane, text, arrows, logos, extra figures or extra limbs. Only include bench if the exercise specifies it. Two arms and two legs. Accurate exercise posture."
+    },
+    {
+      "id": "glute-bridge",
+      "file": "glute-bridge.webp",
+      "prompt": "Use case: stylized-concept. Asset type: square Barofit mobile fitness exercise thumbnail. ONE full-body anatomically correct gender-neutral mannequin performing glute bridge, lying on back with knees bent feet flat and hips lifted, shoulders on ground. Light gray skin, blue shorts, no shirt, no hair or facial details. Soft matte polished 3D fitness illustration. Side three-quarter camera, centered entire body with padding, clearly recognizable exercise posture at small size. Transparent background. No floor plane, text, arrows, logos, extra figures or extra limbs. Only include bench if the exercise specifies it. Two arms and two legs. Accurate exercise posture."
+    },
+    {
+      "id": "dead-bug",
+      "file": "dead-bug.webp",
+      "prompt": "Use case: stylized-concept. Asset type: square Barofit mobile fitness exercise thumbnail. ONE full-body anatomically correct gender-neutral mannequin performing dead bug, lying on back, one straight arm reaching overhead and opposite straight leg extended hovering above floor, other arm vertical and other knee bent above hips. Light gray skin, blue shorts, no shirt, no hair or facial details. Soft matte polished 3D fitness illustration. Side three-quarter camera, centered entire body with padding, clearly recognizable exercise posture at small size. Transparent background. No floor plane, text, arrows, logos, extra figures or extra limbs. Only include bench if the exercise specifies it. Two arms and two legs. Accurate exercise posture."
+    },
+    {
+      "id": "superman",
+      "file": "superman.webp",
+      "prompt": "Use case: stylized-concept. Asset type: square Barofit mobile fitness exercise thumbnail. ONE full-body anatomically correct gender-neutral mannequin performing superman back extension, lying face down with both arms stretched forward and both legs lifted slightly off ground. Light gray skin, blue shorts, no shirt, no hair or facial details. Soft matte polished 3D fitness illustration. Side three-quarter camera, centered entire body with padding, clearly recognizable exercise posture at small size. Transparent background. No floor plane, text, arrows, logos, extra figures or extra limbs. Only include bench if the exercise specifies it. Two arms and two legs. Accurate exercise posture."
+    },
+    {
+      "id": "pike-push-up",
+      "file": "pike-push-up.webp",
+      "prompt": "Use case: stylized-concept. Asset type: square Barofit mobile fitness exercise thumbnail. ONE full-body anatomically correct gender-neutral mannequin performing pike push up bottom position, hips high forming inverted V, feet and hands on ground, elbows bent and head lowering between hands. Light gray skin, blue shorts, no shirt, no hair or facial details. Soft matte polished 3D fitness illustration. Side three-quarter camera, centered entire body with padding, clearly recognizable exercise posture at small size. Transparent background. No floor plane, text, arrows, logos, extra figures or extra limbs. Only include bench if the exercise specifies it. Two arms and two legs. Accurate exercise posture."
+    },
+    {
+      "id": "standing-calf-raise",
+      "file": "standing-calf-raise.webp",
+      "prompt": "Use case: stylized-concept. Asset type: square Barofit mobile fitness exercise thumbnail. ONE full-body anatomically correct gender-neutral mannequin performing standing calf raise at top, both heels lifted standing on toes, knees straight, arms relaxed at sides. Light gray skin, blue shorts, no shirt, no hair or facial details. Soft matte polished 3D fitness illustration. Side three-quarter camera, centered entire body with padding, clearly recognizable exercise posture at small size. Transparent background. No floor plane, text, arrows, logos, extra figures or extra limbs. Only include bench if the exercise specifies it. Two arms and two legs. Accurate exercise posture."
+    },
+    {
+      "id": "incline-push-up",
+      "file": "incline-push-up.webp",
+      "prompt": "Use case: stylized-concept. Asset type: square Barofit mobile fitness exercise thumbnail. ONE full-body anatomically correct gender-neutral mannequin performing incline push up, hands on a simple low gray bench, feet on ground, straight inclined torso, elbows bent lowering chest toward bench. Light gray skin, blue shorts, no shirt, no hair or facial details. Soft matte polished 3D fitness illustration. Side three-quarter camera, centered entire body with padding, clearly recognizable exercise posture at small size. Transparent background. No floor plane, text, arrows, logos, extra figures or extra limbs. Only include bench if the exercise specifies it. Two arms and two legs. Accurate exercise posture."
+    },
+    {
+      "id": "bulgarian-split-squat",
+      "file": "bulgarian-split-squat.webp",
+      "prompt": "Use case: stylized-concept. Asset type: square Barofit mobile fitness exercise thumbnail. ONE full-body anatomically correct gender-neutral mannequin performing Bulgarian split squat bottom position, rear foot elevated on a simple gray bench behind, front foot flat on floor front knee bent, torso upright. Light gray skin, blue shorts, no shirt, no hair or facial details. Soft matte polished 3D fitness illustration. Side three-quarter camera, centered entire body with padding, clearly recognizable exercise posture at small size. Transparent background. No floor plane, text, arrows, logos, extra figures or extra limbs. Only include bench if the exercise specifies it. Two arms and two legs. Accurate exercise posture."
+    },
+    {
+      "id": "split-squat",
+      "file": "split-squat.webp",
+      "prompt": "Use case: stylized-concept. Asset type: square Barofit mobile fitness exercise thumbnail. ONE full-body anatomically correct gender-neutral mannequin performing stationary split squat bottom, staggered feet BOTH on floor, front knee bent and rear knee near ground, torso upright, no bench. Light gray skin, blue shorts, no shirt, no hair or facial details. Soft matte polished 3D fitness illustration. Side three-quarter camera, centered entire body with padding, clearly recognizable exercise posture at small size. Transparent background. No floor plane, text, arrows, logos, extra figures or extra limbs. Only include bench if the exercise specifies it. Two arms and two legs. Accurate exercise posture."
+    },
+    {
+      "id": "jump-squat",
+      "file": "jump-squat.webp",
+      "prompt": "Use case: stylized-concept. Asset type: square Barofit mobile fitness exercise thumbnail. ONE full-body anatomically correct gender-neutral mannequin performing jump squat airborne phase, both feet clearly above ground, legs extending after squat, arms extending behind, full body visible. Light gray skin, blue shorts, no shirt, no hair or facial details. Soft matte polished 3D fitness illustration. Side three-quarter camera, centered entire body with padding, clearly recognizable exercise posture at small size. Transparent background. No floor plane, text, arrows, logos, extra figures or extra limbs. Only include bench if the exercise specifies it. Two arms and two legs. Accurate exercise posture."
+    },
+    {
+      "id": "mountain-climber",
+      "file": "mountain-climber.webp",
+      "prompt": "Use case: stylized-concept. Asset type: square Barofit mobile fitness exercise thumbnail. ONE full-body anatomically correct gender-neutral mannequin performing mountain climber, high plank with hands on floor and one knee tucked forward toward chest, opposite leg straight behind. Light gray skin, blue shorts, no shirt, no hair or facial details. Soft matte polished 3D fitness illustration. Side three-quarter camera, centered entire body with padding, clearly recognizable exercise posture at small size. Transparent background. No floor plane, text, arrows, logos, extra figures or extra limbs. Only include bench if the exercise specifies it. Two arms and two legs. Accurate exercise posture."
+    },
+    {
+      "id": "reverse-crunch",
+      "file": "reverse-crunch.webp",
+      "prompt": "Use case: stylized-concept. Asset type: square Barofit mobile fitness exercise thumbnail. ONE full-body anatomically correct gender-neutral mannequin performing reverse crunch, lying on back, arms by sides on floor, both bent knees curling toward chest and pelvis lifted slightly off ground. Light gray skin, blue shorts, no shirt, no hair or facial details. Soft matte polished 3D fitness illustration. Side three-quarter camera, centered entire body with padding, clearly recognizable exercise posture at small size. Transparent background. No floor plane, text, arrows, logos, extra figures or extra limbs. Only include bench if the exercise specifies it. Two arms and two legs. Accurate exercise posture."
+    },
+    {
+      "id": "side-plank",
+      "file": "side-plank.webp",
+      "prompt": "Use case: stylized-concept. Asset type: square Barofit mobile fitness exercise thumbnail. ONE full-body anatomically correct gender-neutral mannequin performing side plank supported on one forearm and outside edge of lower foot, both legs straight stacked, hips lifted, upper hand on hip. Light gray skin, blue shorts, no shirt, no hair or facial details. Soft matte polished 3D fitness illustration. Side three-quarter camera, centered entire body with padding, clearly recognizable exercise posture at small size. Transparent background. No floor plane, text, arrows, logos, extra figures or extra limbs. Only include bench if the exercise specifies it. Two arms and two legs. Accurate exercise posture."
+    },
+    {
+      "id": "flutter-kick",
+      "file": "flutter-kick.webp",
+      "prompt": "Use case: stylized-concept. Asset type: square Barofit mobile fitness exercise thumbnail. ONE full-body anatomically correct gender-neutral mannequin performing flutter kicks, lying on back arms alongside body, both legs straight hovering above floor at different low heights, legs scissored vertically. Light gray skin, blue shorts, no shirt, no hair or facial details. Soft matte polished 3D fitness illustration. Side three-quarter camera, centered entire body with padding, clearly recognizable exercise posture at small size. Transparent background. No floor plane, text, arrows, logos, extra figures or extra limbs. Only include bench if the exercise specifies it. Two arms and two legs. Accurate exercise posture."
+    },
+    {
+      "id": "burpee",
+      "file": "burpee.webp",
+      "prompt": "Use case: stylized-concept. Asset type: square Barofit mobile fitness exercise thumbnail. ONE full-body anatomically correct gender-neutral mannequin performing burpee squat thrust phase, crouching with both palms on floor beside feet, knees tucked under torso and heels raised, ready to kick feet back. Light gray skin, blue shorts, no shirt, no hair or facial details. Soft matte polished 3D fitness illustration. Side three-quarter camera, centered entire body with padding, clearly recognizable exercise posture at small size. Transparent background. No floor plane, text, arrows, logos, extra figures or extra limbs. Only include bench if the exercise specifies it. Two arms and two legs. Accurate exercise posture."
+    },
+    {
+      "id": "sit-up",
+      "file": "sit-up.webp",
+      "prompt": "Use case: stylized-concept. Asset type: square Barofit mobile fitness exercise thumbnail. ONE full-body anatomically correct gender-neutral mannequin performing sit up middle raised phase, feet on floor knees bent, upper torso curled up 45 degrees, arms extended forward toward knees. Light gray skin, blue shorts, no shirt, no hair or facial details. Soft matte polished 3D fitness illustration. Side three-quarter camera, centered entire body with padding, clearly recognizable exercise posture at small size. Transparent background. No floor plane, text, arrows, logos, extra figures or extra limbs. Only include bench if the exercise specifies it. Two arms and two legs. Accurate exercise posture."
+    }
+  ]
+}

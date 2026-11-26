@@ -98,15 +98,19 @@ export function estimateRoutineMetrics(routine: BackendRoutineDetail): {
 } {
   let totalSeconds = 0;
 
-  for (const exercise of routine?.exercises ?? []) {
-    for (const set of exercise?.sets ?? []) {
-      const activeSeconds =
-        set?.targetDurationSeconds ?? (set?.targetReps ?? 10) * 3;
-      totalSeconds += activeSeconds + (set?.restSeconds ?? 60);
+  const exercises = routine?.exercises ?? [];
+  for (let i = 0; i < exercises.length; i++) {
+    const exercise = exercises[i];
+    for (let j = 0; j < exercise.sets.length; j++) {
+      const set = exercise.sets[j];
+      let activeSeconds = set.targetDurationSeconds ?? (set.targetReps ?? 0) * 3;
+      if (set.timeLimitSeconds != null) activeSeconds = Math.min(activeSeconds, set.timeLimitSeconds);
+      totalSeconds += activeSeconds;
+      if (j + 1 < exercise.sets.length) totalSeconds += set.restSeconds;
     }
+    if (i + 1 < exercises.length) totalSeconds += routine.interExerciseRestSeconds ?? 60;
   }
-
-  const durationMinutes = Math.max(5, Math.round(totalSeconds / 60));
+  const durationMinutes = Math.max(1, Math.ceil((totalSeconds + exercises.length * 10) / 60));
   const calories = null;
 
   return { durationMinutes, calories };
@@ -153,11 +157,13 @@ export function mapTemplateToRecommendedRoutine(
 ): RecommendedRoutineItem {
   const { durationMinutes, calories } = estimateRoutineMetrics(template);
   const categoryLabel = template.category
-    ? CATEGORY_LABEL_MAP[template.category] ?? '전신'
+    ? (CATEGORY_LABEL_MAP[template.category] ?? '전신')
     : '전신';
 
   return {
     id: template.id,
+    routineSnapshot: template,
+    difficulty: template.difficulty,
     templateId: template.id,
     category: categoryLabel,
     title: template.name,
@@ -210,7 +216,9 @@ export async function fetchWeeklyPlanItems(
 }
 
 /** 서버가 선정한 오늘의 추천만 반환한다. 빈 결과나 실패를 전체 목록으로 채우지 않는다. */
-export async function fetchRecommendedRoutineItems(): Promise<RecommendedRoutineItem[]> {
+export async function fetchRecommendedRoutineItems(): Promise<
+  RecommendedRoutineItem[]
+> {
   const accessToken = await tokenStorage.getAccessToken();
   if (!accessToken) return [];
   const recommended = await getRecommendedRoutineTemplates();
@@ -218,7 +226,9 @@ export async function fetchRecommendedRoutineItems(): Promise<RecommendedRoutine
 }
 
 /** 직접 루틴을 선택하는 목록에는 불편 부위 비율로 추천 제외된 템플릿도 노출한다. */
-export async function fetchAvailableRoutineItems(): Promise<RecommendedRoutineItem[]> {
+export async function fetchAvailableRoutineItems(): Promise<
+  RecommendedRoutineItem[]
+> {
   return (await getRoutineTemplates()).map(mapTemplateToRecommendedRoutine);
 }
 
@@ -229,7 +239,9 @@ export async function saveWeeklyPlanChanges(
   previous: WeeklyPlanDayItem[],
   next: WeeklyPlanDayItem[],
 ): Promise<void> {
-  const oldByDate = new Map(previous.map((item) => [item.date, item.routineId]));
+  const oldByDate = new Map(
+    previous.map((item) => [item.date, item.routineId]),
+  );
   const newByDate = new Map(next.map((item) => [item.date, item.routineId]));
   const dates = new Set([...oldByDate.keys(), ...newByDate.keys()]);
   for (const date of dates) {

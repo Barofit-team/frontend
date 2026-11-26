@@ -57,7 +57,8 @@
     "typecheck": "expo customize tsconfig.json && tsc --noEmit",
     "test:workout": "node scripts/test-workout-integration.cjs",
     "test:onboarding": "node scripts/test-onboarding-store.cjs",
-    "test:recommendations": "node scripts/test-recommendation-policy.cjs"
+    "test:recommendations": "node scripts/test-recommendation-policy.cjs",
+    "test:home": "node scripts/test-home-routine.cjs"
   },
   "private": true
 }

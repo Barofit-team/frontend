@@ -11,7 +11,7 @@
  *
  * 데이터: services/workoutRecordService.ts (Report API — GET /api/v1/reports/calendar, /api/v1/reports/dates/{date})
  */
-import { router, useFocusEffect } from 'expo-router';
+import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -48,6 +48,7 @@ import { useWorkoutResultStore } from '@/stores/useWorkoutResultStore';
 import type { DailyWorkoutRecord } from '@/types/workoutRecord';
 
 export default function MonthlyWorkoutRecordsScreen() {
+  const { date: requestedDate } = useLocalSearchParams<{ date?: string }>();
   const insets = useSafeAreaInsets();
   // 서버(KST)와 같은 기준의 오늘. 달력 계산용 Date는 그 날짜의 기기 자정으로 만듭니다
   const [todayKey] = useState(() => toKstDateString(new Date().toISOString()) ?? toIsoDateString(new Date()));
@@ -59,6 +60,14 @@ export default function MonthlyWorkoutRecordsScreen() {
   const [yearMonth, setYearMonth] = useState<YearMonth>(() => yearMonthOf(today));
   const [selectedDate, setSelectedDate] = useState(todayKey);
   const [pickerVisible, setPickerVisible] = useState(false);
+  useEffect(() => {
+    if (!requestedDate || !/^\d{4}-\d{2}-\d{2}$/.test(requestedDate)) return;
+    const [year, month, day] = requestedDate.split('-').map(Number);
+    const date = new Date(year, month - 1, day);
+    if (toIsoDateString(date) !== requestedDate) return;
+    setYearMonth(yearMonthOf(date));
+    setSelectedDate(requestedDate);
+  }, [requestedDate]);
   const listRef = useRef<FlatList<DailyWorkoutRecord>>(null);
 
   const {

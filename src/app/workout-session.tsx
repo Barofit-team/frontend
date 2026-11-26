@@ -133,6 +133,28 @@ export default function WorkoutSessionScreen() {
   const elapsed = useRef({ activeMs: 0, restMs: 0 });
   const phaseRef = useRef<SessionPhase>(initialPhase);
 
+  // 카메라 바인딩과 TTS 시작이 같은 타이밍에 몰리면(기기 쪽 리소스 경합) 카메라가 잠깐
+  // 끊겼다 자동 복구되는 현상이 있어, 첫 안내 음성은 카메라가 준비된 뒤로 미룬다.
+  const [cameraReady, setCameraReadyState] = useState(false);
+  const cameraReadyRef = useRef(false);
+  const pendingCameraReadyAction = useRef<(() => void) | null>(null);
+  const handleCameraReady = useCallback(() => {
+    cameraReadyRef.current = true;
+    setCameraReadyState(true);
+  }, []);
+  const runWhenCameraReady = useCallback((action: () => void) => {
+    if (cameraReadyRef.current) action();
+    else pendingCameraReadyAction.current = action;
+  }, []);
+  useEffect(() => {
+    if (!cameraReady) return;
+    const action = pendingCameraReadyAction.current;
+    if (action) {
+      pendingCameraReadyAction.current = null;
+      action();
+    }
+  }, [cameraReady]);
+
   const currentElapsed = useCallback(() => {
     const value = { ...elapsed.current };
     if (running.current) {
@@ -212,14 +234,22 @@ export default function WorkoutSessionScreen() {
         const current = phaseRef.current;
         if (!resumeDraft.current && current.kind !== 'completed') {
           const exercise = snapshot.exercises[current.exerciseIndex];
-          if (exercise) useTtsStore.getState().sendCoachEvent({ eventType: 'EXERCISE_START', exerciseId: exercise.exerciseId });
+          if (exercise) {
+            runWhenCameraReady(() => {
+              if (!cancelled) useTtsStore.getState().sendCoachEvent({ eventType: 'EXERCISE_START', exerciseId: exercise.exerciseId });
+            });
+          }
         }
       }).catch(() => {
         if (cancelled) return;
         const current = phaseRef.current;
         if (current.kind !== 'completed') {
           const intro = snapshot.exercises[current.exerciseIndex]?.introTtsText;
-          if (intro) useTtsStore.getState().playSpeech(intro, 'EXERCISE_START');
+          if (intro) {
+            runWhenCameraReady(() => {
+              if (!cancelled) useTtsStore.getState().playSpeech(intro, 'EXERCISE_START');
+            });
+          }
         }
       }).finally(() => { coachAttempting.current = false; });
     }).catch(() => { if (!cancelled) setSessionError('운동 세션을 저장하지 못했어요. 연결을 확인한 후 다시 시작해 주세요.'); });
@@ -252,7 +282,7 @@ export default function WorkoutSessionScreen() {
 
   const activeRoutine = useMemo<readonly RoutineItem[]>(
     () =>
-      sessions.map((s, index) => ({ exerciseId: s.exerciseId, sets: s.sets, targets: snapshot?.exercises[index]?.sets })),
+      sessions.map((s, index) => ({ exerciseId: s.exerciseId, sets: s.sets, interExerciseRestSeconds: snapshot?.interExerciseRestSeconds, targets: snapshot?.exercises[index]?.sets })),
     [sessions, snapshot],
   );
 
@@ -352,12 +382,12 @@ export default function WorkoutSessionScreen() {
   }, [phase, pause, autoPaused, sessionReady]);
 
   useEffect(() => {
-    if (!sessionReady || pause !== 'none' || phase.kind !== 'countdown' || phase.set !== 1 || phase.exerciseIndex === 0) return;
+    if (!sessionReady || !cameraReady || pause !== 'none' || phase.kind !== 'countdown' || phase.set !== 1 || phase.exerciseIndex === 0) return;
     const exercise = snapshot?.exercises[phase.exerciseIndex];
     if (exercise && !useTtsStore.getState().sendCoachEvent({ eventType: 'EXERCISE_START', exerciseId: exercise.exerciseId })) {
       if (exercise.introTtsText) useTtsStore.getState().playSpeech(exercise.introTtsText, 'EXERCISE_START');
     }
-  }, [phase, pause, sessionReady, snapshot]);
+  }, [phase, pause, sessionReady, snapshot, cameraReady]);
   const checkpoint = useCallback((remainingSeconds: number) => {
     remainingRef.current = remainingSeconds;
     const current = serverSession.current;
@@ -819,7 +849,7 @@ export default function WorkoutSessionScreen() {
       ) : (
         // 카메라는 세션 화면 동안 한 번만 마운트(단계·일시정지 전환 시 재시작 없음). 판정은 handlePoseFrame이 운동 단계에서만 수행
         <View style={styles.stage}>
-          <ExerciseCameraArea onPoseFrame={handlePoseFrame} selectedSide={selectedSide} />
+          <ExerciseCameraArea onPoseFrame={handlePoseFrame} selectedSide={selectedSide} onCameraReady={handleCameraReady} />
         <PhaseTimer
           key={phase.id}
           durationSeconds={duration}

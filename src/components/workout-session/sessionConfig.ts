@@ -39,8 +39,9 @@ export type RoutineItem = {
   exerciseId: ExerciseId;
   /** 세트 수 */
   sets: number;
+  interExerciseRestSeconds?: number;
   /** 세트별 목표. targetReps는 세트별 목표 횟수(없으면 종목 단위 목표 사용) */
-  targets?: { targetDurationSeconds: number | null; restSeconds: number; targetReps?: number | null }[];
+  targets?: { timeLimitSeconds?: number | null; targetDurationSeconds: number | null; restSeconds: number; targetReps?: number | null }[];
 };
 
 /** [Mock] 운동 루틴. 운동 루틴(백엔드) 연동 전 임시값: 스쿼트 2세트 → 푸쉬업 2세트 */
