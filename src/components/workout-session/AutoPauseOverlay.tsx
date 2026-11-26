@@ -4,8 +4,8 @@
  *  - 중앙: '전신이 보이게 뒤로 물러나 주세요' + 흰 점선 인식 박스
  *  - 하단: 운동 정보 pill (메뉴 → 오늘의 운동 루틴)
  *
- * ⚠️ 자동 일시정지·복귀 판정(전신 이탈/재인식)은 정책 미확정이라 실제 운동 화면에 연결하지 않았습니다.
- *    현재는 DEV 미리보기에서만 수동으로 띄워 볼 수 있습니다(docs/F04-design-discussion.md).
+ * 표시 시점은 @barofit/pose ExerciseSessionController가 결정합니다(workout-session): 2초 이탈 확정(auto_paused),
+ * 수동 재개 후 재인식 안정화 전. 이 컴포넌트는 판정하지 않습니다. DEV 미리보기에서도 수동으로 띄울 수 있습니다.
  */
 import { useEffect, useState } from 'react';
 import { StyleSheet, Text, View, type LayoutChangeEvent } from 'react-native';

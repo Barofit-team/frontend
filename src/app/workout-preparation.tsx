@@ -1,6 +1,7 @@
 /**
  * 운동 준비 Workout Flow: Place device → Adjust Angle → User Position(대기·완료) → Exercise
  */
+import { READINESS_PROFILES } from '@barofit/pose';
 import { router, useLocalSearchParams } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -17,7 +18,7 @@ import {
 } from '@/components/workout-preparation/steps';
 import { useDevicePitch } from '@/components/workout-preparation/useDevicePitch';
 import { useCameraReadiness } from '@/hooks/useCameraReadiness';
-import { poseExerciseId } from '@/services/poseExerciseIds';
+import { readinessAvailability } from '@/services/poseExerciseIds';
 import { playLocalMp3 } from '@/services/ttsService';
 import { useTodayRoutineStore } from '@/stores/useTodayRoutineStore';
 import { useTtsStore } from '@/stores/useTtsStore';
@@ -40,16 +41,20 @@ export default function WorkoutPreparationScreen() {
     isPreparationStep(params.step) ? params.step : 'place-device'
   );
 
-  // 오늘 루틴 또는 파라미터에서 현재 운동 식별
+  // 오늘 루틴 또는 파라미터에서 현재 운동 식별. 운동이 없거나 해당 운동의 AI readiness 프로필이 없으면
+  // 다른 운동(푸시업) 프로필로 대체하지 않는다 → readiness 미실행(준비 완료로 판단하지 않음)
   const todaySessions = useTodayRoutineStore(state => state.sessions);
-  const activeExerciseName = useMemo(() => {
-    const rawId = params.exerciseId || todaySessions[0]?.exerciseId || 'push-up';
-    return poseExerciseId(rawId) || 'pushup';
+  // 측정 유형 계약은 같은 종목의 snapshot 값으로 검증한다(찾지 못하면 누락 → 계약 지정 종목은 conflict)
+  const readinessTarget = useMemo(() => {
+    const exerciseId = params.exerciseId || todaySessions[0]?.exerciseId;
+    const planned = params.exerciseId ? todaySessions.find(s => s.exerciseId === params.exerciseId) : todaySessions[0];
+    return readinessAvailability(exerciseId,
+      poseId => Object.prototype.hasOwnProperty.call(READINESS_PROFILES, poseId), planned?.measurementType);
   }, [params.exerciseId, todaySessions]);
 
   // 실시간 관절 준비 상태 머신 연동
   const readiness = useCameraReadiness({
-    exercise: activeExerciseName,
+    exercise: readinessTarget.poseId,
     enabled: step === 'user-position' || step === 'user-position-complete',
     lockOnReady: true,
     onReady: useCallback(() => {
