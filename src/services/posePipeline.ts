@@ -31,6 +31,7 @@ import { createPoseCoach } from '@/services/poseCoaching';
 import { flushWorkoutQueue, commitPoseSet } from '@/services/offlineWorkout';
 import { poseSupportForSnapshot } from '@/services/poseExerciseIds';
 import type { CoachingEvent } from '@/types/tts';
+import { devLog } from '@/utils/devLog';
 
 type Completed = Record<string, unknown> & { schemaVersion: string; type: string; exercise: string };
 export interface PoseAnalyzer {
@@ -116,12 +117,24 @@ export function createPosePipeline(options: {
   });
   let result: Completed | null = null;
   let performedAt: string | null = null;
+  let lastLoggedCount = 0;
   return {
     /** frame.timestampMs는 sessionNow() 시간축이어야 한다(watchdog tick과 같은 축) */
     pushFrame(frame: PoseFrame): SessionState {
       if (result) throw new Error('종료된 세트입니다.');
       const state = controller.pushFrame(frame);
-      if (state.frameResult) coach.process(state.frameResult as unknown as PoseFrameResult);
+      if (state.frameResult) {
+        const fr = state.frameResult as unknown as PoseFrameResult;
+        coach.process(fr);
+        if (!fr.ignored && typeof fr.count === 'number' && fr.count > lastLoggedCount) {
+          lastLoggedCount = fr.count;
+          const codes = fr.lastRepetition?.number === fr.count ? fr.lastRepetition.codes : fr.currentCodes;
+          devLog('Pose', `${fr.exercise} ${fr.count}회`, {
+            codes,
+            ...(fr.side ? { side: fr.side } : {}),
+          });
+        }
+      }
       return state;
     },
     /** 카메라 콜백이 멈춘 경우까지 감지하는 watchdog. 분석기 프레임을 합성하지 않는다 */

@@ -39,6 +39,7 @@ import { useTtsStore } from '@/stores/useTtsStore';
 import { useTodayRoutineStore } from '@/stores/useTodayRoutineStore';
 import { useWorkoutResultStore } from '@/stores/useWorkoutResultStore';
 import { useWorkoutDraftStore } from '@/stores/useWorkoutDraftStore';
+import { devLog } from '@/utils/devLog';
 
 /**
  * none: 정상 진행 / paused: 일시 정지 화면 / stop-confirm: 중단 확인 시트 /
@@ -520,6 +521,7 @@ export default function WorkoutSessionScreen() {
           serverSession.current = { sessionId: local.sessionId, session: local.session };
         }
         const summary = completed.summary as { count?: number | null; holdSeconds?: number | null } | undefined;
+        devLog('WorkoutSession', `set 분석 결과 (exerciseId=${activeSet.exerciseId}, routineSetId=${activeSet.routineSetId})`, completed.summary);
         // 주 측정값만 전달: REPS = count, DURATION = floor(holdSeconds). 보조값을 다른 측정 유형 값으로 보내지 않는다
         const isReps = activeSet.measurementType === 'REPS';
         useTtsStore.getState().sendCoachEvent({
@@ -657,7 +659,11 @@ export default function WorkoutSessionScreen() {
     return () => clearInterval(timer);
   }, [sessionReady, phase, applyControllerState]);
 
-  if (__DEV__) console.log('[WorkoutSession]', phase, pause);
+  // 단계(phase.id)·일시정지 상태가 실제로 바뀔 때만 1회 기록 (렌더마다 찍지 않음)
+  useEffect(() => {
+    devLog('WorkoutSession', `phase#${phase.id} ${phase.kind}`, { ...phase, pause });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase.id, pause]);
 
   const close = useCallback(() => {
     if (router.canGoBack()) router.back();

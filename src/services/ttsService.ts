@@ -19,7 +19,6 @@ export async function playLocalMp3(
         await asset.downloadAsync();
       }
       const resolvedUri = asset.localUri || asset.uri;
-      if (__DEV__) console.log('[TTS] playLocalMp3 resolved:', { localUri: asset.localUri, uri: asset.uri });
       if (resolvedUri) {
         await useTtsStore.getState().playAudio({ uri: resolvedUri }, text, 'LOCAL_MP3');
         return;
