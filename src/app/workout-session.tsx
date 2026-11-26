@@ -28,7 +28,8 @@ import {
 } from '@/components/workout-session/sessionFlow';
 import { WorkoutCompleteView } from '@/components/workout-session/WorkoutCompleteView';
 import { createWorkoutSessionDraft, type WorkoutSessionSync, type WorkoutStatus } from '@/services/workoutSessionService';
-import { clearLocalWorkout, flushWorkoutQueue, getLocalWorkout, pendingCount, queueSession, savePosition } from '@/services/offlineWorkout';
+import { clearLocalWorkout, flushWorkoutQueue, getLocalWorkout, pendingCount, queueSession, savePosition, settleStaleWorkout } from '@/services/offlineWorkout';
+import { kstDateOf, kstDateOfIso } from '@/services/kstDate';
 import { createExerciseAnalyzer, createPosePipeline } from '@/services/posePipeline';
 import { SESSION_WATCHDOG_MS, sessionNow } from '@/services/sessionClock';
 import { useAuthStore } from '@/stores/useAuthStore';
@@ -114,6 +115,12 @@ export default function WorkoutSessionScreen() {
   const owner = useAuthStore(state => state.user?.id);
   const params = useLocalSearchParams<{ resume?: string }>();
   const resumeDraft = useRef(params.resume === '1' ? useWorkoutDraftStore.getState().draft : null);
+  /**
+   * 앱을 나갔다가 이어하는 세션에서 운동 중이던 세트는 처음부터 다시 한다(새 Controller·분석기는 측정값 0에서 시작하므로 타이머도 전체 시간).
+   * 휴식·시작 카운트다운(측정 없는 단계)만 저장된 남은 시간을 이어간다. 화면 안의 일시정지·재개는 phase가 바뀌지 않아 영향 없다.
+   */
+  const resumeRemainingSeconds = resumeDraft.current && resumeDraft.current.phase !== 'exercising'
+    ? resumeDraft.current.remainingSeconds : null;
   const initialPhase: SessionPhase = !resumeDraft.current ? INITIAL_PHASE
     : resumeDraft.current.phase === 'resting'
       ? { id: 0, kind: 'resting', exerciseIndex: resumeDraft.current.exerciseIndex, completedSet: resumeDraft.current.set }
@@ -126,7 +133,7 @@ export default function WorkoutSessionScreen() {
   const startPromise = useRef<Promise<{ sessionId: string; session: WorkoutSessionSync }> | null>(null);
   const updateQueue = useRef<Promise<void>>(Promise.resolve());
   const running = useRef<{ started: number; kind: 'active' | 'rest' } | null>(null);
-  const remainingRef = useRef(resumeDraft.current?.remainingSeconds ?? 0);
+  const remainingRef = useRef(resumeRemainingSeconds ?? 0);
   const positionRef = useRef<WorkoutDraft | null>(resumeDraft.current);
   const coachCleanup = useRef<(() => void) | null>(null);
   const coachAttempting = useRef(false);
@@ -195,6 +202,9 @@ export default function WorkoutSessionScreen() {
           if (!local || local.sessionId !== saved.sessionId || local.session.routineId !== snapshot.id ||
               local.session.status === 'COMPLETED' || local.session.status === 'ABANDONED')
             throw new Error('이어갈 수 없는 세션입니다.');
+          // 날짜 경계(Asia/Seoul): 이전 날짜에 시작한 세션은 이어하지 않는다(종료 처리는 진입 화면의 settleStaleWorkout이 한다)
+          const startedDay = kstDateOfIso(local.session.startedAt), today = kstDateOf(Date.now());
+          if (startedDay && today && startedDay < today) throw new Error('이전 날짜의 운동은 이어할 수 없어요.');
           positionRef.current = local.draft;
           return { sessionId: local.sessionId, session: local.session };
         });
@@ -211,7 +221,9 @@ export default function WorkoutSessionScreen() {
           savedAt: new Date().toISOString(), activeDurationSeconds: 0, restDurationSeconds: 0 };
         positionRef.current = position;
         remainingRef.current = position.remainingSeconds;
-        startPromise.current = getLocalWorkout(owner)
+        // 새 운동 시작 전에 이전 날짜의 미완료 세션을 ABANDONED로 끝낸다(전송 대기 큐는 유지)
+        startPromise.current = settleStaleWorkout(owner)
+          .then(() => getLocalWorkout(owner))
           .then(async (local) => {
             if (local && local.sessionId !== draft.sessionId) {
               await clearLocalWorkout(owner, local.sessionId);
@@ -418,11 +430,10 @@ export default function WorkoutSessionScreen() {
 
   /**
    * M10: 측정 결과 없이 0초에 도달해 멈춘 운동 세트의 phase id. 사용자가 '운동 재개'를 눌러야만(명시적 선택) 같은 세트를 처음부터 다시 시작.
-   * 이어하기로 0초 운동 단계에 재진입한 경우도 같은 상태로 시작한다(첫 phase id는 0).
+   * 이어하기로 재진입한 운동 단계는 세트를 처음부터(전체 시간) 시작하므로 0초 상태로 시작하지 않는다.
    * 자동 일시정지(남은 시간 보존 후 5초 복귀)와는 별개 기능.
    */
-  const stalledPhaseIdRef = useRef<number | null>(
-    resumeDraft.current?.phase === 'exercising' && resumeDraft.current.remainingSeconds <= 0 ? 0 : null);
+  const stalledPhaseIdRef = useRef<number | null>(null);
 
   /** 멈춘 세트를 같은 운동·세트 번호로 새 phase id에 다시 시작. 분석기 미지원 종목은 재시도해도 측정할 수 없어 하지 않는다 */
   const restartStalledSet = useCallback((): boolean => {
@@ -832,8 +843,8 @@ export default function WorkoutSessionScreen() {
     );
   };
 
-  const duration = resumeDraft.current && phase.id === 0
-    ? resumeDraft.current.remainingSeconds : phaseDurationSeconds(phase, activeRoutine);
+  const duration = resumeRemainingSeconds !== null && phase.id === 0
+    ? resumeRemainingSeconds : phaseDurationSeconds(phase, activeRoutine);
 
   return (
     <>

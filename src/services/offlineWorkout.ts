@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ApiError } from '@/services/api';
+import { kstDateOf } from '@/services/kstDate';
 import { poseSupportForSnapshot } from '@/services/poseExerciseIds';
 import { syncWorkoutSession, uploadPoseSetResult, generateWorkoutReport, type TodayWorkoutPlan, type WorkoutSessionSync } from '@/services/workoutSessionService';
 import type { WorkoutDraft } from '@/stores/useWorkoutDraftStore';
@@ -44,11 +45,49 @@ export function queueSession(owner: string, sessionId: string, session: WorkoutS
     if (!position) throw new Error('운동 진행 위치가 없어요.');
     if (current && session.revision <= current.session.revision) throw new Error('운동 버전이 올바르지 않아요.');
     data.current = { sessionId, session, draft: position };
-    data.queue.push({ sessionId, session });
-    if ((session.status === 'COMPLETED' || session.status === 'ABANDONED') &&
-        session.sets.some(set => (set.actualReps ?? 0) > 0 || (set.actualDurationSeconds ?? 0) > 0) &&
-        !data.queue.some(item => item.kind === 'report' && item.sessionId === sessionId))
-      data.queue.push({ kind: 'report', sessionId });
+    pushSession(data, sessionId, session);
+  });
+}
+/** 세션 요청을 큐에 넣고, 수행 세트가 있는 종료 세션이면 Report 생성을 한 번만 뒤에 넣는다 */
+function pushSession(data: Stored, sessionId: string, session: WorkoutSessionSync) {
+  data.queue.push({ sessionId, session });
+  if ((session.status === 'COMPLETED' || session.status === 'ABANDONED') &&
+      session.sets.some(set => (set.actualReps ?? 0) > 0 || (set.actualDurationSeconds ?? 0) > 0) &&
+      !data.queue.some(item => item.kind === 'report' && item.sessionId === sessionId))
+    data.queue.push({ kind: 'report', sessionId });
+}
+const timeOf = (value: unknown) => (typeof value === 'string' ? Date.parse(value) : NaN);
+/**
+ * 날짜 경계(Asia/Seoul): 시작한 날짜(startedAt)가 오늘보다 이전인 미완료 세션(ACTIVE·PAUSED)은 더 이어할 수 없어 ABANDONED로 끝낸다.
+ *  - 같은 session ID·routineSnapshot, revision +1, 완료 세트 전체를 그대로 보낸다(기존 큐 경로, 수행 세트가 있으면 기존 규칙대로 Report 1회)
+ *  - endedAt = 기기에 남은 마지막 실제 활동 시각(진행 위치 저장 시각 savedAt·마지막 세트 완료 시각) 중 가장 늦은 값, 최소 startedAt.
+ *    정리 시각(다음 날)을 쓰지 않아 전날 운동이 다음 날 기록으로 집계되지 않는다
+ *  - 운동·휴식 시간은 같은 진행 위치에 저장된 값(세션 값보다 작지 않게). 휴식이 경과 시간을 넘는 기록은 서버 검증(400)을 피하려고 휴식만 보내지 않는다(null)
+ *  - 이어하기 정보(current)만 지우고 전송 대기 큐는 그대로 둔다. 한 번 처리하면 current가 없어 다시 호출해도 아무것도 하지 않는다
+ * 운동 화면에서 진행 중인 세션에는 호출하지 않는다(진입·이어하기·새 운동 시작 경로에서만 호출). 시작 시각을 읽을 수 없으면 판정하지 않는다.
+ * @returns ABANDONED로 끝낸 session ID, 없으면 null
+ */
+export function settleStaleWorkout(owner: string, nowMs: number = Date.now()): Promise<string | null> {
+  return locked(owner, async () => {
+    const data = await read(owner);
+    const current = data.current;
+    if (!current || current.session.status === 'COMPLETED' || current.session.status === 'ABANDONED') return null;
+    const started = timeOf(current.session.startedAt);
+    const startedDay = kstDateOf(started), today = kstDateOf(nowMs);
+    if (!startedDay || !today || startedDay >= today) return null;
+    const draft = current.draft.sessionId === current.sessionId ? current.draft : null;
+    const lastActivity = Math.max(started, timeOf(draft?.savedAt) || started,
+      ...current.session.sets.map(set => timeOf(set.completedAt) || started));
+    const active = Math.max(current.session.activeDurationSeconds, draft?.activeDurationSeconds ?? 0);
+    const rest = Math.max(current.session.restDurationSeconds ?? 0, draft?.restDurationSeconds ?? 0);
+    const elapsed = Math.floor((lastActivity - started) / 1000);
+    const session: WorkoutSessionSync = { ...current.session, status: 'ABANDONED', revision: current.session.revision + 1,
+      endedAt: new Date(lastActivity).toISOString(), activeDurationSeconds: active,
+      restDurationSeconds: rest <= elapsed ? rest : null };
+    pushSession(data, current.sessionId, session);
+    data.current = null;
+    await AsyncStorage.setItem(key(owner), JSON.stringify(data));
+    return current.sessionId;
   });
 }
 export function savePosition(owner: string, sessionId: string, draft: WorkoutDraft) {

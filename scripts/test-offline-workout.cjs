@@ -3,6 +3,8 @@ const fs = require('node:fs');
 const ts = require('../node_modules/typescript');
 const source = fs.readFileSync(require('node:path').join(__dirname, '../src/services/offlineWorkout.ts'), 'utf8');
 const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+const kstJs = ts.transpileModule(fs.readFileSync(require('node:path').join(__dirname, '../src/services/kstDate.ts'), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+const kstDate = (() => { const m = { exports: {} }; new Function('require', 'module', 'exports', kstJs)(() => { throw Error('kstDate has no deps'); }, m, m.exports); return m.exports; })();
 const disk = new Map();
 const poseIds = { poseExerciseId: id => ({ 'push-up': 'pushup', 'pike-push-up': 'pike_pushup', 'incline-push-up': 'incline_pushup' })[id] ?? null };
 const storage = { getItem: async key => disk.get(key) ?? null, setItem: async (key, value) => { disk.set(key, value); } };
@@ -11,7 +13,7 @@ class ApiError extends Error { constructor(status) { super('error'); this.status
 const service = { syncWorkoutSession: async (id, body) => { calls.push({ id, body: JSON.parse(JSON.stringify(body)) }); if (!online) throw new ApiError(0); if (rejected) throw new ApiError(409); }, uploadPoseSetResult: async (...args) => { poseCalls.push(args.slice(0, 5)); if (!online) throw new ApiError(0); if (rejected) throw new ApiError(409); }, generateWorkoutReport: async id => { reportCalls.push(id); if (!online) throw new ApiError(0); if (rejected) throw new ApiError(409); } };
 function load() {
   const module = { exports: {} };
-  const deps = { '@react-native-async-storage/async-storage': { __esModule: true, default: storage }, '@/services/api': { ApiError }, '@/services/poseExerciseIds': poseIds, '@/services/workoutSessionService': service };
+  const deps = { '@react-native-async-storage/async-storage': { __esModule: true, default: storage }, '@/services/api': { ApiError }, '@/services/poseExerciseIds': poseIds, '@/services/workoutSessionService': service, '@/services/kstDate': kstDate };
   new Function('require', 'module', 'exports', compiled)(name => { if (!(name in deps)) throw Error(name); return deps[name]; }, module, module.exports);
   return module.exports;
 }

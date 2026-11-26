@@ -130,6 +130,8 @@ const realSources = new Set([
   'components/workout-session/sessionProgress',
   'services/offlineWorkout', 'services/workoutSessionService', 'services/posePipeline',
   'services/poseCoaching', 'services/poseExerciseIds', 'stores/useWorkoutDraftStore',
+  // 08-2: KST 날짜 경계·이어하기 위치
+  'services/kstDate', 'components/workout-session/sessionResume',
   // 3-1a: 준비 화면 readiness 훅(실제 @barofit/pose CameraReadiness 사용)
   'hooks/useCameraReadiness',
 ]);
@@ -2820,6 +2822,116 @@ describe('05 — 실험 횟수 카운터 4종 실제 분석기 연동 (REPS)', (
     assert.equal(stallAlerts().length - before, 1, '기존 M10 안내로 정지');
     assert.equal((await poseItems()).length, 0);
     assert.equal((await localSession()).sets.length, 0);
+    await unmount(root);
+  });
+});
+
+// ---------------------------------------------------------------------
+// 08-2: 앱을 나갔다 이어할 때 미완료 세트 초기화 · 자정을 넘겨 진행 중인 운동
+// ---------------------------------------------------------------------
+describe('08-2 — 이어하기 미완료 세트 초기화와 자정 경계', () => {
+  beforeEach(() => { testMeasure.value = null; testMeasure.summary = null; });
+  afterEach(() => { testMeasure.value = null; testMeasure.summary = null; });
+  async function measure(value) { testMeasure.value = value; await pushOneFrame(); await settle(); }
+  async function untilExercising(set) {
+    testMeasure.value = null; feedFrames = false;
+    for (let i = 0; i < 400; i += 1) {
+      if (ui.stage?.phase.kind === 'exercising' && ui.stage.phase.set === set) return;
+      await advance(250);
+    }
+    assert.fail(`HARNESS: ${set}세트 운동 단계에 도달하지 않았습니다`);
+  }
+  async function exitFromMenu() {
+    await act(async () => { ui.stage.onPressMenu(); }); await settle();
+    await advance(500);
+    await act(async () => { ui.stage.onPressStop(); }); await settle();
+    await advance(500);
+    await act(async () => { ui.stage.onConfirmStop(); }); await settle();
+  }
+
+  test('R1. REPS: 1세트 완료 후 2세트 8회에서 종료 → 이어하기는 2세트를 0회·전체 시간부터, 1세트 기록 보존·중복 없음', async () => {
+    let root = await startWith(routine({ exerciseId: 'squat', measurementType: 'REPS', sets: [{ reps: 10 }, { reps: 20 }, { reps: 20 }] }));
+    testMeasure.summary = { count: 10 };
+    await measure({ count: 10 });
+    await untilExercising(2);
+    testMeasure.summary = null;
+    await measure({ count: 8 });
+    await advance(20 * 1000);
+    assert.equal(ui.stage.currentReps, 8);
+    await exitFromMenu();
+    const saved = useWorkoutDraftStore.getState().draft;
+    assert.deepEqual([saved.phase, saved.set], ['exercising', 2]);
+    assert.ok(saved.remainingSeconds < EXERCISE_DURATION_SECONDS, 'HARNESS: 진행 중 잔여 시간 저장');
+    assert.equal((await localSession()).status, 'PAUSED');
+    await unmount(root);
+
+    root = await mount({ resume: '1' });
+    assert.deepEqual([ui.stage.phase.kind, ui.stage.phase.set], ['exercising', 2], '완료한 1세트를 다시 하지 않음');
+    assert.equal(ui.stage.remainingSeconds, EXERCISE_DURATION_SECONDS, '미완료 세트 타이머는 전체 시간');
+    assert.equal(ui.stage.currentReps, null, '미완료 세트 횟수는 0부터(이전 8회 이어받지 않음)');
+    const before = await localSession();
+    assert.equal(before.sets.length, 1);
+    assert.equal(before.sets[0].actualReps, 10, '1세트 결과 보존');
+    await resumeLikeUser();
+    testMeasure.summary = { count: 20 };
+    await measure({ count: 20 });
+    assert.equal(ui.stage.phase.kind, 'resting');
+    const after = await localSession();
+    assert.equal(after.sets.length, 2);
+    assert.deepEqual(after.sets.map((s) => s.actualReps), [10, 20]);
+    assert.equal(new Set(after.sets.map((s) => s.routineSetId)).size, 2, '세트 중복 저장 없음');
+    await unmount(root);
+  });
+
+  test('R2. DURATION: 60초 중 25초 진행 후 종료 → 이어하기는 같은 세트를 유지 시간 0·전체 시간부터', async () => {
+    let root = await startWith(PLANK_60());
+    testMeasure.value = { count: null, holdSeconds: 25 }; feedFrames = true;
+    await advance(25 * 1000);
+    assert.equal(ui.hud.holdSeconds, 25);
+    feedFrames = false; testMeasure.value = null;
+    await exitFromMenu();
+    assert.ok(useWorkoutDraftStore.getState().draft.remainingSeconds <= 35);
+    await unmount(root);
+
+    root = await mount({ resume: '1' });
+    assert.deepEqual([ui.stage.phase.kind, ui.stage.phase.set], ['exercising', 1]);
+    assert.equal(ui.stage.remainingSeconds, 60, '목표 시간 전체에서 다시 시작(잔여 35초와 측정 0의 불일치 없음)');
+    assert.equal(ui.stage.currentReps, null, '유효 유지 시간 0부터');
+    assert.equal((await localSession()).sets.length, 0);
+    await unmount(root);
+  });
+
+  test('R3. 휴식 중 종료 → 이어하기는 남은 휴식 시간을 이어가고 완료 세트를 다시 하지 않음', async () => {
+    let root = await startWith(routine({ exerciseId: 'squat', measurementType: 'REPS', sets: [{ reps: 10, rest: 30 }, { reps: 10 }] }));
+    await measure({ count: 10 });
+    assert.equal(ui.stage.phase.kind, 'resting');
+    testMeasure.value = null;
+    await advance(10 * 1000);
+    await exitFromMenu();
+    const saved = useWorkoutDraftStore.getState().draft;
+    assert.deepEqual([saved.phase, saved.set], ['resting', 1]);
+    await unmount(root);
+    root = await mount({ resume: '1' });
+    assert.deepEqual([ui.stage.phase.kind, ui.stage.phase.completedSet], ['resting', 1]);
+    assert.equal(ui.stage.remainingSeconds, saved.remainingSeconds, '측정 없는 휴식은 남은 시간 유지');
+    await unmount(root);
+  });
+
+  test('R4. 자정(KST)을 넘겨 화면에서 진행 중인 운동은 foreground 복귀 후에도 ABANDONED 없이 정상 완료', async () => {
+    mock.timers.setTime(Date.parse('2026-11-25T14:59:30Z')); // 2026-11-25 23:59:30 KST
+    const root = await startWith(routine({ exerciseId: 'squat', measurementType: 'REPS', sets: [{ reps: 5, rest: 30 }, { reps: 5 }] }));
+    await measure({ count: 5 });
+    await untilExercising(2);
+    assert.ok(Date.now() >= Date.parse('2026-11-25T15:00:00Z'), 'HARNESS: KST 자정을 넘김');
+    await emitAppState('background');
+    await emitAppState('active');
+    await resumeLikeUser();
+    await measure({ count: 5 });
+    await advance(2000);
+    const sessions = (await storedQueue()).filter((i) => i.session).map((i) => i.session.status);
+    assert.equal(sessions.at(-1), 'COMPLETED');
+    assert.ok(!sessions.includes('ABANDONED'), '진행 중 운동을 날짜 변경으로 종료하지 않음');
+    assert.equal(await offline.settleStaleWorkout(owner, Date.now()), null, '완료 후 날짜 경계 정리 대상 없음');
     await unmount(root);
   });
 });

@@ -125,6 +125,8 @@ const realSources = new Set([
   'components/workout-session/sessionProgress',
   'services/offlineWorkout', 'services/workoutSessionService', 'services/posePipeline',
   'services/poseCoaching', 'services/poseExerciseIds', 'stores/useWorkoutDraftStore',
+  // 08-2: KST 날짜 경계·이어하기 위치
+  'services/kstDate', 'components/workout-session/sessionResume',
 ]);
 const realPackages = {
   react: () => require(nm('react')),
@@ -375,7 +377,7 @@ describe('그룹 A — 0초 도달 시 동작', () => {
     await unmount(root);
   });
 
-  test('D. 이어하기: 0초 임시저장 → 재진입 후 첫 재개에서 같은 세트를 처음부터 재시작', async () => {
+  test('D. 이어하기: 0초 임시저장 → 재진입하면 같은 세트를 처음부터(전체 시간) 시작 (08-2 미완료 세트 초기화)', async () => {
     const fixture = SUPPORTED_REPS(2);
     let root = await startWith(fixture);
     await advance(EXERCISE_DURATION_SECONDS * 1000 + 250);
@@ -391,12 +393,14 @@ describe('그룹 A — 0초 도달 시 동작', () => {
 
     root = await mount({ resume: '1' });
     assert.equal(ui.stage.pause, 'paused');
-    assert.equal(ui.stage.remainingSeconds, 0);
-    const resumed = ui.stage.phase;
-    await pressResumeOnce();
-    assert.notEqual(ui.stage.phase.id, resumed.id, '6. 0초 checkpoint에서 재진입 → 재시도');
+    // 08-2: 앱을 나갔다 이어하면 미완료 세트는 측정값 0과 함께 타이머도 전체 시간에서 다시 시작한다(0초 잔여 시간을 복원하지 않음)
+    assert.equal(ui.stage.remainingSeconds, EXERCISE_DURATION_SECONDS);
+    assert.equal(ui.stage.phase.kind, 'exercising');
     assert.equal(ui.stage.phase.set, draft.set);
     assert.equal(ui.stage.phase.exerciseIndex, draft.exerciseIndex);
+    const resumed = ui.stage.phase;
+    await pressResumeOnce();
+    assert.equal(ui.stage.phase.id, resumed.id, '0초로 시작하지 않으므로 M10 재시도(새 phase)가 필요 없다');
     assert.equal(ui.stage.remainingSeconds, EXERCISE_DURATION_SECONDS);
     await finishResumeCountdown();
     await advance(5 * 1000);
