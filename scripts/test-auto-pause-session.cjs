@@ -113,7 +113,7 @@ const sourceMocks = {
   },
   'components/workout-session/AutoPauseOverlay': { AutoPauseOverlay: (props) => { ui.overlay = props; ui.view = 'overlay'; return null; } },
   'components/workout-session/SessionHud': { SessionHud: (props) => { ui.hud = props.content; return null; } },
-  'components/workout-session/SessionStatusPill': { SessionStatusPill: () => null },
+  'components/workout-session/SessionStatusPill': { SessionStatusPill: (props) => { ui.pill = props; return null; } },
   'components/workout-session/PauseView': { PauseView: () => null },
   'components/workout-session/StopConfirmSheet': { StopConfirmSheet: () => null },
   'components/workout-session/ExerciseCameraArea': { ExerciseCameraArea: (props) => { ui.camera = props; return null; } },
@@ -3037,6 +3037,134 @@ describe('08-3 — 종료 조건과 세트 저장 실패 복구', () => {
     bodyVisible = true; testMeasure.value = { count: null, holdSeconds: 1 };
     await advance(5 * 1000);
     assert.ok(remaining() <= 56 && remaining() >= 55, `인식 후 타이머 진행 (${remaining()})`);
+    await unmount(root);
+  });
+});
+
+// ---------------------------------------------------------------------
+// 09: 준비 안내 · 최초 인식 대기 안내 · 종목 전환과 readiness · 휴식 · 오늘의 운동 루틴 실제 데이터 · 완료 화면
+// ---------------------------------------------------------------------
+describe('09 — 화면 상태와 실제 세션 데이터', () => {
+  beforeEach(() => { testMeasure.value = null; testMeasure.summary = null; });
+  afterEach(() => { testMeasure.value = null; testMeasure.summary = null; });
+  async function measure(value) { testMeasure.value = value; await pushOneFrame(); await settle(); }
+  /** 스쿼트(REPS 2세트, 휴식 15초) → 플랭크(DURATION 1세트 20초). 종목 간 휴식 25초 */
+  function twoExercises() {
+    const squat = routine({ exerciseId: 'squat', measurementType: 'REPS', sets: [{ reps: 3, rest: 15 }, { reps: 3, rest: 15 }] });
+    const plank = routine({ exerciseId: 'plank', measurementType: 'DURATION', sets: [{ seconds: 20 }] });
+    squat.exercise.preparation = '발을 어깨너비로 벌리고 서세요.';
+    plank.exercise.preparation = '팔꿈치를 어깨 아래에 두세요.';
+    plank.exercise.order = 2;
+    const snapshot = { ...squat.snapshot, interExerciseRestSeconds: 25, exercises: [squat.exercise, plank.exercise] };
+    return { snapshot, sessions: [...squat.sessions, ...plank.sessions], exercise: squat.exercise };
+  }
+
+  test('G1. 준비 카운트다운: 이번 종목 준비 안내(Routine 가이드), 준비 시간과 운동 타이머 구분', async () => {
+    const fixture = twoExercises();
+    stores.today.setState({ sessions: fixture.sessions, routineSnapshot: fixture.snapshot });
+    const root = await mount();
+    assert.equal(ui.stage.phase.kind, 'countdown');
+    assert.equal(ui.hud.title, '준비');
+    assert.equal(ui.hud.seconds, START_COUNTDOWN_SECONDS, '준비 카운트다운은 운동 타이머와 별도');
+    assert.equal(ui.stage.guide, '발을 어깨너비로 벌리고 서세요.');
+    assert.equal(ui.pill.subtitle, '세트 1 준비');
+    await advance(START_COUNTDOWN_SECONDS * 1000 + 250);
+    assert.equal(ui.stage.phase.kind, 'exercising');
+    assert.equal(ui.stage.guide, null, '운동 중에는 준비 안내 없음');
+    assert.equal(remaining(), EXERCISE_DURATION_SECONDS);
+    await unmount(root);
+  });
+
+  test('G2. 최초 인식 대기: 사유별 안내·타이머 정지, 안정화(STABILIZING)는 안내 없음, 인식 후 정상 HUD', async () => {
+    const root = await startWith(PLANK_60());
+    bodyVisible = false; feedFrames = true;
+    await advance(3000);
+    assert.equal(ui.stage.recognitionGuide, '카메라에 전신이 나오도록\n위치해 주세요', 'Pose readiness NO_PERSON 안내');
+    assert.equal(ui.hud.title, '자세 인식 중');
+    assert.equal(ui.pill.subtitle, '세트 1 준비');
+    assert.equal(remaining(), 60, '인식 대기 중 운동 타이머 정지');
+    assert.equal(isAutoPauseScreen(), false, '측정 전 대기는 자동 일시정지(이탈) 화면이 아님');
+    bodyVisible = true; testMeasure.value = { count: null, holdSeconds: 2 };
+    await advance(3000);
+    assert.equal(ui.stage.recognitionGuide, null);
+    assert.equal(ui.hud.kind, 'duration', '인식 후 시간형 HUD');
+    assert.ok(remaining() < 60);
+    // 측정 시작 후의 짧은 이탈은 기존 07-B 동작(안내 없이 측정만 차단, 2초 후 자동 일시정지)
+    testTracking.user = 'lost';
+    await advance(1000);
+    assert.equal(ui.stage.recognitionGuide, null);
+    await advance(1500);
+    assert.ok(isAutoPauseScreen(), '2초 이탈 → 기존 자동 일시정지');
+    await unmount(root);
+  });
+
+  test('G3. 세트 완료 → 세트 간 휴식(restSeconds, 다음 세트 안내) → 같은 종목 다음 세트는 준비 화면 없이 기존 흐름', async () => {
+    const fixture = twoExercises();
+    const root = await startWith(fixture);
+    testMeasure.summary = { count: 3 };
+    await measure({ count: 3 });
+    assert.equal(ui.stage.phase.kind, 'resting');
+    assert.deepEqual([ui.hud.kind, ui.hud.title], ['check', '세트 1 완료!'], '세트 저장 성공 후 완료 표시');
+    assert.equal((await localSession()).sets.length, 1);
+    await advance(4000);
+    assert.equal(ui.hud.title, '휴식');
+    assert.equal(ui.pill.subtitle, '세트 간 휴식 · 다음 세트 2');
+    assert.ok(ui.hud.seconds <= 15 && ui.hud.seconds > 10, 'Routine 세트별 restSeconds');
+    await advance(12 * 1000);
+    assert.deepEqual([ui.stage.phase.kind, ui.stage.phase.set], ['countdown', 2]);
+    assert.equal(ui.hud.title, '준비', '같은 종목 다음 세트는 기존 시작 카운트다운');
+    await unmount(root);
+  });
+
+  test('G4. 종목 전환: 종목 간 휴식(interExerciseRestSeconds)이 다음 종목 안내를 겸하고 추가 카운트다운 없음, 새 종목 HUD·readiness', async () => {
+    const fixture = twoExercises();
+    const root = await startWith(fixture);
+    testMeasure.summary = { count: 3 };
+    await measure({ count: 3 });
+    for (let i = 0; i < 200 && !(ui.stage.phase.kind === 'exercising' && ui.stage.phase.set === 2); i += 1) await advance(250);
+    await measure({ count: 3 });
+    assert.deepEqual([ui.stage.phase.kind, ui.stage.phase.exerciseIndex, ui.stage.phase.set], ['countdown', 1, 1]);
+    assert.equal(ui.hud.title, '휴식', '종목 간 휴식');
+    assert.equal(ui.hud.seconds, 25, 'interExerciseRestSeconds 그대로(두 번 세지 않음)');
+    assert.equal(ui.stage.exerciseName, 'plank', '다음 종목명');
+    assert.equal(ui.stage.guide, '팔꿈치를 어깨 아래에 두세요.', '다음 종목 준비 안내');
+    assert.equal(ui.pill.subtitle, '다음 운동 · 세트 1 준비');
+    testMeasure.value = null; testMeasure.summary = null; feedFrames = false;
+    await advance(25 * 1000 + 250);
+    assert.deepEqual([ui.stage.phase.kind, ui.stage.phase.exerciseIndex], ['exercising', 1], '휴식 뒤 바로 다음 종목(추가 준비 카운트다운 없음)');
+    assert.equal(ui.stage.isDuration, true, '측정 타입 전환');
+    assert.equal(ui.stage.currentReps, null, '이전 종목 측정값이 남지 않음');
+    assert.equal(remaining(), 20, '다음 종목 목표 시간');
+    // 새 종목 Controller: 다시 신체 인식을 확인하기 전에는 측정·타이머가 시작되지 않음
+    bodyVisible = false; feedFrames = true;
+    await advance(4000);
+    assert.equal(remaining(), 20, '새 종목 readiness 전 타이머 정지');
+    assert.ok(ui.stage.recognitionGuide);
+    assert.notEqual(controllerLog.instances.length, 0);
+    await unmount(root);
+  });
+
+  test('G5. 오늘의 운동 루틴: 진행 중 세션 snapshot과 실제 완료 기록, 메뉴를 닫으면 Controller 상태 유지', async () => {
+    const fixture = twoExercises();
+    const root = await startWith(fixture);
+    testMeasure.summary = { count: 3 };
+    await measure({ count: 3 });
+    for (let i = 0; i < 200 && !(ui.stage.phase.kind === 'exercising' && ui.stage.phase.set === 2); i += 1) await advance(250);
+    testMeasure.summary = null;
+    await measure({ count: 1 });
+    await act(async () => { ui.pill.onPressMenu(); }); await settle();
+    assert.equal(ui.stage.pause, 'paused', '우하단 루틴 버튼 → 오늘의 운동 루틴');
+    const summary = ui.stage.getPauseSummary();
+    assert.deepEqual([summary.completedSets, summary.totalSets], [1, 3], '저장된 세트만 완료로 셈(진행 중 2세트 1회는 미완료)');
+    assert.deepEqual(summary.exercises.map((e) => [e.name, e.detail, e.current]), [
+      ['squat', '2세트 · 3회 · 1/2세트 완료', true],
+      ['plank', '1세트 · 20초', false],
+    ]);
+    const instances = controllerLog.instances.length;
+    await resumeWithFrames(() => VISIBLE_BODY(), 480, 640); // 운동 재개: Controller 재인식 → 5초 복귀 → active
+    await measure({ count: 2 });
+    assert.equal(ui.stage.currentReps, 2, '닫은 뒤 같은 세트 측정 이어감');
+    assert.equal(controllerLog.instances.length, instances, '루틴 화면 진입·종료로 Controller를 새로 만들지 않음');
     await unmount(root);
   });
 });

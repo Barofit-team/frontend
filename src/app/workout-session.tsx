@@ -13,7 +13,7 @@ import { AutoPauseOverlay } from '@/components/workout-session/AutoPauseOverlay'
 import { PhaseTimer } from '@/components/workout-session/PhaseTimer';
 import { SessionStage } from '@/components/workout-session/SessionStage';
 import { SessionColors } from '@/components/workout-session/sessionPalette';
-import { countSets, estimateRemainingSeconds } from '@/components/workout-session/sessionProgress';
+import { countSets, estimateRemainingSeconds, recognitionGuideText, routineSummaryOf } from '@/components/workout-session/sessionProgress';
 import {
   EXERCISES,
   type ExerciseConfig,
@@ -336,6 +336,8 @@ export default function WorkoutSessionScreen() {
   const controllerStateRef = useRef<ControllerState | null>(null);
   /** 07-B: Controller countdown 표시 초. Controller countdown 중에만 값이 있고 FE는 시간을 따로 세지 않는다 */
   const [countdownSeconds, setCountdownSeconds] = useState<number | null>(null);
+  /** 09: Controller 인식 사유(recognition.reasonCode). 세트 최초 인식 대기 안내 문구에만 쓴다(판정은 Controller) */
+  const [recognitionReason, setRecognitionReason] = useState<string | null>(null);
   /**
    * 자동 일시정지 화면 상태는 Controller phase를 기존 화면에 최소 매핑한 값이다(서버 상태는 바꾸지 않음).
    *  - auto_paused → LOST(AutoPauseOverlay, PhaseTimer 정지) / countdown → RECOVERING(기존 복귀 화면, PhaseTimer 정지)
@@ -385,6 +387,7 @@ export default function WorkoutSessionScreen() {
     controllerStateRef.current = null;
     setControllerPhase(null);
     setCountdownSeconds(null);
+    setRecognitionReason(null);
   }, [phase]);
   useEffect(() => {
     if (!sessionReady || pause !== 'none' || autoPaused || waitingForPose || phase.kind === 'completed') return;
@@ -481,6 +484,8 @@ export default function WorkoutSessionScreen() {
     const seconds = state.phase === 'countdown' && state.countdownRemainingMs !== null
       ? Math.max(1, Math.ceil(state.countdownRemainingMs / 1000)) : null;
     setCountdownSeconds(prev => (prev === seconds ? prev : seconds));
+    const reason = state.phase === 'waiting_for_pose' ? state.recognition?.reasonCode ?? null : null;
+    setRecognitionReason(prev => (prev === reason ? prev : reason));
     if (state.phase !== controllerPhaseRef.current) {
       controllerPhaseRef.current = state.phase;
       setControllerPhase(state.phase);
@@ -854,14 +859,25 @@ export default function WorkoutSessionScreen() {
         // (countdown 진입과 같은 갱신에서 값이 채워지며, 없으면 Pose SESSION_CONFIG 기준 시작값. FE 타이머로 대체하지 않음)
         resumeCountdownSeconds={(pause === 'none' && autoPause === 'RECOVERING') || controlledResume
           ? countdownSeconds ?? Math.ceil(SESSION_CONFIG.countdownMs / 1000) : null}
+        // 09: 시작 카운트다운 동안 이번 종목 준비 안내(진행 중 세션 snapshot의 Routine 가이드 원문), 최초 인식 대기 안내
+        guide={current.kind === 'countdown'
+          ? (serverSession.current?.session.routineSnapshot ?? snapshot)?.exercises[current.exerciseIndex]?.preparation?.trim() || null
+          : null}
+        recognitionGuide={current.kind === 'exercising' && waitingForPose ? recognitionGuideText(recognitionReason) : null}
         getPauseSummary={() => {
-          const sets = countSets(current, activeRoutine);
           const spent = currentElapsed();
+          const time = {
+            elapsedSeconds: Math.floor((spent.activeMs + spent.restMs) / 1000),
+            remainingSeconds: estimateRemainingSeconds(current, remainingSeconds, activeRoutine),
+          };
+          // 09: 진행 중인 세션의 snapshot과 실제 완료 기록 기준(저장되지 않은 세트는 완료로 세지 않음)
+          const session = serverSession.current?.session;
+          if (session) return { ...time, ...routineSummaryOf(session, current.exerciseIndex) };
+          const sets = countSets(current, activeRoutine);
           return {
             completedSets: sets.completed,
             totalSets: sets.total,
-            elapsedSeconds: Math.floor((spent.activeMs + spent.restMs) / 1000),
-            remainingSeconds: estimateRemainingSeconds(current, remainingSeconds, activeRoutine),
+            ...time,
             exercises: sessions.map((item, index) => ({
               key: `${item.id}-${index}`,
               name: item.name,
@@ -886,7 +902,8 @@ export default function WorkoutSessionScreen() {
 
   return (
     <>
-      <StatusBar style={sessionReady ? 'light' : 'dark'} />
+      {/* 운동 완료 화면은 밝은 배경 */}
+      <StatusBar style={sessionReady && phase.kind !== 'completed' ? 'light' : 'dark'} />
       {!sessionReady ? (
         <View style={[styles.screen, { paddingTop: insets.top + 30, paddingHorizontal: 20 }]}>
           <Text>{sessionError ?? '운동 세션을 준비하고 있어요.'}</Text>
