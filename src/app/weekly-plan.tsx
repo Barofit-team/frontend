@@ -19,7 +19,7 @@ import {
   PencilIcon,
   StopwatchIcon,
 } from '@/components/home/HomeIcons';
-import { clearLocalWorkout } from '@/services/offlineWorkout';
+import { abandonLocalWorkout } from '@/services/offlineWorkout';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useWeeklyPlanStore } from '@/stores/useWeeklyPlanStore';
 import { useWorkoutDraftStore } from '@/stores/useWorkoutDraftStore';
@@ -60,7 +60,8 @@ export default function WeeklyPlanScreen() {
               const owner = useAuthStore.getState().user?.id;
               useWorkoutDraftStore.getState().clearDraft();
               if (owner) {
-                await clearLocalWorkout(owner, draft.sessionId).catch(() => {});
+                // 서버에도 종료를 남긴다(미완료 세션 ABANDONED, 완료 세트 보존). 오프라인이면 큐에 보관
+                await abandonLocalWorkout(owner, draft.sessionId).catch(() => {});
               }
               router.push('/weekly-plan-edit', { dangerouslySingular: true });
             },

@@ -24,7 +24,7 @@ import {
   StopwatchIcon,
 } from '@/components/home/HomeIcons';
 import { ApiError } from '@/services/api';
-import { clearLocalWorkout, getLocalWorkout } from '@/services/offlineWorkout';
+import { abandonLocalWorkout, getLocalWorkout } from '@/services/offlineWorkout';
 import {
   saveWeeklyPlanChanges,
   toIsoDateString,
@@ -145,7 +145,8 @@ export default function WeeklyPlanEditScreen() {
               const owner = useAuthStore.getState().user?.id;
               useWorkoutDraftStore.getState().clearDraft();
               if (owner) {
-                await clearLocalWorkout(owner, draft.sessionId).catch(() => {});
+                // 서버에도 종료를 남긴다(미완료 세션 ABANDONED, 완료 세트 보존). 오프라인이면 큐에 보관
+                await abandonLocalWorkout(owner, draft.sessionId).catch(() => {});
               }
               action();
             },
@@ -173,12 +174,12 @@ export default function WeeklyPlanEditScreen() {
       if (draft) {
         useWorkoutDraftStore.getState().clearDraft();
         if (owner) {
-          await clearLocalWorkout(owner, draft.sessionId).catch(() => {});
+          await abandonLocalWorkout(owner, draft.sessionId).catch(() => {});
         }
       } else if (owner) {
         const local = await getLocalWorkout(owner).catch(() => null);
         if (local) {
-          await clearLocalWorkout(owner, local.sessionId).catch(() => {});
+          await abandonLocalWorkout(owner, local.sessionId).catch(() => {});
         }
       }
 

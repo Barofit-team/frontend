@@ -31,13 +31,19 @@ function load() {
   assert.equal((await offline.getLocalWorkout('alice')).draft.remainingSeconds, 4);
   assert.equal(await offline.getLocalWorkout('bob'), null);
   online = true; rejected = true;
-  await assert.rejects(offline.flushWorkoutQueue('alice', () => true), e => e.status === 409);
+  // 08-3: 409(같은 요청 재전송으로 해결되지 않는 계약 충돌)는 기록을 삭제·성공 처리하지 않고 보존하며, 이번 실행에서는 그 세션을 다시 보내지 않는다
+  await assert.rejects(offline.flushWorkoutQueue('alice', () => true), e => e.name === 'WorkoutSyncBlockedError' && e.sessionIds.includes('session'));
   assert.equal(await offline.pendingCount('alice'), 2);
+  assert.equal((await offline.blockedSessions('alice')).session.status, 409, '오류 원인 보존');
   rejected = false; calls = [];
+  await offline.flushWorkoutQueue('alice', () => true);
+  assert.equal(calls.length, 0, '같은 실행에서는 보존 세션을 다시 보내지 않음(같은 세션 후속 요청도 보내지 않음)');
+  offline = load(); // 앱 재실행: 보존한 세션을 한 번 더 보낸다(서버 수정 후 복구)
   await Promise.all([offline.flushWorkoutQueue('alice', () => true), offline.flushWorkoutQueue('alice', () => true)]);
   assert.deepEqual(calls.map(c => c.body.revision), [0, 1]);
   assert.deepEqual(calls[0].body, session);
   assert.equal(await offline.pendingCount('alice'), 0);
+  assert.deepEqual(await offline.blockedSessions('alice'), {}, '전송 성공 후 오류 기록 정리');
   assert.equal((await offline.getLocalWorkout('alice')).session.status, 'PAUSED');
   // A response lost after a server commit must replay the identical request.
   const again = { ...next, revision: 2 };

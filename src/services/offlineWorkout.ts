@@ -9,11 +9,16 @@ type SyncItem = { kind?: 'session'; sessionId: string; session: WorkoutSessionSy
 type PoseItem = { kind: 'pose'; sessionId: string; resultId: string; routineSetId: string; performedAt: string; payload: Record<string, unknown> };
 type ReportItem = { kind: 'report'; sessionId: string };
 type QueueItem = SyncItem | PoseItem | ReportItem;
-type Stored = { version: 1; queue: QueueItem[]; current: (SyncItem & { draft: WorkoutDraft }) | null; plan: TodayWorkoutPlan | null; completed?: Record<string, PoseItem> };
+/** 같은 요청을 다시 보내도 결과가 바뀌지 않는 서버 응답을 받은 세션. 기록은 큐에 그대로 두고 원인만 남긴다(기존 저장 데이터에는 없을 수 있다) */
+type BlockedSync = { status: number; code: string; message: string; kind: 'session' | 'pose' | 'report'; at: string };
+type Stored = { version: 1; queue: QueueItem[]; current: (SyncItem & { draft: WorkoutDraft }) | null; plan: TodayWorkoutPlan | null;
+  completed?: Record<string, PoseItem>; blocked?: Record<string, BlockedSync> };
 const key = (owner: string) => `barofit.workout.v1.${owner}`;
 const empty = (): Stored => ({ version: 1, queue: [], current: null, plan: null });
 const locks = new Map<string, Promise<unknown>>();
 const flushes = new Map<string, Promise<void>>();
+/** 이번 앱 실행에서 영구 오류를 받아 건너뛰는 세션(사용자별). 앱을 다시 실행하면 한 번 더 보내 본다(서버 수정 후 복구 가능) */
+const skipped = new Map<string, Set<string>>();
 async function read(owner: string): Promise<Stored> {
   const raw = await AsyncStorage.getItem(key(owner));
   if (!raw) return empty();
@@ -72,23 +77,46 @@ export function settleStaleWorkout(owner: string, nowMs: number = Date.now()): P
     const data = await read(owner);
     const current = data.current;
     if (!current || current.session.status === 'COMPLETED' || current.session.status === 'ABANDONED') return null;
-    const started = timeOf(current.session.startedAt);
-    const startedDay = kstDateOf(started), today = kstDateOf(nowMs);
+    const startedDay = kstDateOf(timeOf(current.session.startedAt)), today = kstDateOf(nowMs);
     if (!startedDay || !today || startedDay >= today) return null;
-    const draft = current.draft.sessionId === current.sessionId ? current.draft : null;
-    const lastActivity = Math.max(started, timeOf(draft?.savedAt) || started,
-      ...current.session.sets.map(set => timeOf(set.completedAt) || started));
-    const active = Math.max(current.session.activeDurationSeconds, draft?.activeDurationSeconds ?? 0);
-    const rest = Math.max(current.session.restDurationSeconds ?? 0, draft?.restDurationSeconds ?? 0);
-    const elapsed = Math.floor((lastActivity - started) / 1000);
-    const session: WorkoutSessionSync = { ...current.session, status: 'ABANDONED', revision: current.session.revision + 1,
-      endedAt: new Date(lastActivity).toISOString(), activeDurationSeconds: active,
-      restDurationSeconds: rest <= elapsed ? rest : null };
-    pushSession(data, current.sessionId, session);
-    data.current = null;
+    abandonCurrent(data);
     await AsyncStorage.setItem(key(owner), JSON.stringify(data));
     return current.sessionId;
   });
+}
+/**
+ * 사용자가 진행 중인 운동을 명시적으로 초기화할 때(주간 계획 변경 등). 날짜와 무관하게 해당 세션의 미완료 상태를 ABANDONED로 끝낸다.
+ * 종료 요청을 큐에 기록한 같은 저장에서 이어하기 정보를 지운다(settleStaleWorkout과 같은 종료 규칙). 이미 종료된 세션이면 이어하기 정보만 지운다.
+ * 해당 세션이 아니거나 이미 정리됐으면 아무것도 하지 않는다(중복 초기화 요청 안전).
+ * @returns ABANDONED 요청을 기록했으면 true
+ */
+export function abandonLocalWorkout(owner: string, sessionId: string): Promise<boolean> {
+  return locked(owner, async () => {
+    const data = await read(owner);
+    const current = data.current;
+    if (!current || current.sessionId !== sessionId) return false;
+    const open = current.session.status !== 'COMPLETED' && current.session.status !== 'ABANDONED';
+    if (open) abandonCurrent(data);
+    else data.current = null;
+    await AsyncStorage.setItem(key(owner), JSON.stringify(data));
+    return open;
+  });
+}
+/** 현재 미완료 세션을 ABANDONED로 큐에 넣고 이어하기 정보를 지운다(저장은 호출한 쪽에서). 종료 규칙은 settleStaleWorkout 설명 참고 */
+function abandonCurrent(data: Stored) {
+  const current = data.current!;
+  const started = timeOf(current.session.startedAt);
+  const draft = current.draft.sessionId === current.sessionId ? current.draft : null;
+  const lastActivity = Math.max(started, timeOf(draft?.savedAt) || started,
+    ...current.session.sets.map(set => timeOf(set.completedAt) || started));
+  const active = Math.max(current.session.activeDurationSeconds, draft?.activeDurationSeconds ?? 0);
+  const rest = Math.max(current.session.restDurationSeconds ?? 0, draft?.restDurationSeconds ?? 0);
+  const elapsed = Math.floor((lastActivity - started) / 1000);
+  const session: WorkoutSessionSync = { ...current.session, status: 'ABANDONED', revision: current.session.revision + 1,
+    endedAt: new Date(lastActivity).toISOString(), activeDurationSeconds: active,
+    restDurationSeconds: rest <= elapsed ? rest : null };
+  pushSession(data, current.sessionId, session);
+  data.current = null;
 }
 export function savePosition(owner: string, sessionId: string, draft: WorkoutDraft) {
   return change(owner, data => { if (data.current?.sessionId === sessionId) data.current.draft = draft; });
@@ -175,27 +203,71 @@ export function queueReportGeneration(owner: string, sessionId: string) {
       data.queue.push({ kind: 'report', sessionId });
   });
 }
-export async function pendingCount(owner: string) { return locked(owner, async () => (await read(owner)).queue.length); }
-/** One worker per user. Remove only the exact request acknowledged by the server. */
+/** 전송 대기 요청 수. sessionId를 주면 그 세션의 요청만 센다(다른 세션의 대기 기록과 구분) */
+export async function pendingCount(owner: string, sessionId?: string) {
+  return locked(owner, async () => (await read(owner)).queue.filter(item => sessionId === undefined || item.sessionId === sessionId).length);
+}
+/** 영구 오류로 보존 중인 세션과 마지막 오류(진단·안내용) */
+export async function blockedSessions(owner: string) { return locked(owner, async () => ({ ...((await read(owner)).blocked ?? {}) })); }
+/**
+ * 같은 요청을 다시 보내도 결과가 바뀌지 않는 응답: 요청 내용·계약 문제(400 잘못된 요청, 404 원본 루틴·세션 없음, 409 계약 충돌).
+ * 409는 Workout의 revision 충돌·동일 revision 다른 내용·종료된 세션 수정·Routine snapshot 불일치, Report의 결과 ID·세트 바인딩 충돌을 모두 포함하며
+ * 어느 쪽이든 같은 요청 재전송으로 해결되지 않는다(같은 요청의 멱등 재전송은 서버가 200으로 답한다). 원인 구분은 서버 detail을 기록해 진단에 쓴다.
+ * 네트워크 오류(0)·인증(401·403)·일시 서버 오류(408·429·5xx)는 해당하지 않으며 기존처럼 전체 전송을 멈추고 나중에 다시 보낸다.
+ */
+export function isPermanentSyncError(error: unknown): error is ApiError {
+  return error instanceof ApiError && (error.status === 400 || error.status === 404 || error.status === 409 || error.status === 422);
+}
+/** 영구 오류로 전송하지 못한 세션이 있음. 기록은 큐에 남아 있다 */
+export class WorkoutSyncBlockedError extends Error {
+  constructor(readonly sessionIds: string[]) {
+    super('일부 운동 기록을 서버에 반영하지 못했어요. 기록은 기기에 보관돼요.');
+    this.name = 'WorkoutSyncBlockedError';
+  }
+}
+/**
+ * One worker per user. Remove only the exact request acknowledged by the server.
+ * 같은 세션의 요청은 큐 순서대로만 보낸다(세션 저장 → AI 결과 → Report). 한 요청이 영구 오류를 받으면 그 세션의 이후 요청도 보내지 않고
+ * 큐에 그대로 두며(삭제·성공 처리·revision 변경 없음) 다른 세션은 계속 보낸다. 일시 오류는 기존처럼 전체를 멈추고 오류를 던진다.
+ * 영구 오류를 받은 세션은 이번 실행 동안 건너뛰고 앱을 다시 실행하면 한 번 더 보낸다. 성공하면 오류 기록을 지운다.
+ * 이번 실행에서 영구 오류를 받은 세션이 있으면 나머지를 모두 보낸 뒤 WorkoutSyncBlockedError를 던진다.
+ */
 export function flushWorkoutQueue(owner: string, isOwner: () => boolean): Promise<void> {
   const existing = flushes.get(owner);
   if (existing) return existing;
   const worker = (async () => {
+    const skip = skipped.get(owner) ?? new Set<string>();
+    skipped.set(owner, skip);
+    const newlyBlocked: string[] = [];
     while (isOwner()) {
-      const item = await locked(owner, async () => (await read(owner)).queue[0]);
-      if (!item || !isOwner()) return;
-      if (item.kind === 'report') {
-        await generateWorkoutReport(item.sessionId, isOwner);
-      } else if (item.kind === 'pose') {
-        await uploadPoseSetResult(item.sessionId, item.resultId, item.routineSetId, item.performedAt, item.payload, isOwner);
-      } else {
-        await syncWorkoutSession(item.sessionId, item.session, isOwner);
+      const item = await locked(owner, async () => (await read(owner)).queue.find(next => !skip.has(next.sessionId)));
+      if (!item || !isOwner()) break;
+      try {
+        if (item.kind === 'report') {
+          await generateWorkoutReport(item.sessionId, isOwner);
+        } else if (item.kind === 'pose') {
+          await uploadPoseSetResult(item.sessionId, item.resultId, item.routineSetId, item.performedAt, item.payload, isOwner);
+        } else {
+          await syncWorkoutSession(item.sessionId, item.session, isOwner);
+        }
+      } catch (error) {
+        if (!isPermanentSyncError(error) || !isOwner()) throw error;
+        skip.add(item.sessionId);
+        newlyBlocked.push(item.sessionId);
+        await change(owner, data => {
+          data.blocked ??= {};
+          data.blocked[item.sessionId] = { status: error.status, code: error.code, message: error.message,
+            kind: item.kind ?? 'session', at: new Date().toISOString() };
+        });
+        continue;
       }
       await change(owner, data => {
-        const first = data.queue[0];
-        if (first && JSON.stringify(first) === JSON.stringify(item)) data.queue.shift();
+        const index = data.queue.findIndex(queued => JSON.stringify(queued) === JSON.stringify(item));
+        if (index >= 0) data.queue.splice(index, 1);
+        if (data.blocked?.[item.sessionId]) delete data.blocked[item.sessionId];
       });
     }
+    if (newlyBlocked.length) throw new WorkoutSyncBlockedError(newlyBlocked);
   })();
   flushes.set(owner, worker);
   void worker.finally(() => { if (flushes.get(owner) === worker) flushes.delete(owner); }).catch(() => {});
