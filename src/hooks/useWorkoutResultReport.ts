@@ -1,11 +1,13 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import { useExerciseScoreHistory } from '@/hooks/useExerciseScoreHistory';
 import { useGeneratedReport } from '@/hooks/useGeneratedReport';
 import { useWorkoutSessionResult } from '@/hooks/useWorkoutSessionResult';
 import type { GeneratedReportScreenParts } from '@/services/generatedReportService';
+import { getReportRecentScores } from '@/services/reportService';
+import { toWorkoutRecordErrorMessage } from '@/services/workoutRecordService';
 import type { WorkoutResultScreenParts } from '@/services/workoutSessionResultService';
-import type { ReportWorkoutResult } from '@/types/report';
+import type { ReportRecentScoreTrend, ReportWorkoutResult } from '@/types/report';
 import type { ExerciseResult, PostureScoreHistory, WorkoutSessionResult } from '@/types/workoutResult';
 
 /**
@@ -17,7 +19,14 @@ export type WorkoutResultView = Pick<WorkoutSessionResult, 'completedSets' | 'to
   Partial<
     Pick<
       WorkoutSessionResult,
-      'exerciseDurationSeconds' | 'restDurationSeconds' | 'totalDurationSeconds' | 'postureScore' | 'nextFocus'
+      | 'exerciseDurationSeconds'
+      | 'restDurationSeconds'
+      | 'totalDurationSeconds'
+      | 'postureScore'
+      | 'routineScore'
+      | 'weeklyWorkoutCount'
+      | 'recentScores'
+      | 'nextFocus'
     >
   >;
 
@@ -36,9 +45,11 @@ export function mergeExerciseResults(
     if (!report || report.exerciseId !== exercise.exerciseId) return { ...exercise };
     return {
       ...exercise,
+      ...(report.durationSeconds !== undefined ? { durationSeconds: report.durationSeconds } : {}),
       ...(report.goodFeedback !== undefined ? { goodFeedback: report.goodFeedback } : {}),
       ...(report.improvementFeedback !== undefined ? { improvementFeedback: report.improvementFeedback } : {}),
       ...(report.nextGoal !== undefined ? { nextGoal: report.nextGoal } : {}),
+      ...(report.feedbackMessages !== undefined ? { feedbackMessages: report.feedbackMessages } : {}),
     };
   });
 }
@@ -71,10 +82,38 @@ export function useWorkoutResultReport(sessionId: string | null) {
   const generatedQuery = useGeneratedReport(sessionId);
   const target = useMemo(() => pickScoreExercise(resultQuery.result), [resultQuery.result]);
   const scoresQuery = useExerciseScoreHistory(target?.exerciseId ?? null, target?.name ?? '');
+  const [recentTrend, setRecentTrend] = useState<ReportRecentScoreTrend | null>(null);
+  const [recentError, setRecentError] = useState<string | null>(null);
+  const [recentAttempt, setRecentAttempt] = useState(0);
+
+  useEffect(() => {
+    if (!sessionId) {
+      setRecentTrend(null);
+      setRecentError(null);
+      return;
+    }
+    let cancelled = false;
+    setRecentError(null);
+    getReportRecentScores(5)
+      .then((data) => {
+        if (!cancelled) setRecentTrend(data);
+      })
+      .catch((error: unknown) => {
+        // 실패를 숨기지 않고 화면이 안내·재시도할 수 있게 오류 문구를 돌려줍니다.
+        if (!cancelled) {
+          setRecentTrend(null);
+          setRecentError(toWorkoutRecordErrorMessage(error, '운동기록'));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId, recentAttempt]);
 
   const resultParts = resultQuery.screenParts;
   const elapsedSeconds = resultQuery.result?.elapsedSeconds ?? null;
   const restSeconds = resultQuery.result?.restSeconds ?? null;
+  const routineScore = generatedQuery.report?.routineScore ?? resultQuery.result?.routineScore ?? null;
   const generatedParts = generatedQuery.screenParts;
   const scoreHistory = scoresQuery.postureScore;
   const targetScore = target?.score ?? null;
@@ -83,15 +122,23 @@ export function useWorkoutResultReport(sessionId: string | null) {
     if (!resultParts) return null;
     const postureScore =
       scoreHistory && targetScore !== null && isCurrentScoreLast(scoreHistory, targetScore) ? scoreHistory : undefined;
+    const recentScores = recentTrend
+      ? [...recentTrend.recentScores]
+          .sort((a, b) => a.completedAt.localeCompare(b.completedAt))
+          .map((item) => ({ date: item.completedAt.slice(0, 10), score: item.score }))
+      : undefined;
     return {
       completedSets: resultParts.summary.completedSets,
       totalReps: resultParts.summary.totalReps,
       exercises: mergeExerciseResults(resultParts, generatedParts),
       ...(elapsedSeconds !== null ? { totalDurationSeconds: elapsedSeconds } : {}),
       ...(restSeconds !== null ? { restDurationSeconds: restSeconds } : {}),
+      ...(routineScore !== null ? { routineScore } : {}),
+      ...(recentTrend ? { weeklyWorkoutCount: recentTrend.weeklyWorkoutCount } : {}),
+      ...(recentScores && recentScores.length > 0 ? { recentScores } : {}),
       ...(postureScore ? { postureScore } : {}),
     };
-  }, [resultParts, generatedParts, elapsedSeconds, restSeconds, scoreHistory, targetScore]);
+  }, [resultParts, generatedParts, elapsedSeconds, restSeconds, routineScore, recentTrend, scoreHistory, targetScore]);
 
   return {
     view,
@@ -119,6 +166,11 @@ export function useWorkoutResultReport(sessionId: string | null) {
       isLoading: scoresQuery.isLoading,
       error: scoresQuery.error,
       retry: scoresQuery.retry,
+    },
+    /** 최근 점수 추이·이번 주 횟수(/recent-scores). 실패해도 다른 영역 표시는 막지 않습니다 */
+    recent: {
+      error: recentError,
+      retry: () => setRecentAttempt((n) => n + 1),
     },
   };
 }

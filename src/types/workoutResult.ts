@@ -27,6 +27,10 @@ export interface ExerciseResult {
   /** 주요 자세 오류 발생 횟수 */
   errorCount?: number;
   score?: number;
+  /** 운동 수행 시간(초) */
+  durationSeconds?: number;
+  /** AI 자세 피드백 문구 목록 */
+  feedbackMessages?: string[];
 }
 
 export interface PostureScorePoint {
@@ -53,6 +57,12 @@ export interface WorkoutSessionResult {
   exercises: ExerciseResult[];
   /** 실제 점수가 없으면 비워 둡니다 (임의 점수를 표시하지 않음) */
   postureScore?: PostureScoreHistory;
+  /** 오늘의 전체 자세 점수 (0~100) */
+  routineScore?: number;
+  /** 이번 주 수행한 운동 횟수 */
+  weeklyWorkoutCount?: number;
+  /** 최근 세션 전체 점수 추이 (날짜순) */
+  recentScores?: PostureScorePoint[];
   /** 다음 운동에서 집중할 한 가지 */
   nextFocus?: string;
 }

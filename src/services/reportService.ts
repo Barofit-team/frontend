@@ -15,6 +15,7 @@ import type {
   ReportFeedback,
   ReportGenerated,
   ReportPeriodSummary,
+  ReportRecentScoreTrend,
   ReportRecordCard,
   ReportRecordPage,
   ReportScoreHistory,
@@ -91,6 +92,11 @@ export function getExerciseScoreHistory(exerciseId: string, limit = 3): Promise<
     `${BASE_PATH}/exercises/${encodeURIComponent(exerciseId)}/scores?limit=${limit}`,
     { auth: true }
   );
+}
+
+/** GET /recent-scores — 이번 주 운동 횟수 및 최근 세션 점수 추이(최신순). limit: 1~30 */
+export function getReportRecentScores(limit = 5): Promise<ReportRecentScoreTrend> {
+  return apiFetch<ReportRecentScoreTrend>(`${BASE_PATH}/recent-scores?limit=${limit}`, { auth: true });
 }
 
 /** GET /daily — 하루(KST) 동안 업로드된 AI 세트 결과 집계. date: 'YYYY-MM-DD'. 결과가 없으면 모든 값 0 */

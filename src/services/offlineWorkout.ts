@@ -93,16 +93,51 @@ export function commitPoseSet(owner: string, item: Omit<PoseItem, 'kind'>) {
       return;
     }
     if (current.session.sets.some(set => set.routineSetId === item.routineSetId)) throw new Error('이미 수행한 세트입니다.');
+    const reportFields = extractPoseReportFields(summary);
     const set = { routineSetId: item.routineSetId, actualReps: count as number | null,
-      actualDurationSeconds: hold === null ? null : Math.floor(hold as number), feedbackCodes: [], errorCounts: {},
+      actualDurationSeconds: hold === null ? null : Math.floor(hold as number),
+      feedbackCodes: reportFields.feedbackCodes, errorCounts: reportFields.errorCounts,
       feedbackText: null, modelVersion: typeof payload.engineVersion === 'string' ? payload.engineVersion : null,
-      referenceModelId: null, trackingAvailablePct: null, completedAt: item.performedAt };
+      referenceModelId: null, trackingAvailablePct: reportFields.trackingAvailablePct, completedAt: item.performedAt };
     const next = { ...current.session, revision: current.session.revision + 1, sets: [...current.session.sets, set] };
     data.current = { ...current, session: next };
     data.queue.push({ sessionId: item.sessionId, session: next }, request);
     data.completed ??= {};
     data.completed[key] = request;
   });
+}
+
+function extractPoseReportFields(summary: Record<string, unknown>): {
+  feedbackCodes: string[];
+  errorCounts: Record<string, number>;
+  trackingAvailablePct: number | null;
+} {
+  const details = summary.details;
+  if (!details || typeof details !== 'object' || Array.isArray(details)) {
+    return { feedbackCodes: [], errorCounts: {}, trackingAvailablePct: null };
+  }
+  const report = (details as Record<string, unknown>).report;
+  if (!report || typeof report !== 'object' || Array.isArray(report)) {
+    return { feedbackCodes: [], errorCounts: {}, trackingAvailablePct: null };
+  }
+  const r = report as Record<string, unknown>;
+  const codePattern = /^[A-Z_]{1,50}$/;
+  const feedbackCodes = Array.isArray(r.feedbackCodes)
+    ? r.feedbackCodes.filter((c): c is string => typeof c === 'string' && codePattern.test(c)).slice(0, 20)
+    : [];
+  const errorCounts: Record<string, number> = {};
+  if (r.errorCounts && typeof r.errorCounts === 'object' && !Array.isArray(r.errorCounts)) {
+    for (const [k, v] of Object.entries(r.errorCounts as Record<string, unknown>)) {
+      if (Object.keys(errorCounts).length >= 20) break;
+      if (codePattern.test(k) && typeof v === 'number' && Number.isInteger(v) && v >= 0) {
+        errorCounts[k] = v;
+      }
+    }
+  }
+  const pct = r.trackingAvailablePct;
+  const trackingAvailablePct =
+    typeof pct === 'number' && Number.isFinite(pct) && pct >= 0 && pct <= 100 ? pct : null;
+  return { feedbackCodes, errorCounts, trackingAvailablePct };
 }
 /** Report generation runs only after the terminal session and every queued set upload. */
 export function queueReportGeneration(owner: string, sessionId: string) {
