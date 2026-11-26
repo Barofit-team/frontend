@@ -79,7 +79,7 @@ export function createEditDraft(
     const target = item.targets?.[i];
     return {
       reps: measurementType === 'REPS' ? clampReps(target?.targetReps ?? fallbackReps) : null,
-      seconds: clampSeconds(target?.targetDurationSeconds ?? EXERCISE_DURATION_SECONDS),
+      seconds: clampSeconds(target?.timeLimitSeconds ?? target?.targetDurationSeconds ?? EXERCISE_DURATION_SECONDS),
       locked: i < locked,
     };
   });
@@ -154,10 +154,14 @@ export function applyEditToRoutine(routine: readonly RoutineItem[], draft: Exerc
         targetDurationSeconds: prev?.targetDurationSeconds ?? null,
         restSeconds: prev?.restSeconds ?? REST_DURATION_SECONDS,
         targetReps: prev?.targetReps ?? null,
+        ...(prev?.timeLimitSeconds != null ? { timeLimitSeconds: prev.timeLimitSeconds } : {}),
       };
       if (!set || set.locked) return base;
       return {
-        targetDurationSeconds: set.seconds,
+        ...base,
+        ...(draft.measurementType === 'REPS' && prev?.timeLimitSeconds != null
+          ? { timeLimitSeconds: set.seconds }
+          : { targetDurationSeconds: set.seconds }),
         restSeconds: draft.restSeconds,
         targetReps: draft.measurementType === 'REPS' ? set.reps : base.targetReps,
       };

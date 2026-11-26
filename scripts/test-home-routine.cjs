@@ -1,0 +1,41 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const ts = require('../node_modules/typescript');
+function load(file,deps={}) {
+ const module={exports:{}};
+ const code=ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
+ new Function('require','module','exports',code)(name=>{if(!(name in deps))throw Error(name);return deps[name]},module,module.exports);return module.exports;
+}
+(async()=>{
+ const edit=load('src/components/home/routineEditing.ts');
+ assert.equal(edit.formatDuration(90),'01:30');
+ for(let seconds=10;seconds<=3600;seconds++)assert.equal(edit.parseDuration(edit.formatDuration(seconds)),seconds);
+ const set={id:'s1',order:1,targetReps:20,targetDurationSeconds:null,weightKg:2.5,restSeconds:30};
+ const a={id:'e1',exerciseId:'push-up',measurementType:'REPS',order:1,sets:[set]},b={id:'e2',exerciseId:'plank',measurementType:'DURATION',order:2,sets:[{...set,id:'s2',targetReps:null,targetDurationSeconds:45}]};
+ const source={id:'template',updatedAt:'2026-11-25T01:00:00Z',exercises:[a,b]};
+ const frozen=JSON.stringify(source),draft=edit.editableRoutine(source);
+ assert.equal(draft.exercises[0].sets[0].timeLimitSeconds,60);
+ assert.equal(draft.exercises[1].sets[0].timeLimitSeconds,null);
+ const moved=edit.moveExercise(draft,'e1',1);
+ assert.deepEqual(moved.exercises.map(e=>e.id),['e2','e1']);
+ assert.deepEqual(moved.exercises.map(e=>e.order),[1,2]);
+ const reduced=edit.withoutExercise(moved,'e1');assert.equal(reduced.exercises.length,1);
+ assert.equal(edit.withoutExercise(reduced,'e2'),reduced);
+ assert.equal(JSON.stringify(source),frozen);
+ assert.equal(edit.parseDuration('01:30'),90);assert.equal(edit.parseDuration('00:09'),null);assert.equal(edit.parseDuration('01:99'),null);assert.equal(edit.parseDuration('60:00'),3600);assert.equal(edit.parseDuration('61:00'),null);
+ let request;
+ const service=load('src/services/dailyRoutineService.ts',{'@/services/api':{apiFetch:async(path,init)=>{request={path,...init,body:JSON.parse(init.body)};return {date:'2026-11-25',routine:draft}}}});
+ await service.saveDailyRoutine('2026-11-25',source,moved,'previous-assigned');
+ assert.equal(request.path,'/api/v1/workout-plans/2026-11-25/customization');assert.equal(request.method,'PUT');assert.equal(request.auth,true);
+ assert.equal(request.body.expectedRoutineId,'previous-assigned');assert.equal(request.body.sourceUpdatedAt,source.updatedAt);
+ assert.deepEqual(request.body.exercises.map(e=>e.sourceRoutineExerciseId),['e2','e1']);
+ const timed=request.body.exercises[0].sets[0],reps=request.body.exercises[1].sets[0];
+ assert.equal(timed.targetReps,null);assert.equal(timed.targetDurationSeconds,45);assert.equal(timed.timeLimitSeconds,null);
+ assert.equal(reps.targetDurationSeconds,null);assert.equal(reps.timeLimitSeconds,60);assert.equal(reps.targetReps,20);assert.equal(reps.weightKg,2.5);
+ const config=load('src/components/workout-session/sessionConfig.ts');
+ const flow=load('src/components/workout-session/sessionFlow.ts',{'./sessionConfig':config});
+ const routine=[{exerciseId:'push-up',sets:1,interExerciseRestSeconds:80,targets:[{targetReps:20,targetDurationSeconds:null,timeLimitSeconds:90,restSeconds:30}]},{exerciseId:'plank',sets:1,targets:[{targetDurationSeconds:45,restSeconds:20}]}];
+ assert.equal(flow.phaseDurationSeconds({kind:'exercising',exerciseIndex:0,set:1},routine),90);
+ assert.equal(flow.phaseDurationSeconds({kind:'countdown',exerciseIndex:1,set:1},routine),80);
+ console.log('PASS: immutable date-only edit payload, reordered/deleted exercises, last exercise retained, strict time parsing, separate rep time limits and set rest, actual session timer and inter-exercise rest.');
+})().catch(e=>{console.error(e);process.exitCode=1});

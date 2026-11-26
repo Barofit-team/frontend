@@ -249,7 +249,7 @@ export default function WorkoutSessionScreen() {
 
   const activeRoutine = useMemo<readonly RoutineItem[]>(
     () =>
-      sessions.map((s, index) => ({ exerciseId: s.exerciseId, sets: s.sets, targets: snapshot?.exercises[index]?.sets })),
+      sessions.map((s, index) => ({ exerciseId: s.exerciseId, sets: s.sets, interExerciseRestSeconds: snapshot?.interExerciseRestSeconds, targets: snapshot?.exercises[index]?.sets })),
     [sessions, snapshot],
   );
 

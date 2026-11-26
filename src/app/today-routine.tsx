@@ -1,10 +1,10 @@
 import { router, useFocusEffect } from 'expo-router';
+import { usePreventRemove } from 'expo-router/react-navigation';
 import { StatusBar } from 'expo-status-bar';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -15,943 +15,593 @@ import {
   SafeAreaView,
   useSafeAreaInsets,
 } from 'react-native-safe-area-context';
-
+import { ArrowLeftIcon } from '@/components/home/HomeIcons';
+import { ExerciseSetSheet } from '@/components/home/ExerciseSetSheet';
+import { RoutineExerciseRow } from '@/components/home/RoutineExerciseRow';
+import { RoutineMetrics } from '@/components/home/RoutineMetrics';
+import { confirmAction } from '@/components/home/confirmAction';
 import {
-  ArrowLeftIcon,
-  MinusIcon,
-  PlusIcon,
-} from '@/components/home/HomeIcons';
-import { apiFetch } from '@/services/api';
-import { getTodayWorkoutPlan } from '@/services/workoutSessionService';
-import { cachePlan, clearLocalWorkout, getCachedPlan, getLocalWorkout, isOffline, pendingCount } from '@/services/offlineWorkout';
-import { toIsoDateString } from '@/services/weeklyPlanService';
+  editableRoutine,
+  formatDuration,
+  moveExercise,
+  withoutExercise,
+} from '@/components/home/routineEditing';
+import {
+  getWorkoutPlanDate,
+  saveDailyRoutine,
+} from '@/services/dailyRoutineService';
+import {
+  cachePlan,
+  getCachedPlan,
+  getLocalWorkout,
+  isOffline,
+  pendingCount,
+} from '@/services/offlineWorkout';
+import { assignWorkoutPlan } from '@/services/routineService';
+import {
+  estimateRoutineMetrics,
+  toIsoDateString,
+} from '@/services/weeklyPlanService';
 import { useAuthStore } from '@/stores/useAuthStore';
+import { useTodayRoutineStore } from '@/stores/useTodayRoutineStore';
 import { useWorkoutDraftStore } from '@/stores/useWorkoutDraftStore';
-import type { BackendRoutineDetail } from '@/types/weeklyPlan';
-import {
-  useTodayRoutineStore,
-  type TodayRoutineSession,
-} from '@/stores/useTodayRoutineStore';
-
-const MIN_SETS = 1;
-const MAX_SETS = 15;
-const MIN_REPS = 1;
-const MAX_REPS = 100;
+import { useWeeklyPlanStore } from '@/stores/useWeeklyPlanStore';
+import type {
+  RoutineDetail,
+  RoutineExerciseDetail,
+  WorkoutPlanDay,
+} from '@/types/routine';
 
 export default function TodayRoutineScreen() {
   const insets = useSafeAreaInsets();
-
-  const owner = useAuthStore(state => state.user?.id);
-  const savedWorkout = useWorkoutDraftStore((state) => state.draft);
-  const routineTitle = useTodayRoutineStore((state) => state.routineTitle);
-  const tags = useTodayRoutineStore((state) => state.tags);
-  const sessions = useTodayRoutineStore((state) => state.sessions);
-  const routineSnapshot = useTodayRoutineStore((state) => state.routineSnapshot);
-  const planDate = useTodayRoutineStore((state) => state.planDate);
-  const setPlan = useTodayRoutineStore((state) => state.setPlan);
-  const updateSession = useTodayRoutineStore((state) => state.updateSession);
-  const [pending, setPending] = useState(0);
+  const owner = useAuthStore((s) => s.user?.id);
+  const source = useTodayRoutineStore((s) => s.routineSnapshot);
+  const date =
+    useTodayRoutineStore((s) => s.planDate) ?? toIsoDateString(new Date());
+  const origin = useTodayRoutineStore((s) => s.selectionOrigin);
+  const savedWorkout = useWorkoutDraftStore((s) => s.draft);
+  const [draft, setDraft] = useState<RoutineDetail | null>(() =>
+    source ? editableRoutine(source) : null,
+  );
+  const [serverDay, setServerDay] = useState<WorkoutPlanDay | null>(null);
+  const [expectedId, setExpectedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  useEffect(() => {
-    if (!owner) return;
-    let active = true;
-    const refresh = () => void pendingCount(owner).then(count => { if (active) setPending(count); }).catch(() => {});
-    refresh();
-    const timer = setInterval(refresh, 5000);
-    return () => { active = false; clearInterval(timer); };
-  }, [owner]);
+  const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const [pending, setPending] = useState(0);
+  const [reorder, setReorder] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const [editing, setEditing] = useState<RoutineExerciseDetail | null>(null);
+  const [leaving, setLeaving] = useState(false);
+  const savingLock = useRef(false);
+  const today = toIsoDateString(new Date());
+  const dirty = Boolean(
+    source &&
+      draft &&
+      JSON.stringify(editableRoutine(source)) !== JSON.stringify(draft),
+  );
+  useEffect(() => {
+    if (source) setDraft(editableRoutine(source));
+  }, [source]);
+  const disableRemovalPrevention = usePreventRemove(
+    dirty && !leaving,
+    ({ repeat }) => {
+      if (savingLock.current) return;
+      void confirmAction(
+        '편집 중인 루틴',
+        '저장하지 않은 변경사항을 버리고 나갈까요?',
+        '나가기',
+      ).then((ok) => {
+        if (ok) {
+          setLeaving(true);
+          repeat();
+        }
+      });
+    },
+  );
 
   useFocusEffect(
     useCallback(() => {
       let active = true;
-      const { routineSnapshot: currentSnapshot, sessions: currentSessions } =
-        useTodayRoutineStore.getState();
-
-      // 이미 스토어에 루틴 스냅샷과 세션 데이터가 준비되어 있다면 그대로 사용하고 불필요한 재조회를 생략합니다.
-      if (currentSnapshot && currentSessions.length > 0) {
-        setLoading(false);
-        setLoadError(null);
-        if (owner) {
-          void getLocalWorkout(owner).then((local) => {
-            if (!active) return;
-            if (local && (local.session.status === 'COMPLETED' || local.session.status === 'ABANDONED')) {
-              void clearLocalWorkout(owner, local.sessionId);
-              useWorkoutDraftStore.getState().clearDraft();
-            } else if (local) {
-              useWorkoutDraftStore.getState().saveDraft(local.draft);
-            }
-          }).catch(() => {});
-        }
-        return () => {
-          active = false;
-        };
-      }
-
+      setLeaving(false);
       setLoading(true);
+      setError(null);
       void (async () => {
         if (owner) {
           const local = await getLocalWorkout(owner);
-          if (local && (local.session.status === 'COMPLETED' || local.session.status === 'ABANDONED')) {
-            await clearLocalWorkout(owner, local.sessionId);
-            if (active) useWorkoutDraftStore.getState().clearDraft();
-          } else if (active && local) {
+          if (!active || useAuthStore.getState().user?.id !== owner) return;
+          if (
+            local &&
+            local.session.status !== 'COMPLETED' &&
+            local.session.status !== 'ABANDONED'
+          )
             useWorkoutDraftStore.getState().saveDraft(local.draft);
-          }
+          else useWorkoutDraftStore.getState().clearDraft();
+          setPending(await pendingCount(owner));
         }
         try {
-          const day = await getTodayWorkoutPlan();
-          if (owner && day) await cachePlan(owner, day);
-          if (active) {
-            setPlan(day.routine, day.date);
-            setLoadError(null);
-          }
-        } catch (error) {
-          const cached = (owner && isOffline(error)) ? await getCachedPlan(owner) : null;
-          const today = toIsoDateString(new Date());
-          if (active && cached?.date === today) {
-            setPlan(cached.routine, cached.date);
-            setLoadError('오프라인: 저장된 오늘의 계획을 보여드려요.');
-          } else if (active) {
-            setPlan(null, today);
-            setLoadError('오늘의 계획을 불러오지 못했어요. 온라인에서 계획을 먼저 확인해 주세요.');
-          }
-        } finally {
-          if (active) setLoading(false);
+          const day = await getWorkoutPlanDate(date);
+          if (!active || useAuthStore.getState().user?.id !== owner) return;
+          setServerDay(day);
+          setExpectedId(day.routine?.id ?? null);
+          if (!useTodayRoutineStore.getState().routineSnapshot)
+            useTodayRoutineStore.getState().setPlan(day.routine, date);
+        } catch (e) {
+          const cached =
+            owner && isOffline(e) ? await getCachedPlan(owner) : null;
+          if (!active) return;
+          if (cached?.date === date && cached.routine) {
+            if (!useTodayRoutineStore.getState().routineSnapshot)
+              useTodayRoutineStore.getState().setPlan(cached.routine, date);
+            setExpectedId(cached.routine.id);
+            setError(
+              '오프라인이에요. 저장한 운동은 이어할 수 있고 루틴 편집은 연결 후 가능해요.',
+            );
+          } else
+            setError(
+              '운동 계획을 확인하지 못했어요. 연결 상태를 확인하고 다시 열어주세요.',
+            );
         }
-      })().catch(() => {
-        if (active) setLoadError('기기에 저장된 운동을 읽지 못했어요.');
-      });
-
+      })()
+        .catch(() => {
+          if (active) setError('기기에 저장된 운동을 확인하지 못했어요.');
+        })
+        .finally(() => {
+          if (active) setLoading(false);
+        });
       return () => {
         active = false;
       };
-    }, [owner, setPlan]),
+    }, [owner, date]),
   );
 
-  const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
-  const [draftSets, setDraftSets] = useState<number>(3);
-  const [draftReps, setDraftReps] = useState<number>(20);
-
-  const editingSession =
-    sessions.find((item) => item.id === editingSessionId) ?? null;
-
-  const handleBack = () => {
-    if (router.canGoBack()) {
-      router.back();
-      return;
-    }
-    router.replace('/(tabs)/home');
+  const back = () => {
+    if (router.canGoBack()) router.back();
+    else router.replace('/(tabs)/home');
   };
-
-  const handleOpenSessionSheet = (session: TodayRoutineSession) => {
-    if (savedWorkout) {
-      Alert.alert(
-        '운동 진행 중',
-        '운동이 중단된 상태에서는 당일 루틴의 상세 설정을 변경할 수 없습니다.',
-      );
-      return;
-    }
-    setEditingSessionId(session.id);
-    setDraftSets(session.sets);
-    setDraftReps(session.reps);
-  };
-
-  const handleCloseSessionSheet = () => {
-    setEditingSessionId(null);
-  };
-
-  const handleSaveSession = async () => {
-    if (!editingSession || !routineSnapshot || !planDate || saving) return;
-    setSaving(true);
-    try {
-      const goal = editingSession.measurementType === 'DURATION'
-        ? { targetDurationSeconds: draftReps } : { targetReps: draftReps };
-      let updated: BackendRoutineDetail;
-      if (routineSnapshot.type === 'TEMPLATE') {
-        updated = await apiFetch<BackendRoutineDetail>('/api/v1/routines', {
-          method: 'POST', auth: true, body: JSON.stringify({ templateId: routineSnapshot.id,
-            exercises: [{ templateExerciseId: editingSession.id, setCount: draftSets, ...goal }] }),
-        });
-        await apiFetch(`/api/v1/workout-plans/${planDate}`, {
-          method: 'PUT', auth: true, body: JSON.stringify({ routineId: updated.id }),
-        });
-      } else {
-        updated = await apiFetch<BackendRoutineDetail>(`/api/v1/routines/${routineSnapshot.id}`, {
-          method: 'PATCH', auth: true, body: JSON.stringify({ exercises: [
-            { routineExerciseId: editingSession.id, setCount: draftSets, ...goal },
-          ] }),
-        });
-      }
-      setPlan(updated, planDate);
-      if (owner) await cachePlan(owner, { date: planDate, planId: null, routine: updated });
-      setEditingSessionId(null);
-    } catch {
-      Alert.alert('저장 실패', '운동 설정을 저장하지 못했어요. 다시 시도해 주세요.');
-    } finally { setSaving(false); }
-  };
-
-  const handleRevertSession = () => {
-    if (!editingSession) return;
-    setDraftSets(editingSession.defaultSets);
-    setDraftReps(editingSession.defaultReps);
-  };
-
-  const handleResumeWorkout = async () => {
-    if (!savedWorkout || saving) return;
-    setSaving(true);
-    try {
-      if (!owner) throw new Error('로그인이 필요해요.');
-      const local = await getLocalWorkout(owner);
-      if (!local || local.sessionId !== savedWorkout.sessionId) throw new Error('저장된 운동이 없어요.');
-      setPlan(local.session.routineSnapshot, planDate ?? '');
-      router.push({ pathname: '/workout-session', params: { resume: '1' } });
-    } catch {
-      Alert.alert('이어하기 실패', '저장된 운동 세션을 불러오지 못했어요.');
-    } finally { setSaving(false); }
-  };
-
-  const handleResetProgress = () => {
-    if (!savedWorkout || saving) return;
+  const showError = (e: unknown) =>
     Alert.alert(
-      '진행도 초기화',
-      '저장된 운동 진행도를 초기화하시겠습니까? 이전 운동 기록은 삭제되며 처음부터 다시 시작합니다.',
-      [
-        { text: '취소', style: 'cancel' },
-        {
-          text: '초기화',
-          style: 'destructive',
-          onPress: async () => {
-            setSaving(true);
-            try {
-              if (owner && savedWorkout.sessionId) {
-                await clearLocalWorkout(owner, savedWorkout.sessionId).catch(() => {});
-              }
-              useWorkoutDraftStore.getState().clearDraft();
-            } catch {
-              Alert.alert('초기화 실패', '운동 진행도를 초기화하지 못했어요.');
-            } finally {
-              setSaving(false);
-            }
-          },
-        },
-      ],
+      '저장하지 못했어요',
+      e instanceof Error ? e.message : '잠시 후 다시 시도해 주세요.',
     );
+  const persist = async (
+    candidate: RoutineDetail,
+    force = false,
+  ): Promise<WorkoutPlanDay> => {
+    if (!owner || !source || loading || savingLock.current || error)
+      throw new Error('연결 상태와 운동 계획을 먼저 확인해 주세요.');
+    savingLock.current = true;
+    setSaving(true);
+    try {
+      const changed =
+        JSON.stringify(editableRoutine(source)) !== JSON.stringify(candidate);
+      const day =
+        changed || force || origin === 'selected'
+          ? await saveDailyRoutine(date, source, candidate, expectedId)
+          : expectedId !== source.id
+            ? await assignWorkoutPlan(date, source.id)
+            : await getWorkoutPlanDate(date);
+      if (useAuthStore.getState().user?.id !== owner)
+        throw new Error('로그인 계정이 변경됐어요.');
+      if (!day.routine)
+        throw new Error('저장된 루틴이 없어요. 다시 확인해 주세요.');
+      useTodayRoutineStore.getState().setPlan(day.routine, date);
+      setServerDay(day);
+      setDraft(editableRoutine(day.routine));
+      setExpectedId(day.routine.id);
+      await cachePlan(owner, day);
+      void useWeeklyPlanStore.getState().loadWeeklyPlan();
+      return day;
+    } finally {
+      savingLock.current = false;
+      setSaving(false);
+    }
   };
-
-  const handleStartWorkout = () => {
-    if (savedWorkout) { Alert.alert('진행 중인 운동', '저장된 운동을 먼저 이어서 진행해 주세요.'); return; }
-    if (!routineSnapshot || loading || saving) { Alert.alert('운동 계획 없음', '오늘의 운동을 먼저 계획해 주세요.'); return; }
-    router.push('/workout-preparation', { dangerouslySingular: true });
+  const start = async () => {
+    if (savingLock.current) return;
+    if (savedWorkout) {
+      try {
+        const local = owner ? await getLocalWorkout(owner) : null;
+        if (!local || local.sessionId !== savedWorkout.sessionId)
+          throw new Error('저장한 운동을 찾지 못했어요.');
+        useTodayRoutineStore
+          .getState()
+          .setPlan(local.session.routineSnapshot, date);
+        setLeaving(true);
+        disableRemovalPrevention();
+        router.push({ pathname: '/workout-session', params: { resume: '1' } });
+      } catch (e) {
+        showError(e);
+      }
+      return;
+    }
+    if (!draft) return;
+    if (date !== today) {
+      if (dirty) {
+        try {
+          await persist(draft);
+        } catch (e) {
+          showError(e);
+        }
+      }
+      return;
+    }
+    try {
+      await persist(draft);
+      setLeaving(true);
+      disableRemovalPrevention();
+      router.push('/workout-preparation', { dangerouslySingular: true });
+    } catch (e) {
+      showError(e);
+    }
   };
-
+  const toggleReorder = async () => {
+    if (reorder && dirty && draft) {
+      try {
+        await persist(draft);
+        setReorder(false);
+      } catch (e) {
+        showError(e);
+      }
+    } else setReorder((x) => !x);
+  };
+  const localMetrics = draft ? estimateRoutineMetrics(draft) : null;
+  const metrics =
+    !dirty && serverDay?.routine?.id === draft?.id
+      ? {
+          durationMinutes:
+            serverDay?.estimatedMinutes ?? localMetrics?.durationMinutes ?? 0,
+          calories: serverDay?.estimatedKcal ?? null,
+        }
+      : localMetrics;
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
       <StatusBar style="dark" />
-
-      {/* 상단 네비게이션 바 (뒤로가기) */}
       <View style={styles.header}>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="뒤로 가기"
-          hitSlop={8}
-          onPress={handleBack}
-          style={({ pressed }) => [
-            styles.circleButton,
-            pressed && styles.pressed,
-          ]}>
-          <ArrowLeftIcon color="#111111" size={18} />
+          onPress={back}
+          style={styles.circle}
+        >
+          <ArrowLeftIcon color="#0A2E70" size={19} />
         </Pressable>
       </View>
-
       <ScrollView
-        style={styles.scrollView}
-        contentContainerStyle={[
-          styles.scrollContent,
-          { paddingBottom: Math.max(insets.bottom, 16) + 92 },
-        ]}
-        showsVerticalScrollIndicator={false}>
-        {/* 상단 루틴 제목 및 태그 */}
+        scrollEnabled={!dragging}
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={{
+          paddingBottom: Math.max(insets.bottom, 16) + 100,
+        }}
+      >
         <View style={styles.titleSection}>
-          <Text style={styles.pageTitle}>오늘의 운동 루틴</Text>
-          <Text style={styles.routineSubtitle}>{loading ? '운동 계획을 불러오는 중이에요.' : (loadError ?? routineTitle)}</Text>
-          {pending > 0 && <Text style={styles.routineSubtitle}>기기에 저장됨 · 서버 동기화 대기 중</Text>}
-          <Text style={styles.assessmentNotice}>판정 로직 상태를 표시해요. 앱에서 자세 측정 기능을 연결하고 있어요.</Text>
-
-          <View style={styles.tagRow}>
-            {tags.map((tag) => (
-              <View key={tag} style={styles.tagChip}>
-                <Text style={styles.tagChipText}>{tag}</Text>
-              </View>
-            ))}
-          </View>
-        </View>
-
-        {savedWorkout && (
-          <View style={styles.resumeActionRow}>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="저장한 운동 이어하기"
-              disabled={saving}
-              onPress={handleResumeWorkout}
-              style={({ pressed }) => [
-                styles.resumeButton,
-                pressed && styles.pressed,
-              ]}>
-              <Text style={styles.resumeButtonText}>저장한 운동 이어하기</Text>
-            </Pressable>
-
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="진행도 초기화"
-              disabled={saving}
-              onPress={handleResetProgress}
-              style={({ pressed }) => [
-                styles.resetProgressButton,
-                pressed && styles.pressed,
-              ]}>
-              <Text style={styles.resetProgressButtonText}>진행도 초기화</Text>
-            </Pressable>
-          </View>
-        )}
-
-        {/* 로딩 / 빈 상태 / 운동 세션 리스트 */}
-        {loading ? (
-          <View style={styles.loadingContainer}>
-            <ActivityIndicator size="small" color="#059669" />
-            <Text style={styles.loadingText}>운동 계획을 불러오는 중이에요...</Text>
-          </View>
-        ) : sessions.length === 0 ? (
-          <View style={styles.emptyContainer}>
-            <Text style={styles.emptyTitle}>오늘 배정된 운동이 없어요</Text>
-            <Text style={styles.emptyDesc}>
-              주간 계획에서 원하는 운동을 배정해 보세요.
-            </Text>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="운동 계획 배정하기"
-              onPress={() => router.push('/weekly-plan-edit', { dangerouslySingular: true })}
-              style={({ pressed }) => [
-                styles.emptyActionButton,
-                pressed && styles.pressed,
-              ]}>
-              <Text style={styles.emptyActionButtonText}>운동 계획 배정하기</Text>
-            </Pressable>
-          </View>
-        ) : (
-          <View style={styles.sessionList}>
-            {sessions.map((session, index) => (
-              <React.Fragment key={session.id}>
-                {/* 운동 종목 카드 */}
-                <View style={styles.exerciseCard}>
-                  <Text style={styles.exerciseTitle}>{session.name}</Text>
-                  <Text style={styles.assessmentStatus}>
-                    {session.assessmentStatus === 'READY' ? '판정 로직 준비' : session.assessmentStatus ? '판정 로직 준비 중' : '판정 상태 확인 중'}
-                  </Text>
-
-                  <View style={styles.exerciseMetaGroup}>
-                    <Text style={styles.exerciseVolumeText}>
-                      {`${session.reps}${session.measurementType === 'DURATION' ? '초' : '회'} × ${session.sets}세트`}
-                    </Text>
-                    <Text style={styles.exerciseRestText}>
-                      {`세트 간 ${session.restSeconds}초 휴식`}
-                    </Text>
-                  </View>
-
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel={`${session.name} 세트·횟수 조절`}
-                    disabled={Boolean(savedWorkout) || saving}
-                    onPress={() => handleOpenSessionSheet(session)}
-                    style={({ pressed }) => [
-                      styles.adjustButton,
-                      Boolean(savedWorkout) && styles.disabledAdjustButton,
-                      pressed && !savedWorkout && styles.pressed,
-                    ]}>
-                    <Text
-                      style={[
-                        styles.adjustButtonText,
-                        Boolean(savedWorkout) && styles.disabledAdjustButtonText,
-                      ]}>
-                      {savedWorkout ? '조절 불가 (운동 진행 중)' : '세트·횟수 조절'}
-                    </Text>
-                  </Pressable>
-                </View>
-
-                {/* 종목 간 휴식 카드 */}
-                {index < sessions.length - 1 ? (
-                  <View style={styles.restCard}>
-                    <Text style={styles.restTitle}>휴식</Text>
-                    <Text style={styles.restDesc}>
-                      {`종목 간 ${routineSnapshot?.exercises[index]?.sets.at(-1)?.restSeconds ?? session.restSeconds}초 휴식`}
-                    </Text>
-                  </View>
-                ) : null}
-              </React.Fragment>
-            ))}
-
-            {/* 마무리 카드 */}
-            <View style={styles.restCard}>
-              <Text style={styles.restTitle}>마무리</Text>
-              <Text style={styles.restDesc}>스트레칭 및 호흡 정리</Text>
-            </View>
-          </View>
-        )}
-      </ScrollView>
-
-      {/* 하단 고정 '운동 시작하기' CTA 버튼 (세션이 있을 때만 표시) */}
-      {!loading && sessions.length > 0 && (
-        <View
-          pointerEvents="box-none"
-          style={[
-            styles.footer,
-            { bottom: Math.max(insets.bottom, 16) },
-          ]}>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="운동 시작하기"
-            onPress={handleStartWorkout}
-            style={({ pressed }) => [
-              styles.startButton,
-              pressed && styles.pressed,
-            ]}>
-            <Text style={styles.startButtonText}>운동 시작하기</Text>
-          </Pressable>
-        </View>
-      )}
-
-      {/* 세트·횟수 조절 바텀시트 모달 */}
-      <Modal
-        visible={editingSession !== null}
-        transparent
-        animationType="fade"
-        onRequestClose={handleCloseSessionSheet}>
-        <View style={styles.modalBackdrop}>
-          <Pressable
-            style={styles.modalDismissArea}
-            onPress={handleCloseSessionSheet}
-          />
-
-          {editingSession ? (
-            <View
-              style={[
-                styles.sheetContainer,
-                { paddingBottom: Math.max(insets.bottom, 20) + 8 },
-              ]}>
-              {/* 상단 그랩 바 */}
-              <View style={styles.sheetHandle} />
-
-              {/* 종목 타이틀 & 썸네일 */}
-              <View style={styles.sheetHeaderRow}>
-                <View style={styles.sheetTitleGroup}>
-                  <Text style={styles.sheetExerciseTitle}>
-                    {editingSession.name}
-                  </Text>
-                  <Text style={styles.sheetExerciseSubtitle}>
-                    {editingSession.partAndLevel}
-                  </Text>
-                </View>
-
-                <View style={styles.sheetThumbnail} />
-              </View>
-
-              {/* 세트 수 조절 카드 */}
-              <View style={styles.stepperCard}>
-                <Text style={styles.stepperLabel}>세트 수</Text>
-                <View style={styles.stepperValueRow}>
-                  <Text style={styles.stepperValueText}>
-                    {`${draftSets}세트`}
-                  </Text>
-
-                  <View style={styles.stepperControlPill}>
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel="세트 수 감소"
-                      disabled={draftSets <= MIN_SETS}
-                      onPress={() =>
-                        setDraftSets((prev) => Math.max(MIN_SETS, prev - 1))
-                      }
-                      style={({ pressed }) => [
-                        styles.stepperButton,
-                        pressed && styles.pressed,
-                      ]}>
-                      <MinusIcon
-                        color={draftSets <= MIN_SETS ? '#A1A1AA' : '#111111'}
-                        size={14}
-                      />
-                    </Pressable>
-
-                    <View style={styles.stepperDivider} />
-
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel="세트 수 증가"
-                      disabled={draftSets >= MAX_SETS}
-                      onPress={() =>
-                        setDraftSets((prev) => Math.min(MAX_SETS, prev + 1))
-                      }
-                      style={({ pressed }) => [
-                        styles.stepperButton,
-                        pressed && styles.pressed,
-                      ]}>
-                      <PlusIcon
-                        color={draftSets >= MAX_SETS ? '#A1A1AA' : '#111111'}
-                        size={14}
-                      />
-                    </Pressable>
-                  </View>
-                </View>
-              </View>
-
-              {/* 세트당 횟수 조절 카드 */}
-              <View style={styles.stepperCard}>
-                <Text style={styles.stepperLabel}>{editingSession.measurementType === 'DURATION' ? '세트당 시간' : '세트당 횟수'}</Text>
-                <View style={styles.stepperValueRow}>
-                  <Text style={styles.stepperValueText}>
-                    {`${draftReps}${editingSession.measurementType === 'DURATION' ? '초' : '회'}`}
-                  </Text>
-
-                  <View style={styles.stepperControlPill}>
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel="세트당 횟수 감소"
-                      disabled={draftReps <= MIN_REPS}
-                      onPress={() =>
-                        setDraftReps((prev) => Math.max(MIN_REPS, prev - 1))
-                      }
-                      style={({ pressed }) => [
-                        styles.stepperButton,
-                        pressed && styles.pressed,
-                      ]}>
-                      <MinusIcon
-                        color={draftReps <= MIN_REPS ? '#A1A1AA' : '#111111'}
-                        size={14}
-                      />
-                    </Pressable>
-
-                    <View style={styles.stepperDivider} />
-
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel="세트당 횟수 증가"
-                      disabled={draftReps >= MAX_REPS}
-                      onPress={() =>
-                        setDraftReps((prev) => Math.min(MAX_REPS, prev + 1))
-                      }
-                      style={({ pressed }) => [
-                        styles.stepperButton,
-                        pressed && styles.pressed,
-                      ]}>
-                      <PlusIcon
-                        color={draftReps >= MAX_REPS ? '#A1A1AA' : '#111111'}
-                        size={14}
-                      />
-                    </Pressable>
-                  </View>
-                </View>
-              </View>
-
-              {/* 세션 저장 버튼 */}
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="세션 저장"
-                onPress={handleSaveSession}
-                disabled={saving}
-                style={({ pressed }) => [
-                  styles.saveSessionButton,
-                  pressed && styles.pressed,
-                ]}>
-                <Text style={styles.saveSessionButtonText}>세션 저장</Text>
-              </Pressable>
-
-              {/* 변경사항 되돌리기 */}
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="변경사항 되돌리기"
-                onPress={handleRevertSession}
-                style={({ pressed }) => [
-                  styles.revertButton,
-                  pressed && styles.pressed,
-                ]}>
-                <Text style={styles.revertButtonText}>변경사항 되돌리기</Text>
-              </Pressable>
+          {origin === 'recommended' ||
+          (source?.type === 'TEMPLATE' && origin !== 'selected') ? (
+            <View style={styles.recommendBadge}>
+              <Text style={styles.recommendBadgeText}>오늘의 추천</Text>
             </View>
           ) : null}
+          <Text style={styles.title}>{draft?.name ?? '오늘의 운동 루틴'}</Text>
+          <Text style={styles.description}>
+            {draft?.description ||
+              '나에게 맞는 운동으로 건강한 습관을 만들어 보세요'}
+          </Text>
         </View>
-      </Modal>
+        <View style={styles.body}>
+          {error && <Text style={styles.error}>{error}</Text>}
+          {pending > 0 && (
+            <Text style={styles.syncNotice}>
+              운동 기록이 기기에 저장돼 있어요 · 서버 동기화 대기 중
+            </Text>
+          )}
+          {loading && (
+            <ActivityIndicator color="#2460E8" style={{ padding: 20 }} />
+          )}
+          {!loading && !draft && (
+            <Text style={styles.empty}>
+              선택한 루틴이 없어요. 홈에서 루틴을 선택해 주세요.
+            </Text>
+          )}
+          {draft && (
+            <>
+              <View style={styles.summary}>
+                <RoutineMetrics
+                  count={draft.exercises.length}
+                  minutes={metrics?.durationMinutes ?? 0}
+                  calories={metrics?.calories ?? null}
+                  compact
+                />
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: reorder }}
+                  disabled={
+                    saving || loading || Boolean(savedWorkout) || Boolean(error)
+                  }
+                  onPress={() => void toggleReorder()}
+                  style={[styles.reorder, reorder && styles.reorderActive]}
+                >
+                  <Text style={[styles.reorderText, reorder && styles.blue]}>
+                    {reorder ? '✓ 순서 저장' : '≡ 순서 변경'}
+                  </Text>
+                </Pressable>
+              </View>
+              <View style={styles.list}>
+                {draft.exercises.map((exercise) => (
+                  <RoutineExerciseRow
+                    key={exercise.id}
+                    exercise={exercise}
+                    reorder={reorder}
+                    disabled={
+                      saving ||
+                      loading ||
+                      Boolean(savedWorkout) ||
+                      Boolean(error)
+                    }
+                    onPress={() => setEditing(exercise)}
+                    onMove={(id, direction) =>
+                      setDraft((value) =>
+                        value ? moveExercise(value, id, direction) : value,
+                      )
+                    }
+                    onDragging={setDragging}
+                  />
+                ))}
+              </View>
+              {!reorder && (
+                <View style={styles.rest}>
+                  <Text style={styles.restLabel}>종목 간 휴식</Text>
+                  <View style={styles.restControls}>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="종목 간 휴식 줄이기"
+                      disabled={
+                        Boolean(savedWorkout) ||
+                        saving ||
+                        Boolean(error) ||
+                        (draft.interExerciseRestSeconds ?? 60) <= 0
+                      }
+                      onPress={() =>
+                        setDraft((value) =>
+                          value
+                            ? {
+                                ...value,
+                                interExerciseRestSeconds: Math.max(
+                                  0,
+                                  (value.interExerciseRestSeconds ?? 60) - 10,
+                                ),
+                              }
+                            : value,
+                        )
+                      }
+                      style={styles.step}
+                    >
+                      <Text style={styles.stepText}>−</Text>
+                    </Pressable>
+                    <Text style={styles.restValue}>
+                      {formatDuration(draft.interExerciseRestSeconds ?? 60)}
+                    </Text>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="종목 간 휴식 늘리기"
+                      disabled={
+                        Boolean(savedWorkout) ||
+                        saving ||
+                        Boolean(error) ||
+                        (draft.interExerciseRestSeconds ?? 60) >= 600
+                      }
+                      onPress={() =>
+                        setDraft((value) =>
+                          value
+                            ? {
+                                ...value,
+                                interExerciseRestSeconds: Math.min(
+                                  600,
+                                  (value.interExerciseRestSeconds ?? 60) + 10,
+                                ),
+                              }
+                            : value,
+                        )
+                      }
+                      style={styles.step}
+                    >
+                      <Text style={styles.stepText}>+</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              )}
+              {Boolean(savedWorkout) && (
+                <Text style={styles.syncNotice}>
+                  진행 중인 운동이 있어요. 이어서 완료한 뒤 루틴을 편집할 수
+                  있어요.
+                </Text>
+              )}
+              {dirty && (
+                <Text style={styles.syncNotice}>
+                  변경사항은 선택한 날짜에만 적용돼요.
+                </Text>
+              )}
+            </>
+          )}
+        </View>
+      </ScrollView>
+      {draft && (
+        <View
+          style={[
+            styles.footer,
+            { paddingBottom: Math.max(insets.bottom, 18) },
+          ]}
+        >
+          <Pressable
+            accessibilityRole="button"
+            disabled={
+              saving ||
+              loading ||
+              (!savedWorkout && (Boolean(error) || (date !== today && !dirty)))
+            }
+            onPress={() => void start()}
+            style={[
+              styles.start,
+              (saving ||
+                loading ||
+                (!savedWorkout &&
+                  (Boolean(error) || (date !== today && !dirty)))) &&
+                styles.disabled,
+            ]}
+          >
+            <Text style={styles.startText}>
+              {saving
+                ? '저장 중…'
+                : savedWorkout
+                  ? '운동 재개하기'
+                  : date !== today
+                    ? '변경사항 저장'
+                    : reorder
+                      ? '시작하기'
+                      : '오늘의 운동 시작하기'}
+            </Text>
+          </Pressable>
+          {date !== today && !savedWorkout && (
+            <Text style={styles.dateNotice}>
+              선택한 날짜에 운동을 시작할 수 있어요.
+            </Text>
+          )}
+        </View>
+      )}
+      {editing && draft && (
+        <ExerciseSetSheet
+          key={editing.id}
+          exercise={editing}
+          canDelete={draft.exercises.length > 1}
+          busy={saving}
+          onClose={() => setEditing(null)}
+          onSave={async (updated) => {
+            try {
+              await persist({
+                ...draft,
+                exercises: draft.exercises.map((e) =>
+                  e.id === updated.id ? updated : e,
+                ),
+              });
+              setEditing(null);
+            } catch (e) {
+              showError(e);
+            }
+          }}
+          onDelete={async () => {
+            try {
+              await persist(withoutExercise(draft, editing.id));
+              setEditing(null);
+            } catch (e) {
+              showError(e);
+            }
+          }}
+        />
+      )}
     </SafeAreaView>
   );
 }
-
 const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: '#FFFFFF',
-  },
+  safeArea: { flex: 1, backgroundColor: '#F2F2F2' },
   header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingTop: 8,
-    paddingBottom: 8,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    paddingBottom: 14,
   },
-  circleButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#F3F4F6',
+  circle: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: '#F0F5FF',
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  scrollView: {
-    flex: 1,
-  },
-  scrollContent: {
-    paddingHorizontal: 20,
-    paddingTop: 14,
-  },
-  loadingContainer: {
-    paddingVertical: 48,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 12,
-  },
-  loadingText: {
-    fontSize: 14,
-    color: '#6B7280',
-    fontWeight: '500',
-  },
-  emptyContainer: {
-    backgroundColor: '#F9FAFB',
-    borderRadius: 16,
-    paddingVertical: 36,
-    paddingHorizontal: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 8,
-  },
-  emptyTitle: {
-    fontSize: 17,
-    fontWeight: '700',
-    color: '#111827',
-    marginBottom: 6,
-  },
-  emptyDesc: {
-    fontSize: 14,
-    color: '#6B7280',
-    textAlign: 'center',
-    marginBottom: 20,
-  },
-  emptyActionButton: {
-    backgroundColor: '#111827',
-    paddingHorizontal: 24,
-    paddingVertical: 12,
-    borderRadius: 24,
-  },
-  emptyActionButtonText: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#FFFFFF',
   },
   titleSection: {
-    marginBottom: 22,
-  },
-  pageTitle: {
-    fontSize: 24,
-    fontWeight: '700',
-    color: '#111111',
-    letterSpacing: -0.5,
-  },
-  routineSubtitle: {
-    marginTop: 8,
-    fontSize: 16,
-    fontWeight: '500',
-    color: '#60646C',
-    letterSpacing: -0.3,
-  },
-  tagRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 6,
-    marginTop: 12,
-  },
-  tagChip: {
-    backgroundColor: '#EBEBED',
-    borderRadius: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-  },
-  tagChipText: {
-    fontSize: 12,
-    fontWeight: '500',
-    color: '#71717A',
-    letterSpacing: -0.2,
-  },
-  sessionList: {
-    gap: 12,
-  },
-  exerciseCard: {
-    backgroundColor: '#E4E4E7',
-    borderRadius: 14,
-    paddingTop: 20,
-    paddingBottom: 18,
-    paddingHorizontal: 18,
-  },
-  exerciseTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#111111',
-    letterSpacing: -0.3,
-  },
-  assessmentNotice: {
-    marginTop: 10,
-    fontSize: 13,
-    color: '#71717A',
-  },
-  assessmentStatus: {
-    marginTop: 8,
-    fontSize: 13,
-    color: '#52525B',
-  },
-  exerciseMetaGroup: {
-    marginTop: 12,
-    gap: 4,
-  },
-  exerciseVolumeText: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: '#52525B',
-    letterSpacing: -0.2,
-  },
-  exerciseRestText: {
-    fontSize: 14,
-    fontWeight: '400',
-    color: '#71717A',
-    letterSpacing: -0.2,
-  },
-  resumeActionRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    marginTop: 4,
-    marginBottom: 20,
-  },
-  resumeButton: {
-    flex: 1.2,
-    height: 46,
-    borderRadius: 23,
-    backgroundColor: '#111111',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  resumeButtonText: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#FFFFFF',
-    letterSpacing: -0.2,
-  },
-  resetProgressButton: {
-    flex: 0.9,
-    height: 46,
-    borderRadius: 23,
-    backgroundColor: '#FEE2E2',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  resetProgressButtonText: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#DC2626',
-    letterSpacing: -0.2,
-  },
-  adjustButton: {
-    marginTop: 16,
-    height: 46,
-    borderRadius: 23,
-    backgroundColor: '#F4F4F5',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  disabledAdjustButton: {
-    backgroundColor: '#E4E4E7',
-    opacity: 0.6,
-  },
-  adjustButtonText: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#111111',
-    letterSpacing: -0.2,
-  },
-  disabledAdjustButtonText: {
-    color: '#9CA3AF',
-  },
-  restCard: {
-    backgroundColor: '#F3F4F6',
-    borderRadius: 14,
-    paddingVertical: 20,
-    paddingHorizontal: 18,
-  },
-  restTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#111111',
-    letterSpacing: -0.3,
-  },
-  restDesc: {
-    marginTop: 10,
-    fontSize: 14,
-    fontWeight: '400',
-    color: '#71717A',
-    letterSpacing: -0.2,
-  },
-  footer: {
-    position: 'absolute',
-    left: 20,
-    right: 20,
-  },
-  startButton: {
-    height: 54,
-    borderRadius: 27,
-    backgroundColor: '#111111',
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.12,
-    shadowRadius: 10,
-    elevation: 5,
-  },
-  startButtonText: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#FFFFFF',
-    letterSpacing: -0.2,
-  },
-  modalBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.36)',
-    justifyContent: 'flex-end',
-  },
-  modalDismissArea: {
-    flex: 1,
-  },
-  sheetContainer: {
     backgroundColor: '#FFFFFF',
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    paddingHorizontal: 20,
-    paddingTop: 12,
+    paddingHorizontal: 16,
+    paddingTop: 4,
+    paddingBottom: 22,
+    gap: 9,
   },
-  sheetHandle: {
-    alignSelf: 'center',
-    width: 48,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: '#E4E4E7',
+  recommendBadge: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#2460E8',
+    borderRadius: 5,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
   },
-  sheetHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
-    marginTop: 22,
-    marginBottom: 12,
-  },
-  sheetTitleGroup: {
-    flex: 1,
-    paddingRight: 16,
-  },
-  sheetExerciseTitle: {
-    fontSize: 22,
+  recommendBadgeText: { fontSize: 12, fontWeight: '600', color: '#FFFFFF' },
+  title: {
+    fontSize: 20,
     fontWeight: '700',
-    color: '#111111',
-    letterSpacing: -0.4,
+    letterSpacing: -0.5,
+    color: '#222222',
   },
-  sheetExerciseSubtitle: {
-    marginTop: 6,
-    fontSize: 15,
-    fontWeight: '500',
-    color: '#71717A',
-    letterSpacing: -0.2,
-  },
-  sheetThumbnail: {
-    width: 44,
-    height: 44,
-    borderRadius: 4,
-    backgroundColor: '#D9D9D9',
-  },
-  stepperCard: {
-    marginTop: 12,
-    backgroundColor: '#F4F4F5',
-    borderRadius: 12,
-    paddingHorizontal: 18,
-    paddingVertical: 18,
-  },
-  stepperLabel: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#111111',
-    letterSpacing: -0.2,
-  },
-  stepperValueRow: {
+  description: { fontSize: 12, lineHeight: 19, color: '#777777' },
+  body: { padding: 16 },
+  summary: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginTop: 12,
+    gap: 6,
+    marginBottom: 10,
   },
-  stepperValueText: {
-    fontSize: 24,
-    fontWeight: '700',
-    color: '#52525B',
-    letterSpacing: -0.4,
-    fontVariant: ['tabular-nums'],
+  reorder: {
+    borderWidth: 1,
+    borderColor: '#D6D6D6',
+    borderRadius: 21,
+    paddingHorizontal: 11,
+    paddingVertical: 9,
   },
-  stepperControlPill: {
+  reorderActive: { borderColor: '#3972FF', backgroundColor: '#F0F5FF' },
+  reorderText: { fontSize: 12, color: '#888888', fontWeight: '500' },
+  blue: { color: '#3972FF' },
+  list: { gap: 8 },
+  rest: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#BCCFFF',
+    borderRadius: 8,
+    padding: 12,
+    marginTop: 16,
     flexDirection: 'row',
     alignItems: 'center',
-    height: 34,
-    borderRadius: 17,
-    backgroundColor: '#E4E4E7',
+    justifyContent: 'space-between',
   },
-  stepperButton: {
-    width: 44,
-    height: 34,
+  restLabel: { color: '#777777', fontSize: 14 },
+  restControls: { flexDirection: 'row', alignItems: 'center', gap: 14 },
+  step: {
+    width: 38,
+    height: 42,
+    backgroundColor: '#F0F5FF',
+    borderRadius: 7,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  stepperDivider: {
-    width: 1,
-    height: 14,
-    backgroundColor: '#C4C4C8',
-  },
-  saveSessionButton: {
-    marginTop: 26,
-    height: 54,
-    borderRadius: 27,
-    backgroundColor: '#111111',
+  stepText: { color: '#2460E8', fontSize: 27 },
+  restValue: { fontSize: 18, fontWeight: '600', color: '#222222' },
+  footer: { paddingHorizontal: 16, paddingTop: 12, backgroundColor: '#F2F2F2' },
+  start: {
+    backgroundColor: '#245EE5',
+    minHeight: 49,
+    borderRadius: 5,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  saveSessionButtonText: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: '#FFFFFF',
-    letterSpacing: -0.2,
-  },
-  revertButton: {
-    marginTop: 14,
-    paddingVertical: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  revertButtonText: {
+  startText: { color: '#FFFFFF', fontSize: 15, fontWeight: '600' },
+  disabled: { opacity: 0.4 },
+  empty: {
+    color: '#888888',
     fontSize: 14,
-    fontWeight: '600',
-    color: '#71717A',
-    letterSpacing: -0.2,
+    textAlign: 'center',
+    paddingVertical: 40,
   },
-  pressed: {
-    opacity: 0.75,
+  error: { color: '#AB3B3B', fontSize: 12, lineHeight: 19, marginBottom: 12 },
+  syncNotice: { color: '#777777', fontSize: 12, lineHeight: 19, marginTop: 12 },
+  dateNotice: {
+    color: '#777777',
+    fontSize: 11,
+    textAlign: 'center',
+    marginTop: 8,
   },
 });
