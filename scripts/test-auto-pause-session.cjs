@@ -64,6 +64,8 @@ const appStateListeners = new Set();
 const testTracking = { user: null };
 /** 설정되면 AsyncStorage.setItem이 해제될 때까지 대기 (세트 완료 저장 경합 재현용) */
 let diskGate = null;
+/** 08-3: 다음 N번의 기기 저장(setItem)을 실패시킨다(저장 공간 부족 등 로컬 저장 실패 재현) */
+let diskFailures = 0;
 
 const passthrough = ({ children }) => children ?? null;
 const nothing = () => null;
@@ -84,7 +86,7 @@ const mocks = {
   'expo-crypto': { randomUUID: () => nodeCrypto.randomUUID() },
   '@react-native-async-storage/async-storage': {
     __esModule: true,
-    default: { getItem: async (k) => disk.get(k) ?? null, setItem: async (k, v) => { if (diskGate) await diskGate.promise; disk.set(k, v); } },
+    default: { getItem: async (k) => disk.get(k) ?? null, setItem: async (k, v) => { if (diskGate) await diskGate.promise; if (diskFailures > 0) { diskFailures -= 1; throw new Error('HARNESS: 기기 저장 실패'); } disk.set(k, v); } },
   },
 };
 
@@ -321,7 +323,7 @@ beforeEach(() => {
   useWorkoutDraftStore.setState({ draft: null });
   alerts.length = 0; nav.length = 0; ui.completeRenders = 0; feedFrames = false; frameClock = 0;
   ui.view = null; ui.overlay = null; ui.hud = null;
-  testTracking.user = null; bodyVisible = true; warmedPhaseId = null; breakCalls.length = 0; diskGate = null;
+  testTracking.user = null; bodyVisible = true; warmedPhaseId = null; breakCalls.length = 0; diskGate = null; diskFailures = 0;
   controllerLog.instances.length = 0; controllerLog.frames.clear(); controllerLog.ticks.clear(); analyzerCalls.count = 0;
 });
 // 실패한 테스트가 화면을 남겨 다음 테스트에 영향 주지 않도록 정리
@@ -854,7 +856,8 @@ describe('3단계 — Figma 자동 일시정지 화면 · 5초 복귀 · 재개 
     assert.equal(ui.stage.pause, 'none');
     assert.equal(remaining(), 60);
     testTracking.user = 'present'; feedFrames = true;
-    await advance(21 * 1000);
+    // 08-3: 세트 최초 인식 안정화(약 300ms)는 타이머를 소모하지 않으므로 그만큼 더 관측해야 타이머 경과 21초
+    await advance(21 * 1000 + 250);
     testTracking.user = 'lost';
     await advance(2000);
     assert.ok(isAutoPauseScreen());
@@ -957,18 +960,25 @@ describe('3-1b — 측정값 분리와 현재 세트 목표값', () => {
     await unmount(root);
   });
 
-  test('N4. DURATION(플랭크): AI 유효 자세 시간과 PhaseTimer 시간을 서로 대체하지 않음', async () => {
+  test('N4. DURATION(플랭크): AI 유효 자세 시간과 PhaseTimer 시간을 서로 대체하지 않음, 유효 시간이 목표에 도달하면 종료(08-3)', async () => {
     const root = await startWith(routine({ exerciseId: 'plank', measurementType: 'DURATION', sets: [{ seconds: 60 }, { seconds: 60 }] }));
     testMeasure.value = { count: 4, holdSeconds: 5.7 }; feedFrames = true;
     await advance(10 * 1000);
     assert.equal(ui.hud.kind, 'duration');
     assert.equal(ui.hud.seconds, 50, '타이머 잔여 = 60 - 경과 10초');
     assert.equal(ui.hud.holdSeconds, 5, '유효 자세 시간 = floor(holdSeconds), count(4) 아님');
-    testMeasure.value = { count: null, holdSeconds: 61 };
+    testMeasure.value = { count: null, holdSeconds: 59.9 };
     await advance(1000);
-    assert.equal(ui.hud.holdSeconds, 61);
+    assert.equal(ui.hud.holdSeconds, 59);
     assert.equal(ui.hud.seconds, 49, '유효 자세 시간이 타이머를 바꾸지 않음');
-    assert.equal(ui.stage.phase.kind, 'exercising', 'holdSeconds 도달은 종료 조건이 아님');
+    assert.equal(ui.stage.phase.kind, 'exercising', '유효 시간 59초(목표 60초 미달)에서는 종료하지 않음');
+    // 08-3 정책: DURATION은 AI 유효 유지 시간(floor)이 목표 시간에 도달하면 세트를 종료한다(타이머 잔여와 무관)
+    testMeasure.summary = { holdSeconds: 60.2 };
+    testMeasure.value = { count: null, holdSeconds: 60.2 };
+    await advance(250);
+    assert.equal(ui.stage.phase.kind, 'resting', '유효 시간 60초 도달 → 세트 종료');
+    assert.equal((await localSession()).sets[0].actualDurationSeconds, 60, '저장값 = floor(AI holdSeconds)');
+    testMeasure.summary = null;
     await unmount(root);
   });
 
@@ -1470,7 +1480,8 @@ describe('3-2 — 대표 운동 실제 분석기 연동 (스쿼트·플랭크·�
 
   test('S1. 스쿼트(REPS): AI 동작 완료 시 횟수 증가 → 횟수 링(목표 대비)·잔여 시간 표시 → 목표 3회에서 종료·저장', async () => {
     const root = await startWith(routine({ exerciseId: 'squat', measurementType: 'REPS', sets: [{ reps: 3 }, { reps: 3 }] }));
-    await feed(1000, (t) => squatFrame(t, 170)); // 서 있는 준비 자세
+    // 08-3: 세트 최초 인식 안정화(약 300ms)는 타이머를 소모하지 않으므로 첫 1초('운동 시작')가 지나도록 안정화 시간만큼 더 준비 자세
+    await feed(1500, (t) => squatFrame(t, 170)); // 서 있는 준비 자세
     assert.equal(ui.hud.kind, 'reps', '횟수형 HUD = 횟수 링');
     assert.equal(ui.hud.target, 3, '링 진행률 기준 = 현재 세트 목표 3회');
     const seen = [];
@@ -1492,7 +1503,8 @@ describe('3-2 — 대표 운동 실제 분석기 연동 (스쿼트·플랭크·�
 
   test('S2. 플랭크(DURATION): 타이머·가로 진행률 바, 링 없음, 유효 자세 시간은 타이머와 분리, 타이머로 종료, AI 유지 시간 저장', async () => {
     const root = await startWith(routine({ exerciseId: 'plank', measurementType: 'DURATION', sets: [{ seconds: 20 }, { seconds: 20 }] }));
-    await feed(10 * 1000, plankFrame);
+    // 08-3: 최초 인식 안정화(약 300ms)는 타이머를 소모하지 않으므로 그만큼 더 진행한 시점이 타이머 경과 10초
+    await feed(10 * 1000 + 300, plankFrame);
     assert.equal(ui.hud.kind, 'duration', '시간형 HUD = 타이머 + 가로 진행률 바 (횟수 링 아님)');
     assert.equal(ui.hud.seconds, remaining(), '타이머 = PhaseTimer 잔여 시간');
     assert.equal(ui.hud.seconds, 10);
@@ -2932,6 +2944,99 @@ describe('08-2 — 이어하기 미완료 세트 초기화와 자정 경계', ()
     assert.equal(sessions.at(-1), 'COMPLETED');
     assert.ok(!sessions.includes('ABANDONED'), '진행 중 운동을 날짜 변경으로 종료하지 않음');
     assert.equal(await offline.settleStaleWorkout(owner, Date.now()), null, '완료 후 날짜 경계 정리 대상 없음');
+    await unmount(root);
+  });
+});
+
+// ---------------------------------------------------------------------
+// 08-3: 운동 종료 조건 · 세트 저장 실패 복구 · 신체 인식 대기 중 타이머
+// ---------------------------------------------------------------------
+describe('08-3 — 종료 조건과 세트 저장 실패 복구', () => {
+  beforeEach(() => { testMeasure.value = null; testMeasure.summary = null; });
+  afterEach(() => { testMeasure.value = null; testMeasure.summary = null; stores.tts.setState({ sendCoachEvent: () => false }); });
+  async function measure(value) { testMeasure.value = value; await pushOneFrame(); await settle(); }
+  const poseItems = async () => (await storedQueue()).filter((i) => i.kind === 'pose');
+  const withTimeLimit = (fixture, seconds) => {
+    fixture.exercise.sets.forEach((set) => { set.timeLimitSeconds = seconds; });
+    return fixture;
+  };
+
+  test('E1. 세트 결과 기기 저장 실패 → 다음 단계로 넘어가지 않고 일시정지·안내, 재개 시 같은 결과로 다시 저장(중복 없음)', async () => {
+    const root = await startWith(routine({ exerciseId: 'squat', measurementType: 'REPS', sets: [{ reps: 3 }, { reps: 3 }] }));
+    testMeasure.summary = { count: 3 };
+    diskFailures = 1;
+    await measure({ count: 3 });
+    await advance(250);
+    assert.equal(ui.stage.phase.kind, 'exercising', '저장되지 않은 세트를 완료로 처리하지 않음');
+    assert.equal(ui.stage.phase.set, 1);
+    assert.equal(ui.stage.pause, 'paused', '멈춘 화면이 아니라 일시정지 화면(운동 재개·운동 종료)');
+    assert.ok(alerts.some((a) => a.title === '세트 기록 저장 실패'));
+    assert.equal((await localSession()).sets.length, 0);
+    assert.equal((await poseItems()).length, 0);
+    await advance(500);
+    await act(async () => { ui.stage.onPressResume(); }); await settle();
+    await advance(250);
+    assert.equal(ui.stage.phase.kind, 'resting', '재저장 성공 후에만 다음 단계');
+    const sets = (await localSession()).sets;
+    assert.equal(sets.length, 1);
+    assert.equal(sets[0].actualReps, 3, '확정된 AI 결과(실패 전 측정값) 그대로 저장');
+    assert.equal((await poseItems()).length, 1, 'AI 결과 1회만 큐에');
+    await unmount(root);
+  });
+
+  test('E2. 저장 후 다른 오류로 결과가 불확실하면 기기 기록으로 확인해 중복 저장 없이 진행', async () => {
+    const root = await startWith(routine({ exerciseId: 'squat', measurementType: 'REPS', sets: [{ reps: 3 }, { reps: 3 }] }));
+    testMeasure.summary = { count: 3 };
+    let thrown = 0;
+    stores.tts.setState({ sendCoachEvent: (event) => { if (event.eventType === 'SET_FEEDBACK' && thrown++ === 0) throw new Error('HARNESS: 코치 이벤트 실패'); return false; } });
+    await measure({ count: 3 });
+    await advance(250);
+    assert.equal(thrown, 1, 'HARNESS: 세트 저장 뒤 오류 발생');
+    assert.equal(ui.stage.phase.kind, 'resting', '이미 저장된 세트는 다음 단계로');
+    assert.notEqual(ui.stage.pause, 'paused');
+    assert.equal((await localSession()).sets.length, 1);
+    assert.equal((await poseItems()).length, 1);
+    await unmount(root);
+  });
+
+  test('E3. REPS: 세트 제한 시간(timeLimitSeconds) 만료 → 목표 미달 실제 횟수 그대로 저장, 미설정이면 기존 60초', async () => {
+    let root = await startWith(withTimeLimit(routine({ exerciseId: 'squat', measurementType: 'REPS', sets: [{ reps: 10 }, { reps: 10 }] }), 30));
+    assert.equal(remaining(), 30, '제한 시간 30초');
+    testMeasure.summary = { count: 4 };
+    await measure({ count: 4 });
+    feedFrames = true; testMeasure.value = { count: 4 };
+    await advance(31 * 1000);
+    assert.equal(ui.stage.phase.kind, 'resting', '제한 시간 만료로 세트 종료');
+    assert.equal((await localSession()).sets[0].actualReps, 4, '목표(10) 미달 횟수를 보정하지 않음');
+    await unmount(root);
+    root = await startWith(routine({ exerciseId: 'squat', measurementType: 'REPS', sets: [{ reps: 10 }] }));
+    assert.equal(remaining(), EXERCISE_DURATION_SECONDS, 'timeLimitSeconds 없는 기존 데이터 = 기존 기본값');
+    await unmount(root);
+  });
+
+  test('E4. REPS: 목표 도달과 제한 시간 만료가 겹쳐도 세트 결과 1회·다음 단계 1번만', async () => {
+    const root = await startWith(withTimeLimit(routine({ exerciseId: 'squat', measurementType: 'REPS', sets: [{ reps: 5, rest: 30 }, { reps: 5 }] }), 10));
+    feedFrames = true; testMeasure.value = { count: 2 };
+    await advance(9750);
+    testMeasure.summary = { count: 5 };
+    testMeasure.value = { count: 5 };
+    await advance(1000); // 목표 도달 프레임과 타이머 만료가 같은 구간
+    assert.equal(ui.stage.phase.kind, 'resting');
+    assert.equal(ui.stage.phase.completedSet, 1, '2세트를 건너뛰지 않음');
+    assert.equal((await localSession()).sets.length, 1);
+    assert.equal((await poseItems()).length, 1);
+    await unmount(root);
+  });
+
+  test('E5. 세트 시작 후 신체 인식 대기(측정 전) 동안은 운동 타이머·운동 시간이 줄지 않고, 인식 후 진행', async () => {
+    const root = await startWith(PLANK_60());
+    bodyVisible = false; feedFrames = true;
+    await advance(10 * 1000);
+    assert.equal(remaining(), 60, '인식 대기 10초는 목표 시간을 소모하지 않음');
+    assert.equal(isAutoPauseScreen(), false, '측정 시작 전 대기는 자동 일시정지(이탈) 아님');
+    bodyVisible = true; testMeasure.value = { count: null, holdSeconds: 1 };
+    await advance(5 * 1000);
+    assert.ok(remaining() <= 56 && remaining() >= 55, `인식 후 타이머 진행 (${remaining()})`);
     await unmount(root);
   });
 });

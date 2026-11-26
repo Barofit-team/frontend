@@ -365,6 +365,14 @@ export default function WorkoutSessionScreen() {
     lastHoldSeconds: number | null;
     finishing: boolean;
   } | null>(null);
+  /**
+   * 08-3: 세트에서 아직 한 번도 측정하지 않은 최초 신체 인식 대기(Controller waiting_for_pose, 분석기 전달 프레임 0) 동안은
+   * 운동 타이머·운동 시간을 멈춘다(인식 준비 시간이 목표 시간·제한 시간을 소모하지 않음).
+   * 측정을 시작한 뒤의 짧은 재인식 안정화·이탈(2초 미만)은 07-B 동작(타이머 진행)을 유지하고, 2초 이탈은 기존 자동 일시정지가 처리한다.
+   * 프레임이 오기 전(Controller 없음, 기존 M10 경로)은 그대로 진행한다. 판정은 Controller phase만 쓴다. 별도 준비 화면은 09단계 범위.
+   */
+  const waitingForPose = pause === 'none' && phase.kind === 'exercising' && controllerPhase === 'waiting_for_pose' &&
+    (poseSetRef.current?.phaseId !== phase.id || poseSetRef.current.frameCount === 0);
 
   useEffect(() => {
     phaseRef.current = phase;
@@ -379,7 +387,7 @@ export default function WorkoutSessionScreen() {
     setCountdownSeconds(null);
   }, [phase]);
   useEffect(() => {
-    if (!sessionReady || pause !== 'none' || autoPaused || phase.kind === 'completed') return;
+    if (!sessionReady || pause !== 'none' || autoPaused || waitingForPose || phase.kind === 'completed') return;
     const kind = phase.kind === 'exercising' ? 'active'
       : phase.kind === 'resting' || (phase.kind === 'countdown' && phase.exerciseIndex > 0 && phase.set === 1) ? 'rest' : null;
     if (!kind) return;
@@ -391,7 +399,7 @@ export default function WorkoutSessionScreen() {
       else elapsed.current.restMs += duration;
       running.current = null;
     };
-  }, [phase, pause, autoPaused, sessionReady]);
+  }, [phase, pause, autoPaused, waitingForPose, sessionReady]);
 
   useEffect(() => {
     if (!sessionReady || !cameraReady || pause !== 'none' || phase.kind !== 'countdown' || phase.set !== 1 || phase.exerciseIndex === 0) return;
@@ -518,13 +526,29 @@ export default function WorkoutSessionScreen() {
         });
         completePhase(finishedPhaseId);
       });
-      updateQueue.current = operation.catch((err) => {
-        activeSet.finishing = false;
+      updateQueue.current = operation.catch(async (err) => {
         if (__DEV__) console.warn('[WorkoutSession] finishCurrentPoseSet failed', err);
+        // 08-3: 결과가 불확실하면 기기 기록으로 확인한다. 이미 저장된 세트면 중복 저장 없이 다음 단계로
+        const local = await getLocalWorkout(owner).catch(() => null);
+        if (local && local.sessionId === serverSession.current?.sessionId &&
+            local.session.sets.some(set => set.routineSetId === activeSet.routineSetId)) {
+          serverSession.current = { sessionId: local.sessionId, session: local.session };
+          completePhase(finishedPhaseId);
+          return;
+        }
+        // 기기에 저장하지 못한 세트는 완료로 처리하지 않는다. 확정된 AI 결과는 pipeline에 남아 같은 결과로 다시 저장할 수 있다
+        activeSet.finishing = false;
+        if (phaseRef.current.id !== finishedPhaseId) return;
+        pendingCommitPhaseIdRef.current = finishedPhaseId;
+        requestPauseRef.current();
+        Alert.alert('세트 기록 저장 실패', '이번 세트 결과를 기기에 저장하지 못했어요. 운동 재개를 누르면 다시 저장하고, 운동 종료를 누르면 이 세트는 기록하지 않고 종료해요.');
       });
     },
     [owner, completePhase],
   );
+  /** 08-3: 세트 결과를 기기에 저장하지 못해 멈춘 세트의 phase id. '운동 재개'를 누르면 같은 결과로 다시 저장한다 */
+  const pendingCommitPhaseIdRef = useRef<number | null>(null);
+  const requestPauseRef = useRef<() => void>(() => {});
 
   /**
    * 카메라 프레임 → 현재 세트 Controller. 운동 단계에서는 수동·자동 일시정지 중에도 계속 전달한다
@@ -596,13 +620,15 @@ export default function WorkoutSessionScreen() {
           setMeasuredHoldSeconds(holdSeconds);
         }
 
-        // REPS만 현재 세트 목표 횟수 도달로 종료. DURATION은 PhaseTimer 만료로만 종료(유지 시간 도달 종료는 정책 확정 전)
+        // REPS: 현재 세트 목표 횟수 도달로 종료(제한 시간 만료는 PhaseTimer). DURATION: AI 유효 유지 시간(floor)이 목표 시간에 도달하면 종료.
+        // 목표 미달로 시간이 끝나면 PhaseTimer 만료에서 실제 측정값으로 종료한다. 동시에 일어나도 finishCurrentPoseSet이 한 번만 처리한다
         const exercise = resolveExercise(currentPhase);
+        const measurementType = sessions[currentPhase.exerciseIndex]?.measurementType;
+        const targetSeconds = snapshot.exercises[currentPhase.exerciseIndex]?.sets[currentPhase.set - 1]?.targetDurationSeconds;
         if (
-          sessions[currentPhase.exerciseIndex]?.measurementType === 'REPS' &&
-          count !== null &&
-          exercise.targetReps > 0 &&
-          count >= exercise.targetReps
+          (measurementType === 'REPS' && count !== null && exercise.targetReps > 0 && count >= exercise.targetReps) ||
+          (measurementType === 'DURATION' && holdSeconds !== null && typeof targetSeconds === 'number' && targetSeconds > 0 &&
+            holdSeconds >= targetSeconds)
         ) {
           finishCurrentPoseSet(currentPhase.id);
         }
@@ -643,9 +669,19 @@ export default function WorkoutSessionScreen() {
     setPause(p => (p === 'none' || p === 'resuming' ? 'paused' : p));
     if (serverSession.current) void updateServerStatus('PAUSED').catch(() => Alert.alert('동기화 실패', '운동 일시 정지 상태를 저장하지 못했어요.'));
   }, [markPauseChange, updateServerStatus, applyControllerState]);
+  requestPauseRef.current = requestPause;
   const resume = useCallback(() => {
     if (isTapLocked()) return;
     markPauseChange();
+    // 08-3: 세트 결과 저장에 실패해 멈춘 세트면 측정을 다시 하지 않고 확정된 같은 결과를 다시 저장한다(성공해야 다음 단계)
+    if (pause === 'paused' && phase.kind === 'exercising' && pendingCommitPhaseIdRef.current === phase.id) {
+      pendingCommitPhaseIdRef.current = null;
+      pauseRef.current = 'none';
+      setPause(p => (p === 'paused' ? 'none' : p));
+      void updateServerStatus('ACTIVE').catch(() => Alert.alert('동기화 실패', '운동 재개 상태를 저장하지 못했어요.'));
+      finishCurrentPoseSet(phase.id);
+      return;
+    }
     // M10: 0초에 멈춘 세트면 같은 세트를 처음부터 (재개 5초 카운트다운 동안 새 타이머는 정지 상태로 대기)
     if (pause === 'paused') restartStalledSet();
     // 운동 중: Controller resume(재인식 안정 → 5초 countdown → active). 시작·휴식 카운트다운 중이었다면 바로 이어서
@@ -656,7 +692,7 @@ export default function WorkoutSessionScreen() {
     }
     setPause(p => (p !== 'paused' ? p : phase.kind === 'exercising' ? 'resuming' : 'none'));
     void updateServerStatus('ACTIVE').catch(() => Alert.alert('동기화 실패', '운동 재개 상태를 저장하지 못했어요.'));
-  }, [phase.kind, phase.id, pause, isTapLocked, markPauseChange, updateServerStatus, restartStalledSet, applyControllerState]);
+  }, [phase.kind, phase.id, pause, isTapLocked, markPauseChange, updateServerStatus, restartStalledSet, applyControllerState, finishCurrentPoseSet]);
   const finishResumeCountdown = useCallback(() => {
     markPauseChange();
     setPause(p => (p === 'resuming' ? 'none' : p));
@@ -741,10 +777,12 @@ export default function WorkoutSessionScreen() {
       await clearLocalWorkout(owner, current.sessionId);
       useWorkoutDraftStore.getState().clearDraft();
       let uploaded = false;
+      // 이번 세션의 요청(세션·AI 결과·Report)이 모두 전송됐는지만 본다. 다른 세션의 보존 기록(영구 오류)이 결과 화면을 막지 않는다
+      const syncNow = () => flushWorkoutQueue(owner, () => useAuthStore.getState().user?.id === owner).catch(() => {});
       try {
-        await flushWorkoutQueue(owner, () => useAuthStore.getState().user?.id === owner);
-        if (await pendingCount(owner)) await flushWorkoutQueue(owner, () => useAuthStore.getState().user?.id === owner);
-        uploaded = await pendingCount(owner) === 0;
+        await syncNow();
+        if (await pendingCount(owner, current.sessionId)) await syncNow();
+        uploaded = await pendingCount(owner, current.sessionId) === 0;
       } catch { /* The persisted queue will retry once connectivity returns. */ }
       if (!cancelled) setTimeout(() => {
         if (cancelled || exitingRef.current) return;
@@ -864,7 +902,7 @@ export default function WorkoutSessionScreen() {
         <PhaseTimer
           key={phase.id}
           durationSeconds={duration}
-          paused={pause !== 'none' || autoPaused}
+          paused={pause !== 'none' || autoPaused || waitingForPose}
           onTick={checkpoint}
           onComplete={() => {
             if (phase.kind === 'exercising') {
