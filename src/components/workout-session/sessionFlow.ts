@@ -35,9 +35,9 @@ function isNextExerciseIntro(phase: ActivePhase) {
 export function phaseDurationSeconds(phase: SessionPhase, routine?: readonly RoutineItem[]): number | null {
   switch (phase.kind) {
     case 'countdown':
-      return isNextExerciseIntro(phase) ? (routine?.[phase.exerciseIndex - 1]?.targets?.at(-1)?.restSeconds ?? REST_DURATION_SECONDS) : START_COUNTDOWN_SECONDS;
+      return isNextExerciseIntro(phase) ? (routine?.[phase.exerciseIndex - 1]?.interExerciseRestSeconds ?? routine?.[phase.exerciseIndex - 1]?.targets?.at(-1)?.restSeconds ?? REST_DURATION_SECONDS) : START_COUNTDOWN_SECONDS;
     case 'exercising':
-      return routine?.[phase.exerciseIndex]?.targets?.[phase.set - 1]?.targetDurationSeconds ?? EXERCISE_DURATION_SECONDS;
+      return routine?.[phase.exerciseIndex]?.targets?.[phase.set - 1]?.timeLimitSeconds ?? routine?.[phase.exerciseIndex]?.targets?.[phase.set - 1]?.targetDurationSeconds ?? EXERCISE_DURATION_SECONDS;
     case 'resting':
       return routine?.[phase.exerciseIndex]?.targets?.[phase.completedSet - 1]?.restSeconds ?? REST_DURATION_SECONDS;
     case 'completed':

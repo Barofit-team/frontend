@@ -25,6 +25,7 @@ interface WeeklyPlanState {
   isLoading: boolean;
   hasLoaded: boolean;
   error: string | null;
+  recommendationError: string | null;
 
   loadWeeklyPlan: () => Promise<void>;
   setSelectedDate: (date: string) => void;
@@ -49,6 +50,7 @@ export const useWeeklyPlanStore = create<WeeklyPlanState>((set, get) => ({
   isLoading: false,
   hasLoaded: false,
   error: null,
+  recommendationError: null,
 
   loadWeeklyPlan: async () => {
     if (get().isLoading) return;
@@ -90,13 +92,17 @@ export const useWeeklyPlanStore = create<WeeklyPlanState>((set, get) => ({
       set({
         weekTitle: formatWeekTitle(now),
         weekDays,
-        selectedDate: stillInWeek ? currentSelected : weekDays[0].date,
+        selectedDate: stillInWeek ? currentSelected : toIsoDateString(now),
         planItems,
         recommendedRoutines,
         availableRoutines,
         isLoading: false,
         hasLoaded: true,
         error: errorMessage,
+        recommendationError:
+          recommendResult.status === 'rejected'
+            ? '추천 루틴을 불러오지 못했어요. 다시 시도해 주세요.'
+            : null,
       });
     } catch {
       const fallbackDays = buildWeekCalendarDays([], now);
@@ -109,6 +115,7 @@ export const useWeeklyPlanStore = create<WeeklyPlanState>((set, get) => ({
         isLoading: false,
         hasLoaded: true,
         error: '운동 계획 데이터를 불러오지 못했습니다.',
+        recommendationError: '추천 루틴을 불러오지 못했어요.',
       });
     }
   },
@@ -132,11 +139,11 @@ export const useWeeklyPlanStore = create<WeeklyPlanState>((set, get) => ({
       weekTitle: formatWeekTitle(now),
       weekDays: days,
       selectedDate:
-        days.find((d) => d.date === toIsoDateString(now))?.date ??
-        days[0].date,
+        days.find((d) => d.date === toIsoDateString(now))?.date ?? days[0].date,
       planItems: [],
       recommendedRoutines: [],
       availableRoutines: [],
+      recommendationError: null,
       isLoading: false,
       hasLoaded: false,
       error: null,

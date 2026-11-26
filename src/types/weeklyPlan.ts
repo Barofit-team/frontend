@@ -69,6 +69,9 @@ export interface WeeklyCalendarDay {
 }
 
 export interface RecommendedRoutineItem {
+  routineSnapshot?: BackendRoutineDetail;
+  reason?: string;
+  difficulty?: import('./routine').RoutineDifficultyCode;
   id: string;
   templateId?: string;
   exercises?: PlannedExerciseItem[];

@@ -30,8 +30,9 @@ interface TodayRoutineState {
   sessions: TodayRoutineSession[];
   routineSnapshot: BackendRoutineDetail | null;
   planDate: string | null;
+  selectionOrigin: 'assigned' | 'recommended' | 'selected';
 
-  setPlan: (routine: BackendRoutineDetail | null, date: string) => void;
+  setPlan: (routine: BackendRoutineDetail | null, date: string, origin?: 'assigned' | 'recommended' | 'selected') => void;
   setRoutineTitle: (title: string) => void;
   prepareRoutine: (options?: {
     title?: string;
@@ -53,13 +54,16 @@ interface TodayRoutineState {
 export const useTodayRoutineStore = create<TodayRoutineState>((set, get) => ({
   routineTitle: '오늘 배정된 운동이 없어요',
   tags: ['초보자 추천', '근력', '코어'],
-  interExerciseRestSeconds: 30,
+  interExerciseRestSeconds: 60,
   sessions: [],
   routineSnapshot: null,
   planDate: null,
+  selectionOrigin: 'assigned',
 
-  setPlan: (routine, date) =>
+  setPlan: (routine, date, origin = 'assigned') =>
     set({
+      selectionOrigin: origin,
+      interExerciseRestSeconds: routine?.interExerciseRestSeconds ?? 60,
       routineSnapshot: routine,
       planDate: date,
       routineTitle: routine?.name ?? '오늘 배정된 운동이 없어요',

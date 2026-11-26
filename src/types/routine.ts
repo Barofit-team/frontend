@@ -38,6 +38,7 @@ export interface RoutineSetDetail {
   targetDurationSeconds: number | null;
   weightKg: number;
   restSeconds: number;
+  timeLimitSeconds?: number | null;
 }
 
 export interface RoutineExerciseDetail {
@@ -45,6 +46,7 @@ export interface RoutineExerciseDetail {
   exerciseId: string;
   name: string;
   measurementType: MeasurementTypeCode;
+  category?: RoutineCategoryCode;
   assessmentStatus?: AssessmentStatus;
   order: number;
   preparation: string;
@@ -65,6 +67,7 @@ export interface RoutineDetail {
   exercises: RoutineExerciseDetail[];
   createdAt: string;
   updatedAt: string;
+  interExerciseRestSeconds?: number;
 }
 
 export interface RoutineSummary {
@@ -129,6 +132,7 @@ export interface WeeklyGoalProgress {
   weeklyGoal: number;
   completedCount: number;
   goalProgress: number;
+  streakWeeks?: number;
   completedDates: string[];
 }
 
