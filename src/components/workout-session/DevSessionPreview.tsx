@@ -135,12 +135,10 @@ export function DevSessionPreview() {
           const side = output.side;
           setSelectedSide(prev => (prev === side ? prev : side));
         }
-        const measured =
-          typeof output.count === 'number'
-            ? output.count
-            : typeof output.holdSeconds === 'number'
-              ? Math.floor(output.holdSeconds)
-              : null;
+        // 횟수 운동 = AI 횟수, 시간 운동 = AI 유효 자세 유지 시간. 두 값을 서로 대체하지 않는다
+        const measured = meta.measurementType === 'REPS'
+          ? (typeof output.count === 'number' ? output.count : null)
+          : (typeof output.holdSeconds === 'number' ? Math.floor(output.holdSeconds) : null);
         if (measured !== null) setCurrentReps(prev => (prev === measured ? prev : measured));
         const goal = targetFor(routineRef.current, current);
         if (meta.measurementType === 'REPS' && typeof output.count === 'number' && goal > 0 && output.count >= goal) {
