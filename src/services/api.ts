@@ -1,5 +1,6 @@
 import { tokenStorage } from '@/services/tokenStorage';
 import type { TokenResponse } from '@/types/auth';
+import { devLog, devWarn } from '@/utils/devLog';
 
 /**
  * API 호출 공통 함수입니다.
@@ -44,12 +45,20 @@ export function setOnAuthFailure(handler: () => void) {
 
 export async function apiFetch<T>(path: string, init?: ApiFetchInit): Promise<T> {
   const { auth = false, ownerGuard, ...requestInit } = init ?? {};
+  const method = (requestInit.method ?? 'GET').toUpperCase();
+  const label = `${method} ${path}`;
+  const startedAt = Date.now();
+  if (method !== 'GET' && typeof requestInit.body === 'string') {
+    devLog('API', `→ ${label}`, parseJson(requestInit.body));
+  }
+
   const token = auth ? await tokenStorage.getAccessToken() : null;
   if (ownerGuard && !ownerGuard()) throw new Error('운동 기록의 계정이 변경되었습니다.');
   let response = await send(path, requestInit, token);
 
   if (auth && response.status === 401) {
     const error = await toApiError(response);
+    devWarn('API', `✗ ${label} 401 ${error.code} (${Date.now() - startedAt}ms)`);
     if (error.code !== 'AUTH_TOKEN_EXPIRED') {
       await failSession();
       throw error;
@@ -62,13 +71,30 @@ export async function apiFetch<T>(path: string, init?: ApiFetchInit): Promise<T>
     response = await send(path, requestInit, accessToken);
   }
 
+  const elapsed = () => `${Date.now() - startedAt}ms`;
   if (!response.ok) {
-    throw await toApiError(response);
+    const error = await toApiError(response);
+    devWarn('API', `✗ ${label} ${response.status} ${error.code} (${elapsed()})`, {
+      detail: error.message,
+      errors: error.errors,
+    });
+    throw error;
   }
   if (response.status === 204) {
+    devLog('API', `← ${label} 204 (${elapsed()})`);
     return undefined as T;
   }
-  return (await response.json()) as T;
+  const body = (await response.json()) as T;
+  devLog('API', `← ${label} ${response.status} (${elapsed()})`, body);
+  return body;
+}
+
+function parseJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
 }
 
 let refreshing: Promise<string | null> | null = null;
@@ -125,6 +151,7 @@ async function send(path: string, init: RequestInit, accessToken: string | null)
       },
     });
   } catch {
+    devWarn('API', `✗ ${init.method ?? 'GET'} ${path} NETWORK_ERROR (${BASE_URL || 'EXPO_PUBLIC_API_URL 미설정'})`);
     throw new ApiError(0, 'NETWORK_ERROR', `서버에 연결할 수 없습니다. (${BASE_URL || 'EXPO_PUBLIC_API_URL 미설정'})`);
   }
 }
