@@ -72,7 +72,7 @@ export default function Index() {
 
   return (
     <View style={styles.container}>
-      <StatusBar style="dark" />
+      <StatusBar style="light" />
       <Image
         source={require('@/assets/images/splash-logo.png')}
         style={styles.logo}
@@ -88,7 +88,7 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#FFFFFF',
+    backgroundColor: '#3677F8',
   },
   logo: {
     width: 172,
