@@ -8,7 +8,7 @@ type SyncItem = { kind?: 'session'; sessionId: string; session: WorkoutSessionSy
 type PoseItem = { kind: 'pose'; sessionId: string; resultId: string; routineSetId: string; performedAt: string; payload: Record<string, unknown> };
 type ReportItem = { kind: 'report'; sessionId: string };
 type QueueItem = SyncItem | PoseItem | ReportItem;
-type Stored = { version: 1; queue: QueueItem[]; current: (SyncItem & { draft: WorkoutDraft }) | null; plan: TodayWorkoutPlan | null; completed?: Record<string, PoseItem> };
+type Stored = { version: 1; queue: QueueItem[]; current: (SyncItem & { draft: WorkoutDraft }) | null; plan: TodayWorkoutPlan | null; completedDates?: string[]; completed?: Record<string, PoseItem> };
 const key = (owner: string) => `barofit.workout.v1.${owner}`;
 const empty = (): Stored => ({ version: 1, queue: [], current: null, plan: null });
 const locks = new Map<string, Promise<unknown>>();
@@ -29,11 +29,81 @@ function locked<T>(owner: string, fn: () => Promise<T>): Promise<T> {
 async function change(owner: string, fn: (data: Stored) => void): Promise<void> {
   return locked(owner, async () => { const data = await read(owner); fn(data); await AsyncStorage.setItem(key(owner), JSON.stringify(data)); });
 }
+function workoutDate(startedAt: string) {
+  return new Date(new Date(startedAt).getTime() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+export function hasCompletedWorkout(owner: string, date: string) {
+  return locked(owner, async () => {
+    const data = await read(owner);
+    return !!data.completedDates?.includes(date) ||
+      (data.current?.session.status === 'COMPLETED' && workoutDate(data.current.session.endedAt ?? data.current.session.startedAt) === date) ||
+      data.queue.some(item => (item.kind === undefined || item.kind === 'session') &&
+        item.session.status === 'COMPLETED' && workoutDate(item.session.endedAt ?? item.session.startedAt) === date);
+  });
+}
 export function getLocalWorkout(owner: string) { return locked(owner, async () => (await read(owner)).current); }
+/** Entry-point recovery only: expire yesterday's interrupted session without losing uploads. */
+export function getResumableWorkout(owner: string, now = new Date()) {
+  return locked(owner, async () => {
+    const data = await read(owner);
+    const current = data.current;
+    if (!current) return null;
+    if (['COMPLETED', 'ABANDONED'].includes(current.session.status)) return null;
+    const started = new Date(current.session.startedAt);
+    const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    if (!Number.isFinite(started.getTime()) || started >= midnight) return current;
+    const savedAt = new Date(current.draft.savedAt).getTime();
+    const endedAt = new Date(Math.max(started.getTime(), Math.min(
+      Number.isFinite(savedAt) ? savedAt : midnight.getTime() - 1,
+      midnight.getTime() - 1,
+    ))).toISOString();
+    const session: WorkoutSessionSync = {
+      ...current.session, status: 'ABANDONED', revision: current.session.revision + 1, endedAt,
+      activeDurationSeconds: current.draft.activeDurationSeconds ?? current.session.activeDurationSeconds,
+      restDurationSeconds: current.draft.restDurationSeconds ?? current.session.restDurationSeconds,
+    };
+    data.queue.push({ sessionId: current.sessionId, session });
+    if (session.sets.some(set => (set.actualReps ?? 0) > 0 || (set.actualDurationSeconds ?? 0) > 0) &&
+        !data.queue.some(item => item.kind === 'report' && item.sessionId === current.sessionId))
+      data.queue.push({ kind: 'report', sessionId: current.sessionId });
+    data.current = null;
+    if (data.plan && data.plan.date < `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`)
+      data.plan = null;
+    await AsyncStorage.setItem(key(owner), JSON.stringify(data));
+    return null;
+  });
+}
 export function getCachedPlan(owner: string) { return locked(owner, async () => (await read(owner)).plan); }
 export function cachePlan(owner: string, plan: TodayWorkoutPlan) { return change(owner, data => { data.plan = plan; }); }
 export function clearLocalWorkout(owner: string, sessionId: string) {
   return change(owner, data => { if (data.current?.sessionId === sessionId) data.current = null; });
+}
+/** Only discard a brand-new session definitively rejected by the server, never measured work. */
+export function discardRejectedStart(owner: string, sessionId: string) {
+  return change(owner, data => {
+    const current = data.current;
+    if (!current || current.sessionId !== sessionId || current.session.revision !== 0 || current.session.sets.length) return;
+    data.queue = data.queue.filter(item => item.sessionId !== sessionId);
+    data.current = null;
+  });
+}
+/** End and detach one specific session atomically; queued measurements remain retryable. */
+export function abandonLocalWorkout(owner: string, sessionId: string) {
+  return change(owner, data => {
+    const current = data.current;
+    if (!current || current.sessionId !== sessionId) throw new Error('진행 중인 운동이 변경됐어요. 다시 확인해 주세요.');
+    if (!['COMPLETED', 'ABANDONED'].includes(current.session.status)) {
+      const session: WorkoutSessionSync = { ...current.session, status: 'ABANDONED',
+        revision: current.session.revision + 1, endedAt: new Date().toISOString(),
+        activeDurationSeconds: current.draft.activeDurationSeconds ?? current.session.activeDurationSeconds,
+        restDurationSeconds: current.draft.restDurationSeconds ?? current.session.restDurationSeconds };
+      data.queue.push({ sessionId, session });
+      if (session.sets.some(set => (set.actualReps ?? 0) > 0 || (set.actualDurationSeconds ?? 0) > 0) &&
+          !data.queue.some(item => item.kind === 'report' && item.sessionId === sessionId))
+        data.queue.push({ kind: 'report', sessionId });
+    }
+    data.current = null;
+  });
 }
 /** Persist the exact request before attempting it. Never mutate an already queued revision. */
 export function queueSession(owner: string, sessionId: string, session: WorkoutSessionSync, draft?: WorkoutDraft) {
@@ -42,7 +112,12 @@ export function queueSession(owner: string, sessionId: string, session: WorkoutS
     if (current && current.sessionId !== sessionId) throw new Error('이어할 운동이 이미 있어요.');
     const position = draft ?? current?.draft;
     if (!position) throw new Error('운동 진행 위치가 없어요.');
+    if (current && ['COMPLETED', 'ABANDONED'].includes(current.session.status)) throw new Error('종료된 운동은 재개할 수 없어요.');
     if (current && session.revision <= current.session.revision) throw new Error('운동 버전이 올바르지 않아요.');
+    if (session.status === 'COMPLETED') {
+      const date = workoutDate(session.endedAt ?? session.startedAt);
+      data.completedDates = [...new Set([...(data.completedDates ?? []), date])];
+    }
     data.current = { sessionId, session, draft: position };
     data.queue.push({ sessionId, session });
     if ((session.status === 'COMPLETED' || session.status === 'ABANDONED') &&

@@ -37,5 +37,11 @@ function load(file,deps={}) {
  const routine=[{exerciseId:'push-up',sets:1,interExerciseRestSeconds:80,targets:[{targetReps:20,targetDurationSeconds:null,timeLimitSeconds:90,restSeconds:30}]},{exerciseId:'plank',sets:1,targets:[{targetDurationSeconds:45,restSeconds:20}]}];
  assert.equal(flow.phaseDurationSeconds({kind:'exercising',exerciseIndex:0,set:1},routine),90);
  assert.equal(flow.phaseDurationSeconds({kind:'countdown',exerciseIndex:1,set:1},routine),80);
+ const perSet=[{exerciseId:'push-up',sets:3,targets:[{targetReps:20},{targetReps:12},{targetReps:8}]}];
+ assert.equal(flow.phaseTargetReps({kind:'exercising',exerciseIndex:0,set:1},perSet,99),20);
+ assert.equal(flow.phaseTargetReps({kind:'exercising',exerciseIndex:0,set:2},perSet,99),12);
+ assert.equal(flow.phaseTargetReps({kind:'countdown',exerciseIndex:0,set:3},perSet,99),8);
+ assert.equal(flow.phaseTargetReps({kind:'resting',exerciseIndex:0,completedSet:2},perSet,99),12);
+ assert.equal(flow.phaseTargetReps({kind:'exercising',exerciseIndex:0,set:1},[{sets:1}],15),15);
  console.log('PASS: immutable date-only edit payload, reordered/deleted exercises, last exercise retained, strict time parsing, separate rep time limits and set rest, actual session timer and inter-exercise rest.');
 })().catch(e=>{console.error(e);process.exitCode=1});

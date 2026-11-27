@@ -1,6 +1,6 @@
 /**
  * 운동 종료 확인 바텀시트 (일시정지 화면 위). 표시 전용입니다.
- *  - 운동 종료 → onConfirm (기존 '저장하고 나가기': 진행 상태를 임시저장하고 나감, 오늘 이어하기 가능)
+ *  - 운동 종료 → onConfirm (수행 기록 보존, 세션 완전 종료)
  *  - 돌아가기 / 배경 탭 / Android 뒤로가기 → onCancel (일시정지 화면으로 복귀)
  */
 import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
@@ -11,12 +11,13 @@ import { SessionColors } from './sessionPalette';
 type StopConfirmSheetProps = {
   visible: boolean;
   onConfirm: () => void;
+  onSaveForLater?: () => void;
   onCancel: () => void;
   /** 저장·이동 처리 중이면 true → 버튼 비활성화(중복 탭 방지) */
   busy?: boolean;
 };
 
-export function StopConfirmSheet({ visible, onConfirm, onCancel, busy = false }: StopConfirmSheetProps) {
+export function StopConfirmSheet({ visible, onConfirm, onCancel, onSaveForLater, busy = false }: StopConfirmSheetProps) {
   const insets = useSafeAreaInsets();
 
   return (
@@ -40,7 +41,7 @@ export function StopConfirmSheet({ visible, onConfirm, onCancel, busy = false }:
             운동을 종료할까요?
           </Text>
           <Text style={styles.body}>
-            {'지금까지 운동한 기록은 임시저장됩니다.\n오늘 언제든 다시 시작할 수 있어요.'}
+            {'지금까지 수행한 기록은 저장됩니다.\n종료한 운동은 다시 이어할 수 없어요.'}
           </Text>
           <Pressable
             accessibilityRole="button"
@@ -49,6 +50,11 @@ export function StopConfirmSheet({ visible, onConfirm, onCancel, busy = false }:
             style={({ pressed }) => [styles.confirmButton, (pressed || busy) && styles.pressed]}>
             <Text style={styles.confirmText}>운동 종료</Text>
           </Pressable>
+          {onSaveForLater && (
+            <Pressable accessibilityRole="button" disabled={busy} onPress={onSaveForLater} style={styles.cancel}>
+              <Text style={styles.cancelText}>임시저장하고 나가기 (오늘만 재개 가능)</Text>
+            </Pressable>
+          )}
           <Pressable accessibilityRole="button" disabled={busy} hitSlop={8} onPress={onCancel} style={styles.cancel}>
             <Text style={styles.cancelText}>돌아가기</Text>
           </Pressable>

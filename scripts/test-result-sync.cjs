@@ -15,7 +15,7 @@ const api = {
 function load() { const m = { exports: {} }; const deps = { '@react-native-async-storage/async-storage': { __esModule: true, default: storage }, '@/services/api': { ApiError }, '@/services/poseExerciseIds': poseIds, '@/services/workoutSessionService': api }; new Function('require', 'module', 'exports', js)(name => deps[name], m, m.exports); return m.exports; }
 (async () => {
   let offline = load();
-  const session = { routineId: 'r', routineSnapshot: { exercises: [{ exerciseId: 'push-up', sets: [{ id: 'planned-set' }] }] }, status: 'ACTIVE', revision: 0, sets: [] };
+  const session = { startedAt: '2026-11-05T00:00:00Z', routineId: 'r', routineSnapshot: { exercises: [{ exerciseId: 'push-up', sets: [{ id: 'planned-set' }] }] }, status: 'ACTIVE', revision: 0, sets: [] };
   const draft = { sessionId: 's' };
   await offline.queueSession('u', 's', session, draft);
   const pose = { sessionId: 's', resultId: 'result', routineSetId: 'planned-set', performedAt: '2026-11-05T00:00:00Z', payload: { schemaVersion: '2.0', type: 'set.completed', exercise: 'pushup', engineVersion: 'v2', summary: { count: 3, holdSeconds: null, items: {} } } };
@@ -32,5 +32,9 @@ function load() { const m = { exports: {} }; const deps = { '@react-native-async
   await offline.flushWorkoutQueue('u', () => true);
   assert.deepEqual(calls, ['session:ACTIVE:0:0', 'session:ACTIVE:1:1', 'pose:planned-set:3', 'session:COMPLETED:2:1', 'report:s']);
   assert.equal(await offline.pendingCount('u'), 0);
+  await offline.clearLocalWorkout('u', 's');
+  assert.equal(await offline.hasCompletedWorkout('u', '2026-11-05'), true);
+  assert.equal(await offline.hasCompletedWorkout('u', '2026-11-06'), false);
+  assert.equal(await offline.hasCompletedWorkout('another-user', '2026-11-05'), false);
   console.log('PASS: measured set, offline restart and report generation ordering');
 })().catch(error => { console.error(error); process.exitCode = 1; });

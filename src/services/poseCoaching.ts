@@ -28,7 +28,7 @@ export function createPoseCoach(send: (event: CoachingEvent) => boolean, speak: 
       const match = [...frame.currentCodes, ...repCodes].map(code => FEEDBACK[code]).find(Boolean);
       if (!match || now() - lastAt < intervalMs) return;
       lastAt = now();
-      if (!send({ eventType: 'REP_FEEDBACK', exerciseId: frame.exercise, feedbackCode: match.code })) speak(match.text);
+      if (!send({ eventType: 'REP_FEEDBACK', exerciseId: frame.exercise, feedbackCode: match.code, localFallbackText: match.text })) speak(match.text);
     },
   };
 }

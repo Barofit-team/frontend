@@ -31,12 +31,16 @@ import {
   saveDailyRoutine,
 } from '@/services/dailyRoutineService';
 import {
+  abandonLocalWorkout,
   cachePlan,
+  flushWorkoutQueue,
   getCachedPlan,
-  getLocalWorkout,
+  getResumableWorkout,
   isOffline,
   pendingCount,
 } from '@/services/offlineWorkout';
+import { assertDailyWorkoutAvailable } from '@/services/dailyWorkoutPolicy';
+import { useTodayDate } from '@/hooks/useTodayDate';
 import { assignWorkoutPlan } from '@/services/routineService';
 import {
   estimateRoutineMetrics,
@@ -59,7 +63,9 @@ export default function TodayRoutineScreen() {
   const date =
     useTodayRoutineStore((s) => s.planDate) ?? toIsoDateString(new Date());
   const origin = useTodayRoutineStore((s) => s.selectionOrigin);
-  const savedWorkout = useWorkoutDraftStore((s) => s.draft);
+  const storedWorkout = useWorkoutDraftStore((s) => s.draft);
+  const savedWorkout = storedWorkout?.routineId === source?.id ? storedWorkout : null;
+  const startingLock = useRef(false);
   const [draft, setDraft] = useState<RoutineDetail | null>(() =>
     source ? editableRoutine(source) : null,
   );
@@ -74,7 +80,7 @@ export default function TodayRoutineScreen() {
   const [editing, setEditing] = useState<RoutineExerciseDetail | null>(null);
   const [leaving, setLeaving] = useState(false);
   const savingLock = useRef(false);
-  const today = toIsoDateString(new Date());
+  const today = useTodayDate();
   const dirty = Boolean(
     source &&
       draft &&
@@ -108,7 +114,8 @@ export default function TodayRoutineScreen() {
       setError(null);
       void (async () => {
         if (owner) {
-          const local = await getLocalWorkout(owner);
+          const previous = useWorkoutDraftStore.getState().draft;
+          const local = await getResumableWorkout(owner);
           if (!active || useAuthStore.getState().user?.id !== owner) return;
           if (
             local &&
@@ -116,7 +123,16 @@ export default function TodayRoutineScreen() {
             local.session.status !== 'ABANDONED'
           )
             useWorkoutDraftStore.getState().saveDraft(local.draft);
-          else useWorkoutDraftStore.getState().clearDraft();
+          else {
+            useWorkoutDraftStore.getState().clearDraft();
+            if (previous && previous.routineId === useTodayRoutineStore.getState().routineSnapshot?.id) {
+              useTodayRoutineStore.getState().setPlan(null, today);
+              setLeaving(true);
+              router.replace('/(tabs)/home');
+              return;
+            }
+          }
+          void flushWorkoutQueue(owner, () => useAuthStore.getState().user?.id === owner).catch(() => {});
           setPending(await pendingCount(owner));
         }
         try {
@@ -152,7 +168,7 @@ export default function TodayRoutineScreen() {
       return () => {
         active = false;
       };
-    }, [owner, date]),
+    }, [owner, date, today]),
   );
 
   const back = () => {
@@ -198,42 +214,43 @@ export default function TodayRoutineScreen() {
     }
   };
   const start = async () => {
-    if (savingLock.current) return;
-    if (savedWorkout) {
-      try {
-        const local = owner ? await getLocalWorkout(owner) : null;
-        if (!local || local.sessionId !== savedWorkout.sessionId)
-          throw new Error('저장한 운동을 찾지 못했어요.');
-        useTodayRoutineStore
-          .getState()
-          .setPlan(local.session.routineSnapshot, date);
+    if (savingLock.current || startingLock.current) return;
+    startingLock.current = true;
+    try {
+      const local = owner ? await getResumableWorkout(owner) : null;
+      if (date === today) {
+        if (!owner) throw new Error('로그인이 필요해요.');
+        await assertDailyWorkoutAvailable(owner, today, local?.sessionId);
+      }
+      if (local && local.session.routineId === source?.id) {
+        useWorkoutDraftStore.getState().saveDraft(local.draft);
+        useTodayRoutineStore.getState().setPlan(local.session.routineSnapshot, date);
         setLeaving(true);
         disableRemovalPrevention();
         router.push({ pathname: '/workout-session', params: { resume: '1' } });
-      } catch (e) {
-        showError(e);
+        return;
       }
-      return;
-    }
-    if (!draft) return;
-    if (date !== today) {
-      if (dirty) {
-        try {
-          await persist(draft);
-        } catch (e) {
-          showError(e);
-        }
+      if (!draft) return;
+      if (date !== today) {
+        if (dirty) await persist(draft);
+        return;
       }
-      return;
-    }
-    try {
-      await persist(draft);
+      if (local && owner) {
+        const ok = await confirmAction('다른 루틴 시작',
+          '진행 중인 운동을 종료하고 새 루틴을 시작할까요? 수행 기록은 보존되며 기존 운동은 재개할 수 없어요.', '종료하고 시작');
+        if (!ok) return;
+        if (useAuthStore.getState().user?.id !== owner) return;
+        // Save the chosen plan before ending the old session, so a failed plan save preserves resume.
+        await persist(draft);
+        await abandonLocalWorkout(owner, local.sessionId);
+        useWorkoutDraftStore.getState().clearDraft();
+        void flushWorkoutQueue(owner, () => useAuthStore.getState().user?.id === owner).catch(() => {});
+      } else await persist(draft);
       setLeaving(true);
       disableRemovalPrevention();
       router.push('/workout-preparation', { dangerouslySingular: true });
-    } catch (e) {
-      showError(e);
-    }
+    } catch (e) { showError(e); }
+    finally { startingLock.current = false; }
   };
   const toggleReorder = async () => {
     if (reorder && dirty && draft) {

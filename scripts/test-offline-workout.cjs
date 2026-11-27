@@ -63,5 +63,61 @@ function load() {
   assert.ok(await offline.getLocalWorkout('alice'));
   await offline.clearLocalWorkout('alice', 'session');
   assert.equal(await offline.getLocalWorkout('alice'), null);
+  // A session started before local midnight expires atomically, including after a crash
+  // that left its durable status ACTIVE. Results and upload ordering remain intact.
+  const now = new Date('2026-11-27T00:00:00+09:00');
+  const old = { revision: 3, status: 'PAUSED', startedAt: '2026-11-26T23:58:00+09:00',
+    endedAt: null, routineId: 'old', routineSnapshot: { id: 'old' },
+    activeDurationSeconds: 10, restDurationSeconds: 2,
+    sets: [{ routineSetId: 'set', actualReps: 5, actualDurationSeconds: null }] };
+  const oldPosition = { sessionId: 'old-session', savedAt: '2026-11-26T23:59:00+09:00',
+    activeDurationSeconds: 30, restDurationSeconds: 5 };
+  await offline.queueSession('expiry', 'old-session', old, oldPosition);
+  await offline.cachePlan('expiry', { date: '2026-11-26', routine: old.routineSnapshot });
+  online = false;
+  const beforeMidnight = new Date('2026-11-26T23:59:59+09:00');
+  assert.ok(await offline.getResumableWorkout('expiry', beforeMidnight));
+  assert.deepEqual(await Promise.all([offline.getResumableWorkout('expiry', now), offline.getResumableWorkout('expiry', now)]), [null, null]);
+  assert.equal(await offline.getLocalWorkout('expiry'), null);
+  assert.equal(await offline.getCachedPlan('expiry'), null);
+  assert.equal(await offline.pendingCount('expiry'), 3); // original, terminal, report
+  await assert.rejects(offline.flushWorkoutQueue('expiry', () => true));
+  assert.equal(await offline.pendingCount('expiry'), 3);
+  offline = load(); // Durable expiry survives an app restart.
+  assert.equal(await offline.getResumableWorkout('expiry', now), null);
+  const fresh = { ...old, revision: 0, status: 'ACTIVE', sets: [], startedAt: now.toISOString() };
+  await offline.queueSession('expiry', 'new-session', fresh, { ...oldPosition, sessionId: 'new-session', savedAt: now.toISOString() });
+  assert.equal((await offline.getResumableWorkout('expiry', now)).sessionId, 'new-session');
+  online = true; calls = []; reportCalls = [];
+  await offline.flushWorkoutQueue('expiry', () => true);
+  assert.deepEqual(calls.map(c => [c.id, c.body.status, c.body.revision]), [
+    ['old-session', 'PAUSED', 3], ['old-session', 'ABANDONED', 4], ['new-session', 'ACTIVE', 0],
+  ]);
+  assert.deepEqual(calls[1].body.sets, old.sets);
+  assert.equal(calls[1].body.activeDurationSeconds, 30);
+  assert.equal(calls[1].body.endedAt, new Date(oldPosition.savedAt).toISOString());
+  assert.deepEqual(reportCalls, ['old-session']);
+  await offline.queueSession('crashed', 'old-active', { ...old, status: 'ACTIVE', sets: [] }, oldPosition);
+  assert.equal(await offline.getResumableWorkout('crashed', now), null);
+  assert.equal(await offline.pendingCount('crashed'), 2); // No fabricated report without results.
+  assert.ok(await offline.getLocalWorkout('expiry')); // Other account is unaffected.
+  const switchSession = { ...old, status: 'PAUSED', startedAt: now.toISOString() };
+  await offline.queueSession('switch', 'routine-a', switchSession, oldPosition);
+  await assert.rejects(offline.abandonLocalWorkout('switch', 'wrong-session'));
+  assert.ok(await offline.getLocalWorkout('switch')); // Cancel/stale selection leaves it intact.
+  await offline.abandonLocalWorkout('switch', 'routine-a');
+  assert.equal(await offline.getLocalWorkout('switch'), null);
+  await assert.rejects(offline.abandonLocalWorkout('switch', 'routine-a')); // No duplicate terminal revision.
+  await offline.queueSession('switch', 'routine-b', fresh, oldPosition);
+  calls = []; reportCalls = [];
+  await offline.flushWorkoutQueue('switch', () => true);
+  assert.deepEqual(calls.map(c => [c.id, c.body.status]), [
+    ['routine-a', 'PAUSED'], ['routine-a', 'ABANDONED'], ['routine-b', 'ACTIVE'],
+  ]);
+  assert.deepEqual(reportCalls, ['routine-a']);
+  const terminal = { ...fresh, status: 'ABANDONED', revision: 1, endedAt: now.toISOString() };
+  await offline.queueSession('switch', 'routine-b', terminal);
+  await assert.rejects(offline.queueSession('switch', 'routine-b', { ...fresh, revision: 2 }));
+  console.log('PASS: midnight expiry, concurrent recovery, offline/restart, new session, preserved results');
   console.log('PASS: offline queue, restart, account isolation, retry ordering and conflicts');
 })().catch(error => { console.error(error); process.exitCode = 1; });

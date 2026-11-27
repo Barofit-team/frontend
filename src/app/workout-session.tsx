@@ -22,12 +22,17 @@ import {
   INITIAL_PHASE,
   nextPhase,
   phaseDurationSeconds,
+  phaseTargetReps,
   type ActivePhase,
   type SessionPhase,
 } from '@/components/workout-session/sessionFlow';
 import { WorkoutCompleteView } from '@/components/workout-session/WorkoutCompleteView';
-import { createWorkoutSessionDraft, type WorkoutSessionSync, type WorkoutStatus } from '@/services/workoutSessionService';
-import { clearLocalWorkout, flushWorkoutQueue, getLocalWorkout, pendingCount, queueSession, savePosition } from '@/services/offlineWorkout';
+import { createWorkoutSessionDraft, syncWorkoutSession, type WorkoutSessionSync, type WorkoutStatus } from '@/services/workoutSessionService';
+import { clearLocalWorkout, discardRejectedStart, flushWorkoutQueue, getLocalWorkout, getResumableWorkout, pendingCount, queueSession, savePosition } from '@/services/offlineWorkout';
+import { ApiError } from '@/services/api';
+import { assertDailyWorkoutAvailable } from '@/services/dailyWorkoutPolicy';
+import { toIsoDateString } from '@/services/weeklyPlanService';
+import { phaseAnnouncement } from '@/services/sessionCoaching';
 import { createExerciseAnalyzer, createPosePipeline } from '@/services/posePipeline';
 import { useAuthStore } from '@/stores/useAuthStore';
 import type { WorkoutDraft } from '@/stores/useWorkoutDraftStore';
@@ -103,24 +108,7 @@ export default function WorkoutSessionScreen() {
   // 카메라 바인딩과 TTS 시작이 같은 타이밍에 몰리면(기기 쪽 리소스 경합) 카메라가 잠깐
   // 끊겼다 자동 복구되는 현상이 있어, 첫 안내 음성은 카메라가 준비된 뒤로 미룬다.
   const [cameraReady, setCameraReadyState] = useState(false);
-  const cameraReadyRef = useRef(false);
-  const pendingCameraReadyAction = useRef<(() => void) | null>(null);
-  const handleCameraReady = useCallback(() => {
-    cameraReadyRef.current = true;
-    setCameraReadyState(true);
-  }, []);
-  const runWhenCameraReady = useCallback((action: () => void) => {
-    if (cameraReadyRef.current) action();
-    else pendingCameraReadyAction.current = action;
-  }, []);
-  useEffect(() => {
-    if (!cameraReady) return;
-    const action = pendingCameraReadyAction.current;
-    if (action) {
-      pendingCameraReadyAction.current = null;
-      action();
-    }
-  }, [cameraReady]);
+  const handleCameraReady = useCallback(() => setCameraReadyState(true), []);
 
   const currentElapsed = useCallback(() => {
     const value = { ...elapsed.current };
@@ -136,6 +124,7 @@ export default function WorkoutSessionScreen() {
       const currentRef = serverSession.current;
       if (!currentRef || !owner || !positionRef.current) throw new Error('운동 세션이 아직 준비되지 않았어요.');
       const local = await getLocalWorkout(owner);
+      if (local && ['COMPLETED', 'ABANDONED'].includes(local.session.status)) return;
       if (!local || local.sessionId !== currentRef.sessionId) throw new Error('저장된 운동 세션을 찾지 못했어요.');
       const current = { sessionId: local.sessionId, session: local.session };
       const duration = currentElapsed();
@@ -158,7 +147,7 @@ export default function WorkoutSessionScreen() {
     if (!startPromise.current) {
       if (resumeDraft.current) {
         const saved = resumeDraft.current;
-        startPromise.current = getLocalWorkout(owner).then(local => {
+        startPromise.current = getResumableWorkout(owner).then(local => {
           if (!local || local.sessionId !== saved.sessionId || local.session.routineId !== snapshot.id ||
               local.session.status === 'COMPLETED' || local.session.status === 'ABANDONED')
             throw new Error('이어갈 수 없는 세션입니다.');
@@ -166,6 +155,13 @@ export default function WorkoutSessionScreen() {
           return { sessionId: local.sessionId, session: local.session };
         });
       } else {
+        const today = toIsoDateString(new Date());
+        const planDate = useTodayRoutineStore.getState().planDate;
+        if (planDate && planDate !== today) {
+          useTodayRoutineStore.getState().setPlan(null, today);
+          router.replace('/(tabs)/home');
+          return;
+        }
         const draft = createWorkoutSessionDraft(snapshot);
         const first = snapshot.exercises[0];
         if (!first) { setSessionError('운동 종목이 없어요.'); return; }
@@ -178,12 +174,23 @@ export default function WorkoutSessionScreen() {
           savedAt: new Date().toISOString(), activeDurationSeconds: 0, restDurationSeconds: 0 };
         positionRef.current = position;
         remainingRef.current = position.remainingSeconds;
-        startPromise.current = getLocalWorkout(owner)
+        startPromise.current = assertDailyWorkoutAvailable(owner, today)
+          .then(() => getLocalWorkout(owner))
           .then(async (local) => {
             if (local && local.sessionId !== draft.sessionId) {
+              if (!['COMPLETED', 'ABANDONED'].includes(local.session.status)) throw new Error('진행 중인 운동을 먼저 종료해 주세요.');
               await clearLocalWorkout(owner, local.sessionId);
             }
             await queueSession(owner, draft.sessionId, draft.session, position);
+            // Do not run the camera/timer until the server accepts this specific session.
+            try {
+              await syncWorkoutSession(draft.sessionId, draft.session, () => useAuthStore.getState().user?.id === owner);
+              await flushWorkoutQueue(owner, () => useAuthStore.getState().user?.id === owner);
+            } catch (error) {
+              if (error instanceof ApiError && ['DAILY_WORKOUT_COMPLETED', 'WORKOUT_ALREADY_IN_PROGRESS'].includes(error.code))
+                await discardRejectedStart(owner, draft.sessionId);
+              throw error;
+            }
             return draft;
           });
       }
@@ -198,28 +205,10 @@ export default function WorkoutSessionScreen() {
       flushWorkoutQueue(owner, () => useAuthStore.getState().user?.id === owner).then(() => connectSessionCoach(draft.sessionId)).then((cleanup) => {
         if (cancelled) { cleanup(); return; }
         coachCleanup.current = cleanup;
-        const current = phaseRef.current;
-        if (!resumeDraft.current && current.kind !== 'completed') {
-          const exercise = snapshot.exercises[current.exerciseIndex];
-          if (exercise) {
-            runWhenCameraReady(() => {
-              if (!cancelled) useTtsStore.getState().sendCoachEvent({ eventType: 'EXERCISE_START', exerciseId: exercise.exerciseId });
-            });
-          }
-        }
       }).catch(() => {
-        if (cancelled) return;
-        const current = phaseRef.current;
-        if (current.kind !== 'completed') {
-          const intro = snapshot.exercises[current.exerciseIndex]?.introTtsText;
-          if (intro) {
-            runWhenCameraReady(() => {
-              if (!cancelled) useTtsStore.getState().playSpeech(intro, 'EXERCISE_START');
-            });
-          }
-        }
+        // Phase announcements and pose feedback have local speech fallbacks.
       }).finally(() => { coachAttempting.current = false; });
-    }).catch(() => { if (!cancelled) setSessionError('운동 세션을 저장하지 못했어요. 연결을 확인한 후 다시 시작해 주세요.'); });
+    }).catch((error) => { if (!cancelled) setSessionError(error instanceof Error ? error.message : '운동 세션을 저장하지 못했어요. 연결을 확인해 주세요.'); });
     return () => { cancelled = true; coachCleanup.current?.(); coachCleanup.current = null; };
   }, [snapshot, owner]);
 
@@ -263,7 +252,7 @@ export default function WorkoutSessionScreen() {
       return {
         ...base,
         name: session?.name ?? base.name,
-        targetReps: session?.reps ?? base.targetReps,
+        targetReps: phaseTargetReps(current, activeRoutine, session?.reps ?? base.targetReps),
       };
     },
     [sessions, activeRoutine],
@@ -291,7 +280,7 @@ export default function WorkoutSessionScreen() {
     setSelectedSide('both');
   }, [phase]);
   useEffect(() => {
-    if (!sessionReady || pause !== 'none' || phase.kind === 'completed') return;
+    if (!sessionReady || !cameraReady || pause !== 'none' || phase.kind === 'completed') return;
     const kind = phase.kind === 'exercising' ? 'active'
       : phase.kind === 'resting' || (phase.kind === 'countdown' && phase.exerciseIndex > 0 && phase.set === 1) ? 'rest' : null;
     if (!kind) return;
@@ -303,15 +292,26 @@ export default function WorkoutSessionScreen() {
       else elapsed.current.restMs += duration;
       running.current = null;
     };
-  }, [phase, pause, sessionReady]);
+  }, [phase, pause, sessionReady, cameraReady]);
 
+  const announcedPhases = useRef(new Set<string>());
+  const socketStatus = useTtsStore(state => state.socketStatus);
   useEffect(() => {
-    if (!sessionReady || !cameraReady || pause !== 'none' || phase.kind !== 'countdown' || phase.set !== 1 || phase.exerciseIndex === 0) return;
+    const tts = useTtsStore.getState();
+    const enabled = sessionReady && cameraReady && pause === 'none';
+    const context = enabled ? `${serverSession.current?.sessionId}:${phase.id}` : null;
+    tts.setCoachContext(context);
+    if (!enabled || phase.kind === 'completed') return;
     const exercise = snapshot?.exercises[phase.exerciseIndex];
-    if (exercise && !useTtsStore.getState().sendCoachEvent({ eventType: 'EXERCISE_START', exerciseId: exercise.exerciseId })) {
-      if (exercise.introTtsText) useTtsStore.getState().playSpeech(exercise.introTtsText, 'EXERCISE_START');
-    }
-  }, [phase, pause, sessionReady, snapshot, cameraReady]);
+    if (!exercise || !context || announcedPhases.current.has(context)) return;
+    const announcement = phaseAnnouncement(phase, exercise);
+    if (!announcement) return;
+    announcedPhases.current.add(context);
+    if (announcement.type !== 'EXERCISE_START' ||
+        !tts.sendCoachEvent({ eventType: 'EXERCISE_START', exerciseId: exercise.exerciseId, localFallbackText: announcement.text }))
+      tts.playSpeech(announcement.text, announcement.type);
+  }, [phase, pause, sessionReady, snapshot, cameraReady, socketStatus]);
+  useEffect(() => () => useTtsStore.getState().setCoachContext(null), []);
   const checkpoint = useCallback((remainingSeconds: number) => {
     remainingRef.current = remainingSeconds;
     const current = serverSession.current;
@@ -458,18 +458,32 @@ export default function WorkoutSessionScreen() {
 
   // 상태 전환은 모두 "현재 상태가 기대한 값일 때만" 적용 → 연속 탭에도 한 번만 전환
   const requestPause = useCallback(() => {
+    if (exitingRef.current || phaseRef.current.kind === 'completed') return;
     markPauseChange();
+    useTtsStore.getState().setCoachContext(null);
     poseSetRef.current?.pipeline.pause();
     setPause(p => (p === 'none' || p === 'resuming' ? 'paused' : p));
     if (serverSession.current) void updateServerStatus('PAUSED').catch(() => Alert.alert('동기화 실패', '운동 일시 정지 상태를 저장하지 못했어요.'));
   }, [markPauseChange, updateServerStatus]);
+  const resumeChecking = useRef(false);
   const resume = useCallback(() => {
-    if (isTapLocked()) return;
+    if (isTapLocked() || resumeChecking.current || !owner) return;
     markPauseChange();
-    // 운동 중이었다면 재개 카운트다운, 시작·휴식 카운트다운 중이었다면 바로 이어서
-    setPause(p => (p !== 'paused' ? p : phase.kind === 'exercising' ? 'resuming' : 'none'));
-    void updateServerStatus('ACTIVE').catch(() => Alert.alert('동기화 실패', '운동 재개 상태를 저장하지 못했어요.'));
-  }, [phase.kind, isTapLocked, markPauseChange, updateServerStatus]);
+    resumeChecking.current = true;
+    void getResumableWorkout(owner).then(async local => {
+      if (useAuthStore.getState().user?.id !== owner) return;
+      if (!local || local.sessionId !== serverSession.current?.sessionId) {
+        useWorkoutDraftStore.getState().clearDraft();
+        useTtsStore.getState().disconnectWebSocket();
+        router.replace('/(tabs)/home');
+        return;
+      }
+      await assertDailyWorkoutAvailable(owner, toIsoDateString(new Date()), local.sessionId);
+      await updateServerStatus('ACTIVE');
+      setPause(p => (p !== 'paused' ? p : phase.kind === 'exercising' ? 'resuming' : 'none'));
+    }).catch(() => Alert.alert('재개 실패', '운동 상태를 확인하지 못했어요. 다시 시도해 주세요.'))
+      .finally(() => { resumeChecking.current = false; });
+  }, [phase.kind, owner, isTapLocked, markPauseChange, updateServerStatus]);
   const finishResumeCountdown = useCallback(() => {
     markPauseChange();
     setPause(p => (p === 'resuming' ? 'none' : p));
@@ -498,40 +512,29 @@ export default function WorkoutSessionScreen() {
   }, [phase.kind, pause, close, openStopConfirm, requestPause, isTapLocked]);
 
   const saveAndExit = useCallback(
-    (remainingSeconds: number) => {
+    (remainingSeconds: number, status: 'PAUSED' | 'ABANDONED' = 'ABANDONED') => {
       if (exitingRef.current || isTapLocked() || phase.kind === 'completed') return;
       exitingRef.current = true;
       setExiting(true);
-      const exercise = resolveExercise(phase);
       const current = serverSession.current;
       if (!current) { exitingRef.current = false; setExiting(false); return; }
-      const draft = {
-        sessionId: current.sessionId,
-        routineId: current.session.routineId,
-        exerciseIndex: phase.exerciseIndex,
-        totalExercises: activeRoutine.length,
-        exerciseId: exercise.id,
-        exerciseName: exercise.name,
-        phase: phase.kind,
-        set: describePause(phase, exercise.name).set,
-        totalSets: activeRoutine[phase.exerciseIndex]?.sets ?? 1,
-        reps: null,
-        targetReps: exercise.targetReps,
-        remainingSeconds,
-        savedAt: new Date().toISOString(),
-      };
       checkpoint(remainingSeconds);
-      void updateServerStatus('PAUSED').then(async () => {
-        const saved = positionRef.current ?? draft;
-        if (owner) await savePosition(owner, current.sessionId, saved);
-        useWorkoutDraftStore.getState().saveDraft(saved);
-        close();
+      void updateServerStatus(status).then(async () => {
+        if (status === 'PAUSED') {
+          const saved = positionRef.current;
+          if (saved) useWorkoutDraftStore.getState().saveDraft(saved);
+        } else {
+          if (owner) await clearLocalWorkout(owner, current.sessionId);
+          useWorkoutDraftStore.getState().clearDraft();
+        }
+        useTtsStore.getState().disconnectWebSocket();
+        router.replace('/(tabs)/home');
       }).catch(() => {
         exitingRef.current = false; setExiting(false);
         Alert.alert('저장 실패', '운동 상태를 저장하지 못했어요. 연결 후 다시 시도해 주세요.');
       });
     },
-    [phase, close, isTapLocked, resolveExercise, activeRoutine, updateServerStatus, checkpoint, owner]
+    [phase, isTapLocked, updateServerStatus, checkpoint, owner]
   );
 
   // 모델이 연결되기 전에는 측정 결과를 만들어 내지 않습니다.
@@ -539,7 +542,7 @@ export default function WorkoutSessionScreen() {
     if (phase.kind !== 'completed' || !sessionReady) return;
     let cancelled = false;
     updateServerStatus('COMPLETED').then(async () => {
-      useTtsStore.getState().sendCoachEvent({ eventType: 'WORKOUT_FINISH' });
+      useTtsStore.getState().playSpeech('오늘 운동을 마쳤어요. 수고하셨습니다.', 'WORKOUT_FINISH');
       const current = serverSession.current;
       if (!owner || !current) throw new Error('운동 세션을 찾지 못했어요.');
       const hasResult = current.session.sets.some(set => (set.actualReps ?? 0) > 0 || (set.actualDurationSeconds ?? 0) > 0);
@@ -619,6 +622,7 @@ export default function WorkoutSessionScreen() {
         onPressStop={openStopConfirm}
         onPressResume={resume}
         onConfirmStop={() => saveAndExit(remainingSeconds)}
+        onSaveForLater={() => saveAndExit(remainingSeconds, 'PAUSED')}
         onCancelStop={cancelStop}
       />
     );
@@ -645,7 +649,7 @@ export default function WorkoutSessionScreen() {
         <PhaseTimer
           key={phase.id}
           durationSeconds={duration}
-          paused={pause !== 'none'}
+          paused={pause !== 'none' || !cameraReady}
           onTick={checkpoint}
           onComplete={() => {
             if (phase.kind === 'exercising') {

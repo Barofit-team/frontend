@@ -22,6 +22,8 @@ function load(file, deps = {}) {
   time += 10000; coach.process({ ...base, currentCodes: ['UNKNOWN_CODE'] }); assert.equal(events.length, 2);
   let queued = [], pauses = 0, finishes = 0;
   const { createPosePipeline } = load('posePipeline.ts', {
+    '@barofit/pose': {},
+    '@/services/poseExerciseIds': { poseExerciseId: id => id },
     '@/services/poseCoaching': { createPoseCoach },
     '@/services/offlineWorkout': { commitPoseSet: async (...args) => queued.push(args), flushWorkoutQueue: async () => {} },
   });

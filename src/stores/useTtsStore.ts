@@ -20,6 +20,13 @@ let wsInstance: WebSocket | null = null;
 let activePlayer: AudioPlayer | null = null;
 let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
 let speechGeneration = 0;
+let coachContext: string | null = null;
+let requestSequence = 0;
+let pendingCoach: { id: string; context: string; timer: ReturnType<typeof setTimeout> } | null = null;
+function cancelPendingCoach() {
+  if (pendingCoach) clearTimeout(pendingCoach.timer);
+  pendingCoach = null;
+}
 
 async function ensureAudioMode(): Promise<void> {
   try {
@@ -79,6 +86,7 @@ interface TtsState {
   lastMessage: CoachMessage | null;
 
   connectWebSocket: (customUrl?: string, auth?: CoachingAuthentication) => void;
+  setCoachContext: (context: string | null) => void;
   sendCoachEvent: (event: CoachingEvent) => boolean;
   disconnectWebSocket: () => void;
   playAudio: (source: AudioSource, text?: string, type?: string) => Promise<void>;
@@ -129,7 +137,9 @@ export const useTtsStore = create<TtsState>((set, get) => ({
             if (wsInstance === ws) set({ socketStatus: 'connected' });
             return;
           }
-          if (!payload.text) return;
+          if (!payload.text || !pendingCoach || payload.requestId !== pendingCoach.id ||
+              coachContext !== pendingCoach.context) return;
+          cancelPendingCoach();
           const label = payload.text || '백엔드 코칭 음성';
           const type = payload.type || 'BACKEND_PUSH';
 
@@ -160,13 +170,31 @@ export const useTtsStore = create<TtsState>((set, get) => ({
     }
   },
 
+  setCoachContext: (context) => {
+    if (coachContext === context) return;
+    coachContext = context;
+    cancelPendingCoach();
+    get().stop();
+  },
+
   sendCoachEvent: (event) => {
-    if (!wsInstance || wsInstance.readyState !== WebSocket.OPEN || get().socketStatus !== 'connected') return false;
-    try { wsInstance.send(JSON.stringify({ type: 'COACH_EVENT', ...event })); return true; }
-    catch { return false; }
+    if (!coachContext || !wsInstance || wsInstance.readyState !== WebSocket.OPEN || get().socketStatus !== 'connected') return false;
+    cancelPendingCoach();
+    const id = `${Date.now()}-${++requestSequence}`;
+    const { localFallbackText, ...wire } = event;
+    pendingCoach = { id, context: coachContext, timer: setTimeout(() => {
+      if (pendingCoach?.id !== id) return;
+      cancelPendingCoach();
+      if (localFallbackText) get().playSpeech(localFallbackText, event.eventType);
+    }, 3000) };
+    try { wsInstance.send(JSON.stringify({ type: 'COACH_EVENT', ...wire, requestId: id })); return true; }
+    catch { cancelPendingCoach(); return false; }
   },
 
   disconnectWebSocket: () => {
+    coachContext = null;
+    cancelPendingCoach();
+    get().stop();
     if (wsInstance) {
       wsInstance.onclose = null;
       wsInstance.close();
@@ -178,7 +206,9 @@ export const useTtsStore = create<TtsState>((set, get) => ({
   // 2. MP3 오디오 출력 (백엔드 수신 오디오 및 로컬 assets/audio/*.mp3 공용)
   playAudio: async (source: AudioSource, text = '코칭 음성 출력', type = 'AUDIO') => {
     get().stop();
+    const generation = speechGeneration;
     await ensureAudioMode();
+    if (generation !== speechGeneration) return;
 
     const msg: CoachMessage = {
       id: `${Date.now()}`,
@@ -212,6 +242,7 @@ export const useTtsStore = create<TtsState>((set, get) => ({
       let started = false;
 
       player.addListener('playbackStatusUpdate', (status) => {
+        if (activePlayer !== player || speechGeneration !== generation) return;
         const statusWithError = status as typeof status & { error?: string | null };
         if (statusWithError.error) {
           if (__DEV__) console.warn('[TTS] player error:', statusWithError.error);
@@ -258,6 +289,7 @@ export const useTtsStore = create<TtsState>((set, get) => ({
         }, 900);
       }
     } catch {
+      if (generation !== speechGeneration) return;
       if (text) get().playSpeech(text, type);
       else set({ isPlaying: false, currentText: '' });
     }

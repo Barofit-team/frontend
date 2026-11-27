@@ -90,3 +90,12 @@ export function createWorkoutSessionDraft(routine: BackendRoutineDetail, started
 export function generateWorkoutReport(sessionId: string, ownerGuard?: () => boolean): Promise<unknown> {
   return apiFetch(`/api/v1/reports/sessions/${encodeURIComponent(sessionId)}/generated`, { method: 'POST', auth: true, ownerGuard });
 }
+
+export interface DailyWorkoutState {
+  date: string;
+  completed: boolean;
+  activeSessionId: string | null;
+}
+export function getDailyWorkoutState(): Promise<DailyWorkoutState> {
+  return apiFetch('/api/v1/workout-sessions/daily-state', { auth: true });
+}

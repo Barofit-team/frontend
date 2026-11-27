@@ -45,6 +45,7 @@ type SessionStageProps = {
   onPressStop: () => void;
   onPressResume: () => void;
   onConfirmStop: () => void;
+  onSaveForLater?: () => void;
   onCancelStop: () => void;
   /** 일시정지 화면 종목 행 → 세트 수정 (제공될 때만 '›' 표시) */
   onPressExercise?: (index: number) => void;
@@ -87,6 +88,7 @@ export function SessionStage(props: SessionStageProps) {
           visible={pause === 'stop-confirm'}
           busy={props.busy}
           onConfirm={props.onConfirmStop}
+          onSaveForLater={props.onSaveForLater}
           onCancel={props.onCancelStop}
         />
       </>
