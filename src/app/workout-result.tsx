@@ -8,7 +8,7 @@
  */
 import { router, Stack, type Href } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, type ReactNode } from 'react';
+import { type ReactNode } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -20,7 +20,6 @@ import { ResultButton } from '@/components/workout-result/ResultButton';
 import { RESULT_SCREEN_PADDING, resultStyles } from '@/components/workout-result/resultStyles';
 import { useNavigationLock } from '@/components/workout-result/useNavigationLock';
 import { useWorkoutResultReport, type WorkoutResultView } from '@/hooks/useWorkoutResultReport';
-import { useWorkoutFeedbackStore } from '@/stores/useWorkoutFeedbackStore';
 import { useWorkoutResultStore } from '@/stores/useWorkoutResultStore';
 import type { ExerciseResult } from '@/types/workoutResult';
 
@@ -68,14 +67,14 @@ export default function WorkoutResultScreen() {
   const result: WorkoutResultView | null = isApiMode ? report.view : mockResult;
   const isRecordSession = storeResult !== null && 'openedFrom' in storeResult && storeResult.openedFrom === 'record';
 
-  const setServerFeedback = useWorkoutFeedbackStore((state) => state.setServerFeedback);
-  const serverFeedback = report.serverFeedback;
-  useEffect(() => {
-    if (apiSessionId && serverFeedback !== undefined) setServerFeedback(apiSessionId, serverFeedback);
-  }, [apiSessionId, serverFeedback, setServerFeedback]);
-
-  const goHome = () => navigate(() => router.dismissTo('/home'));
-  const openFeedback = () => navigate(() => router.push('/workout-feedback', { dangerouslySingular: true }));
+  const handleBack = () =>
+    navigate(() => {
+      if (router.canGoBack()) {
+        router.back();
+      } else {
+        router.dismissTo('/home');
+      }
+    });
   const openDetail = (exercise: ExerciseResult) =>
     navigate(() =>
       router.push({
@@ -128,8 +127,15 @@ export default function WorkoutResultScreen() {
       <StatusBar style="dark" />
       <ScrollView
         style={styles.scroll}
-        contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 24 }]}
+        contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 28 }]}
         showsVerticalScrollIndicator={false}>
+        <Pressable
+          style={styles.backButton}
+          onPress={handleBack}
+          accessibilityRole="button"
+          accessibilityLabel="뒤로 가기">
+          <Text style={styles.backArrow}>←</Text>
+        </Pressable>
         <Text style={styles.pageTitle} accessibilityRole="header">
           {headerTitle}
         </Text>
@@ -213,18 +219,6 @@ export default function WorkoutResultScreen() {
             <Text style={[resultStyles.cardBody, styles.emptyBody]}>운동을 마치면 이곳에서 결과를 확인할 수 있어요.</Text>
           </View>
         )}
-
-        <View style={styles.actions}>
-          {result && (
-            <ResultButton
-              variant="secondary"
-              title="오늘 운동 난이도·불편함 남기기"
-              accessibilityHint="운동 피드백 입력 화면으로 이동합니다"
-              onPress={openFeedback}
-            />
-          )}
-          <ResultButton title="홈으로" onPress={goHome} style={result ? styles.homeButton : undefined} />
-        </View>
       </ScrollView>
     </View>
   );
@@ -232,8 +226,22 @@ export default function WorkoutResultScreen() {
 
 const styles = StyleSheet.create({
   scroll: { flex: 1 },
-  content: { paddingHorizontal: RESULT_SCREEN_PADDING, paddingTop: 24 },
-  pageTitle: { fontSize: 24, fontWeight: '800', color: '#111827', letterSpacing: -0.4 },
+  content: { paddingHorizontal: RESULT_SCREEN_PADDING, paddingTop: 12 },
+  backButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#0F172A',
+    shadowOpacity: 0.06,
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  backArrow: { fontSize: 18, fontWeight: '600', color: '#111827' },
+  pageTitle: { marginTop: 18, fontSize: 24, fontWeight: '800', color: '#111827', letterSpacing: -0.4 },
   summarySubtitle: { marginTop: 6, fontSize: 13, color: '#6B7280' },
   mockLabel: { marginTop: 4, fontSize: 11, color: PrepColors.line },
   cards: { marginTop: 16, gap: 12 },

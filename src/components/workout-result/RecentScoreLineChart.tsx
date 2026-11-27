@@ -85,7 +85,7 @@ export function RecentScoreLineChart({ points }: { points?: PostureScorePoint[] 
               );
             })}
           </View>
-          <View style={styles.datesRow}>
+          <View style={[styles.datesRow, items.length === 1 && styles.datesRowSingle]}>
             {items.map((item, idx) => {
               const isLast = idx === items.length - 1;
               return (
@@ -122,6 +122,7 @@ const styles = StyleSheet.create({
   badgeText: { fontSize: 12, fontWeight: '600', color: '#4B5563' },
   badgeTextLast: { color: '#1D4ED8' },
   datesRow: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 10, marginTop: 4 },
+  datesRowSingle: { justifyContent: 'center' },
   dateText: { fontSize: 12, color: '#6B7280' },
   dateTextLast: { fontWeight: '700', color: '#111827' },
   emptyText: { marginTop: 10, fontSize: 13, lineHeight: 19, color: '#6B7280' },
