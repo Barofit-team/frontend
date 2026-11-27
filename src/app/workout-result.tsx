@@ -49,8 +49,8 @@ function StatusCard({
 }
 
 function computeRoutineScore(result: WorkoutResultView): number | undefined {
-  if (result.routineScore !== undefined) return result.routineScore;
-  const scored = result.exercises.map((e) => e.score).filter((s): s is number => s !== undefined);
+  if (typeof result.routineScore === 'number' && Number.isFinite(result.routineScore)) return result.routineScore;
+  const scored = result.exercises.map((e) => e.score).filter((s): s is number => typeof s === 'number' && Number.isFinite(s));
   if (scored.length === 0) return undefined;
   return scored.reduce((a, b) => a + b, 0) / scored.length;
 }
@@ -101,7 +101,8 @@ export default function WorkoutResultScreen() {
     : `${now.getMonth() + 1}월 ${now.getDate()}일 운동 리포트`;
 
   const routineScore = result ? computeRoutineScore(result) : undefined;
-  const weeklyCount = result?.weeklyWorkoutCount ?? 1;
+  const rawWeeklyCount = result?.weeklyWorkoutCount;
+  const weeklyCount = typeof rawWeeklyCount === 'number' && Number.isFinite(rawWeeklyCount) ? rawWeeklyCount : 1;
   const progressRatio = Math.min(1, Math.max(0.15, weeklyCount / WEEKLY_GOAL_STEPS));
 
   let resultStatus: ReactNode = null;

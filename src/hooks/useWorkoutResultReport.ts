@@ -122,11 +122,22 @@ export function useWorkoutResultReport(sessionId: string | null) {
     if (!resultParts) return null;
     const postureScore =
       scoreHistory && targetScore !== null && isCurrentScoreLast(scoreHistory, targetScore) ? scoreHistory : undefined;
-    const recentScores = recentTrend
-      ? [...recentTrend.recentScores]
+    const recentScores = Array.isArray(recentTrend?.recentScores)
+      ? recentTrend.recentScores
+          .filter(
+            (item) =>
+              typeof item?.completedAt === 'string' &&
+              item.completedAt.length >= 10 &&
+              typeof item?.score === 'number' &&
+              Number.isFinite(item.score)
+          )
           .sort((a, b) => a.completedAt.localeCompare(b.completedAt))
           .map((item) => ({ date: item.completedAt.slice(0, 10), score: item.score }))
       : undefined;
+    const weeklyWorkoutCount =
+      typeof recentTrend?.weeklyWorkoutCount === 'number' && Number.isFinite(recentTrend.weeklyWorkoutCount)
+        ? recentTrend.weeklyWorkoutCount
+        : undefined;
     return {
       completedSets: resultParts.summary.completedSets,
       totalReps: resultParts.summary.totalReps,
@@ -134,7 +145,7 @@ export function useWorkoutResultReport(sessionId: string | null) {
       ...(elapsedSeconds !== null ? { totalDurationSeconds: elapsedSeconds } : {}),
       ...(restSeconds !== null ? { restDurationSeconds: restSeconds } : {}),
       ...(routineScore !== null ? { routineScore } : {}),
-      ...(recentTrend ? { weeklyWorkoutCount: recentTrend.weeklyWorkoutCount } : {}),
+      ...(weeklyWorkoutCount !== undefined ? { weeklyWorkoutCount } : {}),
       ...(recentScores && recentScores.length > 0 ? { recentScores } : {}),
       ...(postureScore ? { postureScore } : {}),
     };

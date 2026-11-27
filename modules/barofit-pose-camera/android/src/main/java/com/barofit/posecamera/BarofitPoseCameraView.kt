@@ -64,6 +64,7 @@ class BarofitPoseCameraView(
   private var frameCounter = 0
   private var lastAnalyzeMs = 0L
   private var detectorLoading = false
+  @Volatile private var isDetached = false
 
   /** start()/stop() 호출마다 증가. 지연 도착한 future 콜백이 이미 취소된 시도를 바인딩하지 않도록 막는 용도. */
   private var generation = 0
@@ -100,15 +101,26 @@ class BarofitPoseCameraView(
 
   override fun onAttachedToWindow() {
     super.onAttachedToWindow()
+    isDetached = false
     Log.d(TAG, "onAttachedToWindow isActiveProp=$isActiveProp")
     if (isActiveProp) start()
   }
 
   override fun onDetachedFromWindow() {
     Log.d(TAG, "onDetachedFromWindow")
+    isDetached = true
     stop()
-    detector?.close()
-    detector = null
+    // analyze()는 단일 스레드 executor(exec)에서 실행되므로, exec에 close를 넘겨
+    // 진행 중인 detectForVideo()가 끝난 뒤 순차적으로 네이티브 리소스를 해제합니다.
+    exec.execute {
+      try {
+        detector?.close()
+      } catch (t: Throwable) {
+        Log.w(TAG, "detector close error", t)
+      } finally {
+        detector = null
+      }
+    }
     super.onDetachedFromWindow()
   }
 
@@ -143,7 +155,12 @@ class BarofitPoseCameraView(
           .setMinPosePresenceConfidence(0.5f)
           .setMinTrackingConfidence(0.5f)
           .build()
-        detector = PoseLandmarker.createFromOptions(context, opts)
+        val created = PoseLandmarker.createFromOptions(context, opts)
+        if (isDetached) {
+          created.close()
+        } else {
+          detector = created
+        }
       } catch (t: Throwable) {
         Log.e(TAG, "Detector init failed", t)
         emitError("MODEL_INIT_FAILED", t.message ?: "init failed")
@@ -266,7 +283,7 @@ class BarofitPoseCameraView(
 
   private fun analyze(proxy: ImageProxy) {
     val det = detector
-    if (det == null || !isActiveProp) {
+    if (isDetached || det == null || !isActiveProp) {
       proxy.close()
       return
     }
@@ -304,7 +321,7 @@ class BarofitPoseCameraView(
         "inferenceMs" to inferenceMs.toDouble()
       )
       mainHandler.post {
-        onPose(payload)
+        if (!isDetached) onPose(payload)
       }
     } catch (t: Throwable) {
       Log.e(TAG, "analyze error", t)
@@ -336,7 +353,9 @@ class BarofitPoseCameraView(
   }
 
   private fun emitStatus(status: String, message: String?) {
+    if (isDetached) return
     mainHandler.post {
+      if (isDetached) return@post
       val payload = mutableMapOf<String, Any>("status" to status)
       if (message != null) {
         payload["message"] = message
@@ -346,7 +365,9 @@ class BarofitPoseCameraView(
   }
 
   private fun emitError(code: String, message: String) {
+    if (isDetached) return
     mainHandler.post {
+      if (isDetached) return@post
       onPoseError(mapOf(
         "code" to code,
         "message" to message

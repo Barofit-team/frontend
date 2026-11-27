@@ -60,6 +60,8 @@ public final class BarofitPoseCameraView: ExpoView, AVCaptureVideoDataOutputSamp
       if captureSession.isRunning {
         captureSession.stopRunning()
       }
+    }
+    videoOutputQueue.async {
       _ = landmarker
     }
   }
