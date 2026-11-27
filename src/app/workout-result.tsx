@@ -1,43 +1,30 @@
 /**
- * F01 오늘의 결과
+ * F01 오늘의 결과 (Daily Report 시안 기반)
  *
- * 진입: 운동 진행 화면(workout-session) 완료 → 약 1.2초 뒤 replace로 이동 (Fade 전환)
- *       → 스택: 홈(탭) › 오늘의 결과. 뒤로가기 시 운동 진행 화면이 아닌 홈으로 돌아갑니다.
+ * 진입: 운동 진행 화면(workout-session) 완료 → Fade 전환
+ *  - 종목 행 탭 → workout-result-detail (종목 상세 리포트)
  *  - 오늘 운동 난이도·불편함 남기기 → F02 (workout-feedback)
- *  - 홈으로 → 홈 탭 (dismissTo: 스택에 있는 홈까지 되돌아감)
- *
- * 데이터: useWorkoutResultStore의 결과로 모드를 정합니다.
- *  - source 'mock' (현재 운동 완료·프로필 개발 진입): 저장소의 Mock 결과를 그대로 표시, API 요청 없음
- *  - source 'api' (실제 Workout 세션, 기록 탭의 '리포트 보기' 포함): 그 sessionId로 Report API 조회 (hooks/useWorkoutResultReport)
- *      GET /result → 요약·종목 카드 / GET /generated → 잘한 점·개선점 / GET /scores → 자세 점수 차트
- *    세 API는 따로 로딩·오류를 표시합니다. /generated 404면 리포트를 생성(POST)하지 않고 "아직 없음"으로 둡니다.
- *    총 소요(elapsedSeconds)·휴식(restSeconds)은 값이 있을 때만, 리포트 전체 피드백은 'AI 리포트' 카드에 표시합니다.
- *    운동 시간(activeDurationSeconds)·다음 운동 집중 문구·주요 오류는 화면 의미가 정해지지 않아 표시하지 않습니다.
- *    /result의 저장된 피드백은 피드백 저장소에 넘겨 F02 재진입 시 초기값으로 씁니다.
- *  - 기록 탭에서 연 지난 세션은 제목을 '운동 결과'로 표시합니다.
- *
- * 개발용 진입: barofit://workout-result (결과가 없으면 빈 상태 표시)
+ *  - 홈으로 → 홈 탭
  */
-import { router, Stack } from 'expo-router';
+import { router, Stack, type Href } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { Fragment, useEffect, type ReactNode } from 'react';
-import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { type ReactNode } from 'react';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Card } from '@/components/ui/Card';
 import { PrepColors } from '@/components/workout-preparation/palette';
-import { ExerciseResultCard } from '@/components/workout-result/ExerciseResultCard';
-import { NextWorkoutFocusCard } from '@/components/workout-result/NextWorkoutFocusCard';
-import { PostureScoreChart } from '@/components/workout-result/PostureScoreChart';
+import { formatDuration, formatScore } from '@/components/workout-result/format';
+import { RecentScoreLineChart } from '@/components/workout-result/RecentScoreLineChart';
 import { ResultButton } from '@/components/workout-result/ResultButton';
 import { RESULT_SCREEN_PADDING, resultStyles } from '@/components/workout-result/resultStyles';
 import { useNavigationLock } from '@/components/workout-result/useNavigationLock';
-import { WorkoutSummaryCard } from '@/components/workout-result/WorkoutSummaryCard';
 import { useWorkoutResultReport, type WorkoutResultView } from '@/hooks/useWorkoutResultReport';
-import { useWorkoutFeedbackStore } from '@/stores/useWorkoutFeedbackStore';
 import { useWorkoutResultStore } from '@/stores/useWorkoutResultStore';
+import type { ExerciseResult } from '@/types/workoutResult';
 
-/** API 모드의 로딩·빈 상태·오류 안내 카드 (기존 카드 스타일 사용) */
+const WEEKLY_GOAL_STEPS = 4;
+
 function StatusCard({
   title,
   body,
@@ -61,12 +48,18 @@ function StatusCard({
   );
 }
 
+function computeRoutineScore(result: WorkoutResultView): number | undefined {
+  if (result.routineScore !== undefined) return result.routineScore;
+  const scored = result.exercises.map((e) => e.score).filter((s): s is number => s !== undefined);
+  if (scored.length === 0) return undefined;
+  return scored.reduce((a, b) => a + b, 0) / scored.length;
+}
+
 export default function WorkoutResultScreen() {
   const insets = useSafeAreaInsets();
-  const storeResult = useWorkoutResultStore(state => state.result);
+  const storeResult = useWorkoutResultStore((state) => state.result);
   const navigate = useNavigationLock();
 
-  // 실제 Workout 결과일 때만 Report API를 조회합니다. Mock 결과의 sessionId로는 요청하지 않습니다
   const apiSessionId = storeResult?.source === 'api' ? storeResult.sessionId : null;
   const isApiMode = apiSessionId !== null;
   const report = useWorkoutResultReport(apiSessionId);
@@ -74,53 +67,43 @@ export default function WorkoutResultScreen() {
   const result: WorkoutResultView | null = isApiMode ? report.view : mockResult;
   const isRecordSession = storeResult !== null && 'openedFrom' in storeResult && storeResult.openedFrom === 'record';
 
-  // 서버에 저장된 피드백을 sessionId별로 넘깁니다. 같은 응답이면 다시 넘기지 않고, 입력 중인 draft는 바꾸지 않습니다
-  const setServerFeedback = useWorkoutFeedbackStore(state => state.setServerFeedback);
-  const serverFeedback = report.serverFeedback;
-  useEffect(() => {
-    if (apiSessionId && serverFeedback !== undefined) setServerFeedback(apiSessionId, serverFeedback);
-  }, [apiSessionId, serverFeedback, setServerFeedback]);
+  const handleBack = () =>
+    navigate(() => {
+      if (router.canGoBack()) {
+        router.back();
+      } else {
+        router.dismissTo('/home');
+      }
+    });
+  const openDetail = (exercise: ExerciseResult) =>
+    navigate(() =>
+      router.push({
+        pathname: '/workout-result-detail',
+        params: {
+          exerciseId: exercise.exerciseId,
+          exerciseName: exercise.exerciseName,
+          completedSets: String(exercise.completedSets),
+          completedReps: String(exercise.completedReps),
+          durationSeconds: String(exercise.durationSeconds ?? 0),
+          score: exercise.score !== undefined ? String(exercise.score) : '',
+          feedbackMessages: JSON.stringify(exercise.feedbackMessages ?? []),
+          goodFeedback: exercise.goodFeedback ?? '',
+          improvementFeedback: exercise.improvementFeedback ?? '',
+          nextGoal: exercise.nextGoal ?? '',
+          isApiMode: isApiMode ? '1' : '0',
+        },
+      } as unknown as Href)
+    );
 
-  const goHome = () => navigate(() => router.dismissTo('/home'));
-  const openFeedback = () =>
-    navigate(() => router.push('/workout-feedback', { dangerouslySingular: true }));
+  const now = new Date();
+  const headerTitle = isRecordSession
+    ? '운동 결과'
+    : `${now.getMonth() + 1}월 ${now.getDate()}일 운동 리포트`;
 
-  // 자세 점수 차트는 해당 종목 카드 바로 아래에 둡니다 (시안: 스쿼트 카드 다음). 못 찾으면 첫 종목 다음
-  const chartExerciseId = isApiMode ? report.scores.exerciseId : result?.postureScore?.exerciseId;
-  const chartAfterIndex = result
-    ? Math.max(
-        0,
-        result.exercises.findIndex(exercise => exercise.exerciseId === chartExerciseId)
-      )
-    : 0;
+  const routineScore = result ? computeRoutineScore(result) : undefined;
+  const weeklyCount = result?.weeklyWorkoutCount ?? 1;
+  const progressRatio = Math.min(1, Math.max(0.15, weeklyCount / WEEKLY_GOAL_STEPS));
 
-  // API 모드: /scores 로딩·오류는 차트 자리에 안내. 이번 점수가 있는 종목이 없으면 기존 빈 차트
-  let chart: ReactNode = <PostureScoreChart postureScore={result?.postureScore} />;
-  if (isApiMode && report.scores.enabled) {
-    if (report.scores.isLoading) {
-      chart = <StatusCard title="자세 점수 변화" body="자세 점수를 불러오고 있어요." loading />;
-    } else if (report.scores.error) {
-      chart = <StatusCard title="자세 점수 변화" body={report.scores.error} onRetry={report.scores.retry} />;
-    }
-  }
-
-  // API 모드: /generated 상태 안내 (404는 생성하지 않고 "아직 없음"으로 표시)
-  let generatedNotice: ReactNode = null;
-  if (isApiMode) {
-    if (report.generated.isLoading) {
-      generatedNotice = <StatusCard title="AI 리포트" body="잘한 점과 개선점을 불러오고 있어요." loading />;
-    } else if (report.generated.isNotFound) {
-      generatedNotice = <StatusCard title="AI 리포트" body="아직 생성된 AI 리포트가 없어요." />;
-    } else if (report.generated.error) {
-      generatedNotice = (
-        <StatusCard title="AI 리포트" body={report.generated.error} onRetry={report.generated.retry} />
-      );
-    } else if (report.generated.overallFeedback) {
-      generatedNotice = <StatusCard title="AI 리포트" body={report.generated.overallFeedback} />;
-    }
-  }
-
-  // API 모드: /result를 아직 표시할 수 없는 상태
   let resultStatus: ReactNode = null;
   if (isApiMode && !result) {
     if (report.result.isLoading) {
@@ -144,34 +127,89 @@ export default function WorkoutResultScreen() {
       <StatusBar style="dark" />
       <ScrollView
         style={styles.scroll}
-        contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 24 }]}
+        contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 28 }]}
         showsVerticalScrollIndicator={false}>
-        <Text style={resultStyles.pageTitle} accessibilityRole="header">
-          {isRecordSession ? '운동 결과' : '오늘 운동을 완료했어요'}
+        <Pressable
+          style={styles.backButton}
+          onPress={handleBack}
+          accessibilityRole="button"
+          accessibilityLabel="뒤로 가기">
+          <Text style={styles.backArrow}>←</Text>
+        </Pressable>
+        <Text style={styles.pageTitle} accessibilityRole="header">
+          {headerTitle}
         </Text>
+        {result && (
+          <Text style={styles.summarySubtitle}>
+            {result.exercises.length}종목 · {result.completedSets}세트
+            {result.totalDurationSeconds !== undefined
+              ? ` · ${formatDuration(result.totalDurationSeconds)} 소요`
+              : ''}
+          </Text>
+        )}
         {__DEV__ && storeResult?.source === 'mock' && (
           <Text style={styles.mockLabel}>[DEV] Mock 데이터 · 실제 측정·AI 분석 결과가 아닙니다</Text>
         )}
 
         {result ? (
           <View style={styles.cards}>
-            <WorkoutSummaryCard
-              completedSets={result.completedSets}
-              totalReps={result.totalReps}
-              exerciseDurationSeconds={result.exerciseDurationSeconds}
-              restDurationSeconds={result.restDurationSeconds}
-              totalDurationSeconds={result.totalDurationSeconds}
-            />
-            {generatedNotice}
-            {result.exercises.length === 0 && chart}
-            {result.exercises.map((exercise, index) => (
-              // 같은 종목이 루틴에 두 번 있을 수 있어 순번을 함께 씁니다
-              <Fragment key={`${exercise.exerciseId}-${index}`}>
-                <ExerciseResultCard result={exercise} />
-                {index === chartAfterIndex && chart}
-              </Fragment>
-            ))}
-            {result.nextFocus ? <NextWorkoutFocusCard text={result.nextFocus} /> : null}
+            <Card style={styles.weeklyCard}>
+              <Text style={styles.weeklyLabel}>
+                이번 주 <Text style={styles.weeklyHighlight}>{weeklyCount}번째</Text>
+              </Text>
+              <View style={styles.weeklyBarTrack}>
+                <View style={[styles.weeklyBarFill, { width: `${Math.round(progressRatio * 100)}%` }]} />
+                <View style={styles.weeklyDotsOverlay}>
+                  {Array.from({ length: WEEKLY_GOAL_STEPS }).map((_, idx) => (
+                    <View
+                      key={idx}
+                      style={[styles.weeklyDot, idx + 1 <= weeklyCount && styles.weeklyDotActive]}
+                    />
+                  ))}
+                </View>
+              </View>
+            </Card>
+
+            <View style={styles.scoreHeroCard}>
+              <Text style={styles.scoreHeroLabel}>오늘의 자세 점수</Text>
+              <View style={styles.scoreHeroRow}>
+                <Text style={styles.scoreHeroValue}>
+                  {routineScore !== undefined ? formatScore(routineScore) : '-'}
+                </Text>
+                <Text style={styles.scoreHeroMax}>/100</Text>
+              </View>
+            </View>
+
+            <RecentScoreLineChart points={result.recentScores ?? result.postureScore?.history} />
+            {isApiMode && report.recent.error ? (
+              <StatusCard title="최근 기록을 불러오지 못했어요" body={report.recent.error} onRetry={report.recent.retry} />
+            ) : null}
+
+            <Card style={resultStyles.card}>
+              <Text style={styles.sectionTitle}>종목별 점수</Text>
+              <View style={styles.exerciseList}>
+                {result.exercises.map((exercise, index) => (
+                  <Pressable
+                    key={`${exercise.exerciseId}-${index}`}
+                    style={({ pressed }) => [
+                      styles.exerciseRow,
+                      index > 0 && styles.exerciseRowBorder,
+                      pressed && styles.exerciseRowPressed,
+                    ]}
+                    onPress={() => openDetail(exercise)}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${exercise.exerciseName} 상세 리포트 보기`}>
+                    <Text style={styles.exerciseName}>{exercise.exerciseName}</Text>
+                    <View style={styles.exerciseRight}>
+                      <Text style={styles.exerciseScore}>
+                        {exercise.score !== undefined ? formatScore(exercise.score) : '-'}
+                      </Text>
+                      <Text style={styles.chevron}>›</Text>
+                    </View>
+                  </Pressable>
+                ))}
+              </View>
+            </Card>
           </View>
         ) : resultStatus ? (
           <View style={styles.cards}>{resultStatus}</View>
@@ -181,18 +219,6 @@ export default function WorkoutResultScreen() {
             <Text style={[resultStyles.cardBody, styles.emptyBody]}>운동을 마치면 이곳에서 결과를 확인할 수 있어요.</Text>
           </View>
         )}
-
-        <View style={styles.actions}>
-          {result && (
-            <ResultButton
-              variant="secondary"
-              title="오늘 운동 난이도·불편함 남기기"
-              accessibilityHint="운동 피드백 입력 화면으로 이동합니다"
-              onPress={openFeedback}
-            />
-          )}
-          <ResultButton title="홈으로" onPress={goHome} style={result ? styles.homeButton : undefined} />
-        </View>
       </ScrollView>
     </View>
   );
@@ -200,13 +226,85 @@ export default function WorkoutResultScreen() {
 
 const styles = StyleSheet.create({
   scroll: { flex: 1 },
-  content: { paddingHorizontal: RESULT_SCREEN_PADDING, paddingTop: 28 },
+  content: { paddingHorizontal: RESULT_SCREEN_PADDING, paddingTop: 12 },
+  backButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#0F172A',
+    shadowOpacity: 0.06,
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  backArrow: { fontSize: 18, fontWeight: '600', color: '#111827' },
+  pageTitle: { marginTop: 18, fontSize: 24, fontWeight: '800', color: '#111827', letterSpacing: -0.4 },
+  summarySubtitle: { marginTop: 6, fontSize: 13, color: '#6B7280' },
   mockLabel: { marginTop: 4, fontSize: 11, color: PrepColors.line },
-  cards: { marginTop: 18, gap: 14 },
+  cards: { marginTop: 16, gap: 12 },
+  weeklyCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 14,
+    paddingHorizontal: 18,
+  },
+  weeklyLabel: { fontSize: 14, fontWeight: '700', color: '#111827' },
+  weeklyHighlight: { color: '#2563EB' },
+  weeklyBarTrack: {
+    width: '54%',
+    height: 10,
+    borderRadius: 999,
+    backgroundColor: '#F3F4F6',
+    justifyContent: 'center',
+    overflow: 'visible',
+  },
+  weeklyBarFill: {
+    height: '100%',
+    borderRadius: 999,
+    backgroundColor: '#5B93F7',
+  },
+  weeklyDotsOverlay: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingHorizontal: 6,
+  },
+  weeklyDot: { width: 5, height: 5, borderRadius: 2.5, backgroundColor: '#D1D5DB' },
+  weeklyDotActive: { backgroundColor: '#2563EB' },
+  scoreHeroCard: {
+    borderRadius: 20,
+    backgroundColor: '#2563EB',
+    paddingHorizontal: 22,
+    paddingVertical: 20,
+  },
+  scoreHeroLabel: { fontSize: 14, fontWeight: '600', color: 'rgba(255,255,255,0.88)' },
+  scoreHeroRow: { marginTop: 12, flexDirection: 'row', alignItems: 'baseline', gap: 6 },
+  scoreHeroValue: { fontSize: 44, fontWeight: '800', color: '#FFFFFF', letterSpacing: -1 },
+  scoreHeroMax: { fontSize: 18, fontWeight: '600', color: 'rgba(255,255,255,0.72)' },
+  sectionTitle: { fontSize: 16, fontWeight: '700', color: '#111827', marginBottom: 6 },
+  exerciseList: { marginTop: 4 },
+  exerciseRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 14,
+  },
+  exerciseRowBorder: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#E5E7EB' },
+  exerciseRowPressed: { opacity: 0.6 },
+  exerciseName: { fontSize: 15, fontWeight: '600', color: '#111827', flex: 1 },
+  exerciseRight: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  exerciseScore: { fontSize: 16, fontWeight: '700', color: '#111827' },
+  chevron: { fontSize: 18, color: '#9CA3AF', fontWeight: '600' },
   empty: { marginTop: 18 },
   emptyBody: { marginTop: 6 },
   actions: { marginTop: 18 },
-  homeButton: { marginTop: 30 },
+  homeButton: { marginTop: 10 },
   statusTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   statusBody: { marginTop: 6 },
   retry: { marginTop: 12 },

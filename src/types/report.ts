@@ -158,6 +158,12 @@ export interface ReportScoreHistory {
   completedAt: string;
 }
 
+/** GET /api/v1/reports/recent-scores 응답 (ReportViewService.RecentScoreTrend) */
+export interface ReportRecentScoreTrend {
+  weeklyWorkoutCount: number;
+  recentScores: ReportScoreHistory[];
+}
+
 /** GeneratedReportService.Item */
 export interface ReportPostureItem {
   itemId: string;
@@ -186,6 +192,8 @@ export interface ReportGeneratedExercise {
   improvements: string | null;
   /** 다음 운동 목표 (미수행이면 null) */
   nextGoal: string | null;
+  /** 오류 코드 기반 한국어 자세 피드백 문구 목록 */
+  feedbackMessages?: string[];
 }
 
 /** GET·POST /api/v1/reports/sessions/{sessionId}/generated 응답 (GeneratedReportService.Generated) */
