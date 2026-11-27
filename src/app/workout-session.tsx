@@ -780,6 +780,7 @@ export default function WorkoutSessionScreen() {
   useEffect(() => {
     if (phase.kind !== 'completed' || !sessionReady) return;
     let cancelled = false;
+    let entryTimer: ReturnType<typeof setTimeout> | null = null;
     updateServerStatus('COMPLETED').then(async () => {
       useTtsStore.getState().sendCoachEvent({ eventType: 'WORKOUT_FINISH' });
       const current = serverSession.current;
@@ -795,7 +796,7 @@ export default function WorkoutSessionScreen() {
         if (await pendingCount(owner, current.sessionId)) await syncNow();
         uploaded = await pendingCount(owner, current.sessionId) === 0;
       } catch { /* The persisted queue will retry once connectivity returns. */ }
-      if (!cancelled) setTimeout(() => {
+      if (!cancelled) entryTimer = setTimeout(() => {
         if (cancelled || exitingRef.current) return;
         exitingRef.current = true;
         if (uploaded && hasResult) {
@@ -807,7 +808,10 @@ export default function WorkoutSessionScreen() {
         }
       }, RESULT_ENTRY_DELAY_MS);
     }).catch(() => { if (!cancelled) Alert.alert('저장 실패', '운동 종료 상태를 저장하지 못했어요.'); });
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      if (entryTimer) clearTimeout(entryTimer);
+    };
   }, [phase.kind, sessionReady, updateServerStatus, owner]);
 
   // 앱이 백그라운드로 가면 일시 정지 (복귀 후에는 사용자가 '운동 이어하기'로 재개)

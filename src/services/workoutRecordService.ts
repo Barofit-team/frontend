@@ -104,6 +104,9 @@ export function toDailyWorkoutRecord(card: ReportRecordCard, index: number): Dai
     date: card.date,
     routineName: card.routineName,
     status,
+    durationSeconds: card.durationSeconds,
+    exerciseCount: card.exerciseCount,
+    estimatedKcal: card.estimatedKcal ?? null,
     // Report API는 썸네일을 제공하지 않습니다 (카드에 회색 이미지 영역 표시)
     thumbnailUrl: null,
   };

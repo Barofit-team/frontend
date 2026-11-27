@@ -14,7 +14,9 @@ const PAD_BOTTOM = 28;
 
 export function RecentScoreLineChart({ points }: { points?: PostureScorePoint[] }) {
   const [width, setWidth] = useState(0);
-  const items = (points ?? []).slice(-5);
+  const items = (Array.isArray(points) ? points : [])
+    .filter((p) => typeof p?.date === 'string' && typeof p?.score === 'number' && Number.isFinite(p.score))
+    .slice(-5);
   const hasData = items.length > 0;
 
   const scores = items.map((p) => Math.min(100, Math.max(0, p.score)));

@@ -5,21 +5,26 @@
 export const RecordColors = {
   background: '#FFFFFF',
   /** 일일 운동일지 영역 배경 */
-  section: '#E9E9E9',
+  section: '#F4F6F9',
   card: '#FFFFFF',
-  text: '#111111',
-  textSecondary: '#6B6B6B',
+  text: '#111827',
+  textSecondary: '#6B7280',
   /** 기록 없는 지난 날짜 */
-  dayText: '#8E8E8E',
+  dayText: '#374151',
   /** 다가올 날짜 */
-  dayTextFuture: '#C6C6C6',
-  completed: '#6E9E72',
-  partial: '#A8D08D',
-  missed: '#E2E2E2',
-  missedText: '#B4B4B4',
-  plannedBorder: '#9A9A9A',
-  selected: '#111111',
-  /** 이전/다음 달 버튼, 이미지 영역, 리포트 버튼 */
-  control: '#EDEDED',
+  dayTextFuture: '#9CA3AF',
+  /** 운동을 진행한 날 (연한 파란색) */
+  completed: '#DCE8FF',
+  partial: '#DCE8FF',
+  completedText: '#2563EB',
+  missed: '#F3F4F6',
+  missedText: '#9CA3AF',
+  plannedBorder: '#D1D5DB',
+  /** 사용자가 선택한 날짜 (검은색) */
+  selected: '#111827',
+  /** 메타 박스 / 보조 배경 */
+  control: '#F4F6F9',
+  accent: '#2563EB',
+  accentSoft: '#EFF5FF',
   white: '#FFFFFF',
 } as const;

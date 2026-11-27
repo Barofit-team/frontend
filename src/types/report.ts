@@ -52,6 +52,8 @@ export interface ReportRecordCard {
   completedSets: number;
   plannedSets: number;
   durationSeconds: number;
+  exerciseCount?: number;
+  estimatedKcal?: number | null;
 }
 
 /** GET /api/v1/reports/history 응답 (ReportViewService.RecordPage, page는 0부터) */
