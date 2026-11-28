@@ -1,5 +1,6 @@
 import React, { useMemo, useRef } from 'react';
 import { PanResponder, Pressable, StyleSheet, Text, View } from 'react-native';
+import Animated, { LinearTransition } from 'react-native-reanimated';
 import type { RoutineExerciseDetail } from '@/types/routine';
 import { ExerciseThumbnail } from './ExerciseThumbnail';
 import { CATEGORY_LABELS, summarizeExercise } from './routineEditing';
@@ -46,50 +47,55 @@ export function RoutineExerciseRow({
     [exercise.id],
   );
   return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={`${exercise.name}, ${summarizeExercise(exercise)}, 설정 편집`}
-      disabled={disabled}
-      onPress={reorder ? undefined : onPress}
-      style={({ pressed }) => [styles.row, pressed && styles.pressed]}
-    >
-      <View style={styles.thumbnail} accessible={false}>
-        <ExerciseThumbnail exerciseId={exercise.exerciseId} />
-      </View>
-      <View style={styles.info}>
-        <Text style={styles.name}>{exercise.name}</Text>
-        <View style={styles.tag}>
-          <Text style={styles.tagText}>
-            {CATEGORY_LABELS[exercise.category ?? ''] ??
-              (exercise.measurementType === 'DURATION'
-                ? '시간 운동'
-                : '횟수 운동')}
-          </Text>
+    // 드래그로 순서를 바꿀 때 위/아래 카드가 자리를 밀어내는 애니메이션(Reanimated layout
+    // transition)을 위한 래퍼. PanResponder 자체는 그대로 두고, 순서가 바뀌어 이 아이템이
+    // 리스트의 다른 위치로 이동할 때만 레이아웃 변화가 애니메이션된다.
+    <Animated.View layout={LinearTransition.duration(220)}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`${exercise.name}, ${summarizeExercise(exercise)}, 설정 편집`}
+        disabled={disabled}
+        onPress={reorder ? undefined : onPress}
+        style={({ pressed }) => [styles.row, pressed && styles.pressed]}
+      >
+        <View style={styles.thumbnail} accessible={false}>
+          <ExerciseThumbnail exerciseId={exercise.exerciseId} />
         </View>
-      </View>
-      {reorder ? (
-        <View
-          {...responder.panHandlers}
-          accessible
-          accessibilityLabel={`${exercise.name} 순서 변경`}
-          accessibilityActions={[
-            { name: 'increment', label: '아래로 이동' },
-            { name: 'decrement', label: '위로 이동' },
-          ]}
-          onAccessibilityAction={(e) =>
-            onMove(
-              exercise.id,
-              e.nativeEvent.actionName === 'increment' ? 1 : -1,
-            )
-          }
-          style={styles.handle}
-        >
-          <Text style={styles.handleText}>≡</Text>
+        <View style={styles.info}>
+          <Text style={styles.name}>{exercise.name}</Text>
+          <View style={styles.tag}>
+            <Text style={styles.tagText}>
+              {CATEGORY_LABELS[exercise.category ?? ''] ??
+                (exercise.measurementType === 'DURATION'
+                  ? '시간 운동'
+                  : '횟수 운동')}
+            </Text>
+          </View>
         </View>
-      ) : (
-        <Text style={styles.volume}>{summarizeExercise(exercise)}</Text>
-      )}
-    </Pressable>
+        {reorder ? (
+          <View
+            {...responder.panHandlers}
+            accessible
+            accessibilityLabel={`${exercise.name} 순서 변경`}
+            accessibilityActions={[
+              { name: 'increment', label: '아래로 이동' },
+              { name: 'decrement', label: '위로 이동' },
+            ]}
+            onAccessibilityAction={(e) =>
+              onMove(
+                exercise.id,
+                e.nativeEvent.actionName === 'increment' ? 1 : -1,
+              )
+            }
+            style={styles.handle}
+          >
+            <Text style={styles.handleText}>≡</Text>
+          </View>
+        ) : (
+          <Text style={styles.volume}>{summarizeExercise(exercise)}</Text>
+        )}
+      </Pressable>
+    </Animated.View>
   );
 }
 const styles = StyleSheet.create({
