@@ -97,6 +97,7 @@ export interface RoutineTemplateRecommendationItem {
   template: RoutineDetail;
   reason: string;
   assessmentReady: boolean;
+  estimatedKcal: number | null;
 }
 
 /**
