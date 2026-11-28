@@ -12,7 +12,7 @@ type QueueItem = SyncItem | PoseItem | ReportItem;
 /** 같은 요청을 다시 보내도 결과가 바뀌지 않는 서버 응답을 받은 세션. 기록은 큐에 그대로 두고 원인만 남긴다(기존 저장 데이터에는 없을 수 있다) */
 type BlockedSync = { status: number; code: string; message: string; kind: 'session' | 'pose' | 'report'; at: string };
 type Stored = { version: 1; queue: QueueItem[]; current: (SyncItem & { draft: WorkoutDraft }) | null; plan: TodayWorkoutPlan | null;
-  completed?: Record<string, PoseItem>; blocked?: Record<string, BlockedSync> };
+  completedDates?: string[]; completed?: Record<string, PoseItem>; blocked?: Record<string, BlockedSync> };
 const key = (owner: string) => `barofit.workout.v1.${owner}`;
 const empty = (): Stored => ({ version: 1, queue: [], current: null, plan: null });
 const locks = new Map<string, Promise<unknown>>();
@@ -36,6 +36,24 @@ async function change(owner: string, fn: (data: Stored) => void): Promise<void> 
   return locked(owner, async () => { const data = await read(owner); fn(data); await AsyncStorage.setItem(key(owner), JSON.stringify(data)); });
 }
 export function getLocalWorkout(owner: string) { return locked(owner, async () => (await read(owner)).current); }
+/** Compatibility for entry screens; use the dev implementation of KST expiry and recovery. */
+export async function getResumableWorkout(owner: string) {
+  await settleStaleWorkout(owner);
+  const current = await getLocalWorkout(owner);
+  return current && !['COMPLETED', 'ABANDONED'].includes(current.session.status) ? current : null;
+}
+function completionDate(session: WorkoutSessionSync) {
+  return kstDateOf(timeOf(session.endedAt ?? session.startedAt));
+}
+export function hasCompletedWorkout(owner: string, date: string) {
+  return locked(owner, async () => {
+    const data = await read(owner);
+    return Boolean(data.completedDates?.includes(date) ||
+      (data.current?.session.status === 'COMPLETED' && completionDate(data.current.session) === date) ||
+      data.queue.some(item => (item.kind === undefined || item.kind === 'session') &&
+        item.session.status === 'COMPLETED' && completionDate(item.session) === date));
+  });
+}
 export function getCachedPlan(owner: string) { return locked(owner, async () => (await read(owner)).plan); }
 export function cachePlan(owner: string, plan: TodayWorkoutPlan) { return change(owner, data => { data.plan = plan; }); }
 export function clearLocalWorkout(owner: string, sessionId: string) {
@@ -55,6 +73,10 @@ export function queueSession(owner: string, sessionId: string, session: WorkoutS
 }
 /** 세션 요청을 큐에 넣고, 수행 세트가 있는 종료 세션이면 Report 생성을 한 번만 뒤에 넣는다 */
 function pushSession(data: Stored, sessionId: string, session: WorkoutSessionSync) {
+  if (session.status === 'COMPLETED') {
+    const date = completionDate(session);
+    if (date) data.completedDates = [...new Set([...(data.completedDates ?? []), date])];
+  }
   data.queue.push({ sessionId, session });
   if ((session.status === 'COMPLETED' || session.status === 'ABANDONED') &&
       session.sets.some(set => (set.actualReps ?? 0) > 0 || (set.actualDurationSeconds ?? 0) > 0) &&

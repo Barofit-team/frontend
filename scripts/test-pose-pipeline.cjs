@@ -25,6 +25,7 @@ function load(file, deps = {}) {
   let queued = [], pauses = [], finishes = 0, analyzerFrames = 0;
   const { createPosePipeline } = load('posePipeline.ts', {
     '@barofit/pose': pose,
+    '@/utils/devLog': { devLog() {}, devWarn() {} },
     '@/services/poseCoaching': { createPoseCoach },
     '@/services/offlineWorkout': { commitPoseSet: async (...args) => queued.push(args), flushWorkoutQueue: async () => {} },
     '@/services/poseExerciseIds': { poseSupportForSnapshot: () => ({ status: 'supported', poseId: 'pushup' }) },

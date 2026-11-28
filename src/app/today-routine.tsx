@@ -32,6 +32,7 @@ import {
   saveDailyRoutine,
 } from '@/services/dailyRoutineService';
 import {
+  abandonLocalWorkout,
   cachePlan,
   flushWorkoutQueue,
   getCachedPlan,
@@ -41,6 +42,7 @@ import {
   savePosition,
   settleStaleWorkout,
 } from '@/services/offlineWorkout';
+import { assertDailyWorkoutAvailable } from '@/services/dailyWorkoutPolicy';
 import { kstDateOf } from '@/services/kstDate';
 import { restoredPosition } from '@/components/workout-session/sessionResume';
 import { assignWorkoutPlan } from '@/services/routineService';
@@ -66,7 +68,8 @@ export default function TodayRoutineScreen() {
   const today = kstDateOf(Date.now()) ?? toIsoDateString(new Date());
   const date = useTodayRoutineStore((s) => s.planDate) ?? today;
   const origin = useTodayRoutineStore((s) => s.selectionOrigin);
-  const savedWorkout = useWorkoutDraftStore((s) => s.draft);
+  const storedWorkout = useWorkoutDraftStore((s) => s.draft);
+  const savedWorkout = storedWorkout?.routineId === source?.id ? storedWorkout : null;
   const [draft, setDraft] = useState<RoutineDetail | null>(() =>
     source ? editableRoutine(source) : null,
   );
@@ -206,7 +209,7 @@ export default function TodayRoutineScreen() {
       setSaving(false);
     }
   };
-  const start = async () => {
+  const startSelectedRoutine = async () => {
     if (savingLock.current) return;
     if (savedWorkout) {
       try {
@@ -254,6 +257,37 @@ export default function TodayRoutineScreen() {
     } catch (e) {
       showError(e);
     }
+  };
+  const startingLock = useRef(false);
+  const start = async () => {
+    if (startingLock.current || savingLock.current) return;
+    startingLock.current = true;
+    try {
+      if (date === today) {
+        if (!owner) throw new Error('로그인이 필요해요.');
+        const expiredSessionId = await settleStaleWorkout(owner);
+        if (expiredSessionId) {
+          useWorkoutDraftStore.getState().clearDraft();
+          void flushWorkoutQueue(owner, () => useAuthStore.getState().user?.id === owner).catch(() => {});
+          if (savedWorkout?.sessionId === expiredSessionId) {
+            Alert.alert('이전 운동 종료', '이전 날짜의 운동은 기록을 저장하고 종료했어요. 오늘의 운동을 새로 시작해 주세요.');
+            return;
+          }
+        }
+        const local = await getLocalWorkout(owner);
+        await assertDailyWorkoutAvailable(owner, today, local?.sessionId);
+        if (local && local.session.routineId !== source?.id) {
+          const ok = await confirmAction('다른 루틴 시작',
+            '진행 중인 운동을 종료하고 새 루틴을 시작할까요? 완료한 세트의 기록은 보존돼요.', '종료하고 시작');
+          if (!ok || useAuthStore.getState().user?.id !== owner) return;
+          await abandonLocalWorkout(owner, local.sessionId);
+          useWorkoutDraftStore.getState().clearDraft();
+          await flushWorkoutQueue(owner, () => useAuthStore.getState().user?.id === owner);
+        }
+      }
+      await startSelectedRoutine();
+    } catch (error) { showError(error); }
+    finally { startingLock.current = false; }
   };
   const toggleReorder = async () => {
     if (reorder && dirty && draft) {

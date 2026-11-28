@@ -103,6 +103,7 @@ const stores = {
   result: create(() => ({ openApiSession: () => {} })),
 };
 const sourceMocks = {
+  'utils/devLog': { devLog() {}, devWarn() {} },
   // 07-A: Controller 시간축. 실제 앱은 performance.now(), 테스트는 mock.timers가 제어하는 Date.now()로 프레임·watchdog을 같은 축에 둔다
   'services/sessionClock': { sessionNow: () => Date.now(), SESSION_WATCHDOG_MS: 100 },
   'components/workout-preparation/palette': { PrepColors: { cameraBackground: '#000' } },

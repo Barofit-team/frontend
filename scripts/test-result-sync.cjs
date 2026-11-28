@@ -3,6 +3,9 @@ const fs = require('node:fs');
 const ts = require('../node_modules/typescript');
 const source = fs.readFileSync(require('node:path').join(__dirname, '../src/services/offlineWorkout.ts'), 'utf8');
 const js = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+const dateModule = { exports: {} };
+const dateJs = ts.transpileModule(fs.readFileSync(require('node:path').join(__dirname, '../src/services/kstDate.ts'), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+new Function('require', 'module', 'exports', dateJs)(() => { throw Error('Unexpected date dependency'); }, dateModule, dateModule.exports);
 const disk = new Map(), calls = []; let online = false;
 const poseIds = { poseExerciseId: id => ({ 'push-up': 'pushup', 'pike-push-up': 'pike_pushup', 'incline-push-up': 'incline_pushup' })[id] ?? null };
 // 3-1c: commitPoseSet이 지원 상태(poseSupport)로 검증 → 같은 매핑을 supported로 제공
@@ -15,10 +18,10 @@ const api = {
   uploadPoseSetResult: async (id, rid, sid, at, body) => { if (!online) throw new ApiError(0); calls.push(`pose:${sid}:${body.summary.count}`); },
   generateWorkoutReport: async id => { if (!online) throw new ApiError(0); calls.push(`report:${id}`); },
 };
-function load() { const m = { exports: {} }; const deps = { '@react-native-async-storage/async-storage': { __esModule: true, default: storage }, '@/services/api': { ApiError }, '@/services/poseExerciseIds': poseIds, '@/services/workoutSessionService': api }; new Function('require', 'module', 'exports', js)(name => deps[name], m, m.exports); return m.exports; }
+function load() { const m = { exports: {} }; const deps = { '@react-native-async-storage/async-storage': { __esModule: true, default: storage }, '@/services/api': { ApiError }, '@/services/poseExerciseIds': poseIds, '@/services/workoutSessionService': api, '@/services/kstDate': dateModule.exports }; new Function('require', 'module', 'exports', js)(name => deps[name], m, m.exports); return m.exports; }
 (async () => {
   let offline = load();
-  const session = { routineId: 'r', routineSnapshot: { exercises: [{ exerciseId: 'push-up', measurementType: 'REPS', sets: [{ id: 'planned-set' }] }] }, status: 'ACTIVE', revision: 0, sets: [] };
+  const session = { startedAt: '2026-11-05T00:00:00Z', routineId: 'r', routineSnapshot: { exercises: [{ exerciseId: 'push-up', measurementType: 'REPS', sets: [{ id: 'planned-set' }] }] }, status: 'ACTIVE', revision: 0, sets: [] };
   const draft = { sessionId: 's' };
   await offline.queueSession('u', 's', session, draft);
   const pose = { sessionId: 's', resultId: 'result', routineSetId: 'planned-set', performedAt: '2026-11-05T00:00:00Z', payload: { schemaVersion: '2.0', type: 'set.completed', exercise: 'pushup', engineVersion: 'v2', summary: { count: 3, holdSeconds: null, items: {} } } };
@@ -35,6 +38,10 @@ function load() { const m = { exports: {} }; const deps = { '@react-native-async
   await offline.flushWorkoutQueue('u', () => true);
   assert.deepEqual(calls, ['session:ACTIVE:0:0', 'session:ACTIVE:1:1', 'pose:planned-set:3', 'session:COMPLETED:2:1', 'report:s']);
   assert.equal(await offline.pendingCount('u'), 0);
+  await offline.clearLocalWorkout('u', 's');
+  assert.equal(await offline.hasCompletedWorkout('u', '2026-11-05'), true);
+  assert.equal(await offline.hasCompletedWorkout('u', '2026-11-06'), false);
+  assert.equal(await offline.hasCompletedWorkout('another-user', '2026-11-05'), false);
   console.log('PASS: measured set, offline restart and report generation ordering');
 })().then(contract31c).then(contract34c).catch(error => { console.error(error); process.exitCode = 1; });
 
@@ -48,7 +55,7 @@ async function contract31c() {
   const store = new Map(); let failWrite = false;
   const storage2 = { getItem: async key => store.get(key) ?? null, setItem: async (key, value) => { if (failWrite) throw new Error('disk full'); store.set(key, value); } };
   const m = { exports: {} };
-  const deps = { '@react-native-async-storage/async-storage': { __esModule: true, default: storage2 }, '@/services/api': { ApiError }, '@/services/poseExerciseIds': realIds.exports, '@/services/workoutSessionService': api };
+  const deps = { '@react-native-async-storage/async-storage': { __esModule: true, default: storage2 }, '@/services/api': { ApiError }, '@/services/poseExerciseIds': realIds.exports, '@/services/workoutSessionService': api, '@/services/kstDate': dateModule.exports };
   new Function('require', 'module', 'exports', js)(name => deps[name], m, m.exports);
   const offline = m.exports;
   const ex = (exerciseId, measurementType) => ({ exerciseId, measurementType, sets: [{ id: `${exerciseId}-1` }, { id: `${exerciseId}-2` }] });
@@ -135,7 +142,7 @@ async function contract34c() {
   const store = new Map();
   const storage3 = { getItem: async key => store.get(key) ?? null, setItem: async (key, value) => { store.set(key, value); } };
   const m = { exports: {} };
-  const deps = { '@react-native-async-storage/async-storage': { __esModule: true, default: storage3 }, '@/services/api': { ApiError }, '@/services/poseExerciseIds': realIds.exports, '@/services/workoutSessionService': api };
+  const deps = { '@react-native-async-storage/async-storage': { __esModule: true, default: storage3 }, '@/services/api': { ApiError }, '@/services/poseExerciseIds': realIds.exports, '@/services/workoutSessionService': api, '@/services/kstDate': dateModule.exports };
   new Function('require', 'module', 'exports', js)(name => deps[name], m, m.exports);
   const offline = m.exports;
   const ex = (prefix, measurementType) => ({ exerciseId: 'mountain-climber', measurementType, sets: [1, 2, 3].map(i => ({ id: `${prefix}-${i}` })) });

@@ -1,6 +1,6 @@
 import { router, useFocusEffect } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -19,8 +19,9 @@ import {
 } from '@/components/home/HomeIcons';
 import { RoutineMetrics } from '@/components/home/RoutineMetrics';
 import { RoutinePickerSheet } from '@/components/home/RoutinePickerSheet';
+import { useTodayDate } from '@/hooks/useTodayDate';
 import { WeeklyGoalNotice } from '@/components/home/WeeklyGoalNotice';
-import { flushWorkoutQueue, getLocalWorkout } from '@/services/offlineWorkout';
+import { flushWorkoutQueue, getResumableWorkout, hasCompletedWorkout } from '@/services/offlineWorkout';
 import {
   getRoutineTemplateDetail,
   getWeeklyGoalProgress,
@@ -30,6 +31,8 @@ import {
   getMondayOfWeek,
   toIsoDateString,
 } from '@/services/weeklyPlanService';
+import { getDailyWorkoutState } from '@/services/workoutSessionService';
+import { DAILY_DONE_MESSAGE } from '@/services/dailyWorkoutPolicy';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useTodayRoutineStore } from '@/stores/useTodayRoutineStore';
 import { useWeeklyPlanStore } from '@/stores/useWeeklyPlanStore';
@@ -57,23 +60,41 @@ export default function HomeScreen() {
   } = useWeeklyPlanStore();
   const draft = useWorkoutDraftStore((s) => s.draft);
   const [progress, setProgress] = useState<WeeklyGoalProgress | null>(null);
+  const [dailyDone, setDailyDone] = useState(false);
   const [progressError, setProgressError] = useState(false);
   const [localSnapshot, setLocalSnapshot] =
     useState<BackendRoutineDetail | null>(null);
   const [localError, setLocalError] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [opening, setOpening] = useState(false);
-  const today = toIsoDateString(new Date());
+  const today = useTodayDate();
+  const previousToday = useRef(today);
+  useEffect(() => {
+    if (previousToday.current !== today) {
+      previousToday.current = today;
+      setSelectedDate(today);
+    }
+  }, [today, setSelectedDate]);
 
   useFocusEffect(
     useCallback(() => {
       let active = true;
       void loadWeeklyPlan();
       setProgress(null);
+      setDailyDone(false);
       setProgressError(false);
       setLocalSnapshot(null);
       setLocalError(false);
       if (owner) {
+        void hasCompletedWorkout(owner, today).then(done => {
+          if (active && useAuthStore.getState().user?.id === owner) setDailyDone(previous => previous || Boolean(done));
+        }).catch(() => {});
+        void flushWorkoutQueue(owner, () => useAuthStore.getState().user?.id === owner)
+          .catch(() => {}).then(() => getDailyWorkoutState())
+          .then(state => {
+            if (active && state.date === today && useAuthStore.getState().user?.id === owner)
+              setDailyDone(previous => previous || state.completed);
+          }).catch(() => {});
         void flushWorkoutQueue(owner, () => useAuthStore.getState().user?.id === owner)
           .catch(() => {})
           .then(() => getWeeklyGoalProgress(toIsoDateString(getMondayOfWeek(new Date()))))
@@ -84,7 +105,7 @@ export default function HomeScreen() {
           .catch(() => {
             if (active) setProgressError(true);
           });
-        void getLocalWorkout(owner)
+        void getResumableWorkout(owner)
           .then((local) => {
             if (!active || useAuthStore.getState().user?.id !== owner) return;
             const inProgress =
@@ -94,7 +115,11 @@ export default function HomeScreen() {
             if (inProgress) {
               useWorkoutDraftStore.getState().saveDraft(local.draft);
               setLocalSnapshot(local.session.routineSnapshot);
-            } else useWorkoutDraftStore.getState().clearDraft();
+            } else {
+              useWorkoutDraftStore.getState().clearDraft();
+              setLocalSnapshot(null);
+            }
+            void flushWorkoutQueue(owner, () => useAuthStore.getState().user?.id === owner).catch(() => {});
           })
           .catch(() => {
             if (active) setLocalError(true);
@@ -103,13 +128,13 @@ export default function HomeScreen() {
       return () => {
         active = false;
       };
-    }, [owner, loadWeeklyPlan]),
+    }, [owner, loadWeeklyPlan, today]),
   );
 
   const selectedPlan = planItems.find((p) => p.date === selectedDate);
   const recommendation = recommendedRoutines[0];
-  const hasDraft = Boolean(draft && localSnapshot && selectedDate === today);
-  const dayCompleted = !hasDraft && !!progress?.completedDates.includes(selectedDate);
+  const hasDraft = Boolean(!dailyDone && draft && localSnapshot && selectedDate === today);
+  const dayCompleted = !hasDraft && (!!progress?.completedDates.includes(selectedDate) || (selectedDate === today && dailyDone));
   const cardAction = hasDraft ? '운동 재개하기' : dayCompleted ? '기록 보기' : '루틴 미리보기';
   const snapshot = hasDraft ? localSnapshot : selectedPlan?.routineSnapshot;
   const cardTitle = hasDraft
@@ -128,6 +153,7 @@ export default function HomeScreen() {
 
   const openRoutine = async (item?: RecommendedRoutineItem) => {
     if (opening) return;
+    if (selectedDate === today && dayCompleted) { Alert.alert('오늘 운동 완료', DAILY_DONE_MESSAGE); return; }
     const expectedOwner = owner;
     setOpening(true);
     try {
@@ -317,7 +343,7 @@ export default function HomeScreen() {
                       ? '오늘 진행 중인 루틴이 있어요.'
                       : dayCompleted
                         ? selectedDate === today
-                          ? '오늘 운동을 완료했어요. 수고했어요! 다른 루틴을 선택해 추가로 운동할 수도 있어요.'
+                          ? '오늘의 루틴을 완료했어요. 수고했어요! 다음 운동은 내일 시작할 수 있어요.'
                           : '이 날짜의 운동을 완료했어요. 기록에서 운동 결과를 확인해 보세요.'
                       : custom
                         ? '내가 선택한 루틴으로 오늘의 운동을 시작해 보세요.'
@@ -351,11 +377,11 @@ export default function HomeScreen() {
           </View>
           <Pressable
             accessibilityRole="button"
-            onPress={() => setPickerOpen(true)}
+            onPress={() => selectedDate === today && dayCompleted ? Alert.alert('오늘 운동 완료', DAILY_DONE_MESSAGE) : setPickerOpen(true)}
             style={({ pressed }) => [styles.browse, pressed && styles.pressed]}
           >
             <DumbbellIcon color="#555555" size={19} />
-            <Text style={styles.browseText}>다른 루틴 찾아보기</Text>
+            <Text style={styles.browseText}>{selectedDate === today && dayCompleted ? '오늘 운동 완료 · 다음 운동은 내일' : '다른 루틴 찾아보기'}</Text>
             <ChevronRightIcon color="#999999" size={13} />
           </Pressable>
         </View>

@@ -36,6 +36,7 @@ class FakeWebSocket {
 }
 global.WebSocket = FakeWebSocket;
 const store = load('src/stores/useTtsStore.ts', {
+  '@/utils/devLog': { devLog() {}, devWarn() {} },
   'zustand': { create },
   'expo-audio': { createAudioPlayer: () => ({}), setAudioModeAsync: async () => {} },
   'expo-speech': { stop: async () => {}, speak: text => spoken.push(text) },
