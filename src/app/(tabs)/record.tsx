@@ -219,12 +219,6 @@ export default function MonthlyWorkoutRecordsScreen() {
     <SafeAreaView style={styles.safeArea} edges={['top']}>
       <StatusBar style="dark" />
 
-      <View style={styles.topBar}>
-        <Text style={styles.title} accessibilityRole="header">
-          월간 운동기록
-        </Text>
-      </View>
-
       <FlatList
         ref={listRef}
         style={styles.list}
@@ -268,21 +262,13 @@ function tabBarClearance(bottomInset: number) {
 
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: RecordColors.background },
-  topBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    paddingHorizontal: SCREEN_PADDING,
-    height: 48,
-  },
-  title: { fontSize: 14, fontWeight: '600', color: RecordColors.text },
   list: { flex: 1, backgroundColor: RecordColors.section },
   listContent: { flexGrow: 1, backgroundColor: RecordColors.section },
   calendarSection: {
     backgroundColor: RecordColors.background,
     paddingHorizontal: SCREEN_PADDING,
-    paddingTop: 4,
-    paddingBottom: 14,
+    paddingTop: 12,
+    paddingBottom: 16,
   },
   monthRow: {
     flexDirection: 'row',

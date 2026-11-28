@@ -5,7 +5,7 @@
 export const RecordColors = {
   background: '#FFFFFF',
   /** 일일 운동일지 영역 배경 */
-  section: '#F4F6F9',
+  section: '#F3F6FC',
   card: '#FFFFFF',
   text: '#111827',
   textSecondary: '#6B7280',
