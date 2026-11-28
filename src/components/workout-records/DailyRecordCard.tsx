@@ -1,3 +1,4 @@
+import { Image } from 'expo-image';
 import { memo } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
@@ -5,6 +6,10 @@ import type { DailyWorkoutRecord } from '@/types/workoutRecord';
 
 import { formatMonthDay } from './calendar';
 import { RecordColors } from './palette';
+
+const ICON_EXERCISE_TYPE = require('@/assets/images/icons/exercise_type.png');
+const ICON_DURATION = require('@/assets/images/icons/duration.png');
+const ICON_KCAL = require('@/assets/images/icons/kcal.png');
 
 interface DailyRecordCardProps {
   record: DailyWorkoutRecord;
@@ -40,11 +45,20 @@ export const DailyRecordCard = memo(function DailyRecordCard({ record, onPressRe
       </Pressable>
 
       <View style={styles.metaBar}>
-        <Text style={styles.metaItem}>{exerciseLabel}</Text>
+        <View style={styles.metaItemRow}>
+          <Image source={ICON_EXERCISE_TYPE} style={styles.metaIcon} contentFit="contain" />
+          <Text style={styles.metaItem}>{exerciseLabel}</Text>
+        </View>
         <View style={styles.metaDivider} />
-        <Text style={styles.metaItem}>{durationLabel}</Text>
+        <View style={styles.metaItemRow}>
+          <Image source={ICON_DURATION} style={styles.metaIcon} contentFit="contain" />
+          <Text style={styles.metaItem}>{durationLabel}</Text>
+        </View>
         <View style={styles.metaDivider} />
-        <Text style={styles.metaItem}>{kcalLabel}</Text>
+        <View style={styles.metaItemRow}>
+          <Image source={ICON_KCAL} style={styles.metaIcon} contentFit="contain" />
+          <Text style={styles.metaItem}>{kcalLabel}</Text>
+        </View>
       </View>
 
       <Pressable
@@ -62,6 +76,8 @@ const styles = StyleSheet.create({
   card: {
     backgroundColor: RecordColors.card,
     borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#DCE4F2',
     paddingHorizontal: 16,
     paddingVertical: 16,
     shadowColor: '#0F172A',
@@ -85,11 +101,18 @@ const styles = StyleSheet.create({
     backgroundColor: RecordColors.control,
     borderRadius: 10,
     paddingVertical: 10,
-    paddingHorizontal: 12,
+    paddingHorizontal: 10,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-evenly',
   },
+  metaItemRow: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+  },
+  metaIcon: { width: 15, height: 15 },
   metaItem: { fontSize: 13, fontWeight: '500', color: '#4B5563' },
   metaDivider: { width: 1, height: 14, backgroundColor: '#D1D5DB' },
   reportButton: {

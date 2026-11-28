@@ -96,14 +96,15 @@ export default function WorkoutResultScreen() {
     );
 
   const now = new Date();
-  const headerTitle = isRecordSession
-    ? '운동 결과'
-    : `${now.getMonth() + 1}월 ${now.getDate()}일 운동 리포트`;
+  const reportDate = result?.recentScores?.at(-1)?.date;
+  const parsedDate = reportDate ? new Date(`${reportDate}T00:00:00`) : null;
+  const displayDate =
+    isRecordSession && parsedDate && !Number.isNaN(parsedDate.getTime()) ? parsedDate : now;
+  const headerTitle = `${displayDate.getMonth() + 1}월 ${displayDate.getDate()}일 운동 리포트`;
 
   const routineScore = result ? computeRoutineScore(result) : undefined;
   const rawWeeklyCount = result?.weeklyWorkoutCount;
   const weeklyCount = typeof rawWeeklyCount === 'number' && Number.isFinite(rawWeeklyCount) ? rawWeeklyCount : 1;
-  const progressRatio = Math.min(1, Math.max(0.15, weeklyCount / WEEKLY_GOAL_STEPS));
 
   let resultStatus: ReactNode = null;
   if (isApiMode && !result) {
@@ -154,17 +155,36 @@ export default function WorkoutResultScreen() {
 
         {result ? (
           <View style={styles.cards}>
-            <Card style={styles.weeklyCard}>
+            <Card style={[resultStyles.card, styles.weeklyCard]}>
               <Text style={styles.weeklyLabel}>
                 이번 주 <Text style={styles.weeklyHighlight}>{weeklyCount}번째</Text>
               </Text>
-              <View style={styles.weeklyBarTrack}>
-                <View style={[styles.weeklyBarFill, { width: `${Math.round(progressRatio * 100)}%` }]} />
-                <View style={styles.weeklyDotsOverlay}>
+              <View style={styles.weeklyBarWrap}>
+                <View style={styles.weeklyBarTrack}>
+                  <View
+                    style={[
+                      styles.weeklyBarFill,
+                      { width: `${Math.min(100, Math.round((Math.min(weeklyCount, WEEKLY_GOAL_STEPS) / WEEKLY_GOAL_STEPS) * 100))}%` },
+                    ]}
+                  />
+                  <View
+                    style={[
+                      styles.weeklyFlameBadge,
+                      {
+                        left: `${Math.min(86, Math.max(8, Math.round((Math.min(weeklyCount, WEEKLY_GOAL_STEPS) / WEEKLY_GOAL_STEPS) * 100) - 8))}%`,
+                      },
+                    ]}>
+                    <Text style={styles.weeklyFlameText}>🔥</Text>
+                  </View>
+                </View>
+                <View style={styles.weeklyDotsOverlay} pointerEvents="none">
                   {Array.from({ length: WEEKLY_GOAL_STEPS }).map((_, idx) => (
                     <View
                       key={idx}
-                      style={[styles.weeklyDot, idx + 1 <= weeklyCount && styles.weeklyDotActive]}
+                      style={[
+                        styles.weeklyDot,
+                        idx + 1 <= weeklyCount && styles.weeklyDotHidden,
+                      ]}
                     />
                   ))}
                 </View>
@@ -250,13 +270,18 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingVertical: 14,
+    paddingVertical: 16,
     paddingHorizontal: 18,
   },
-  weeklyLabel: { fontSize: 14, fontWeight: '700', color: '#111827' },
+  weeklyLabel: { fontSize: 15, fontWeight: '700', color: '#111827' },
   weeklyHighlight: { color: '#2563EB' },
+  weeklyBarWrap: {
+    width: '56%',
+    height: 24,
+    justifyContent: 'center',
+  },
   weeklyBarTrack: {
-    width: '54%',
+    width: '100%',
     height: 10,
     borderRadius: 999,
     backgroundColor: '#F3F4F6',
@@ -266,22 +291,38 @@ const styles = StyleSheet.create({
   weeklyBarFill: {
     height: '100%',
     borderRadius: 999,
-    backgroundColor: '#5B93F7',
+    backgroundColor: '#6098FA',
   },
+  weeklyFlameBadge: {
+    position: 'absolute',
+    top: -7,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#2563EB',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#2563EB',
+    shadowOpacity: 0.25,
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  weeklyFlameText: { fontSize: 12 },
   weeklyDotsOverlay: {
     position: 'absolute',
     left: 0,
     right: 0,
     flexDirection: 'row',
     justifyContent: 'space-between',
-    paddingHorizontal: 6,
+    paddingHorizontal: 10,
   },
   weeklyDot: { width: 5, height: 5, borderRadius: 2.5, backgroundColor: '#D1D5DB' },
-  weeklyDotActive: { backgroundColor: '#2563EB' },
+  weeklyDotHidden: { opacity: 0 },
   scoreHeroCard: {
-    borderRadius: 20,
-    backgroundColor: '#2563EB',
-    paddingHorizontal: 22,
+    borderRadius: 18,
+    backgroundColor: '#1D61E7',
+    paddingHorizontal: 20,
     paddingVertical: 20,
   },
   scoreHeroLabel: { fontSize: 14, fontWeight: '600', color: 'rgba(255,255,255,0.88)' },
