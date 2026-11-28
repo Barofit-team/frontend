@@ -16,7 +16,7 @@ interface MonthlyCalendarProps {
   onSelectDate: (dateKey: string) => void;
 }
 
-const DAY_SIZE = 26;
+const DAY_SIZE = 34;
 
 function dayCircleStyle(status: WorkoutDayStatus | undefined, selected: boolean) {
   if (selected) return styles.selected;
@@ -35,7 +35,8 @@ function dayCircleStyle(status: WorkoutDayStatus | undefined, selected: boolean)
 }
 
 function dayTextStyle(status: WorkoutDayStatus | undefined, selected: boolean, isFuture: boolean) {
-  if (selected || status === 'completed' || status === 'partial') return styles.dayTextOnFill;
+  if (selected) return styles.dayTextOnSelected;
+  if (status === 'completed' || status === 'partial') return styles.dayTextPerformed;
   if (status === 'missed') return styles.dayTextMissed;
   if (status === 'planned') return styles.dayTextPlanned;
   return isFuture ? styles.dayTextFuture : null;
@@ -96,8 +97,8 @@ export const MonthlyCalendar = memo(function MonthlyCalendar({
 
 const styles = StyleSheet.create({
   row: { flexDirection: 'row' },
-  cell: { flex: 1, alignItems: 'center', justifyContent: 'center', height: 36 },
-  weekday: { fontSize: 11, fontWeight: '600', color: RecordColors.text },
+  cell: { flex: 1, alignItems: 'center', justifyContent: 'center', height: 42 },
+  weekday: { fontSize: 12, fontWeight: '600', color: RecordColors.textSecondary },
   day: {
     width: DAY_SIZE,
     height: DAY_SIZE,
@@ -111,8 +112,9 @@ const styles = StyleSheet.create({
   missed: { backgroundColor: RecordColors.missed },
   planned: { borderWidth: 1, borderColor: RecordColors.plannedBorder },
   pressed: { opacity: 0.6 },
-  dayText: { fontSize: 11, fontWeight: '500', color: RecordColors.dayText },
-  dayTextOnFill: { color: RecordColors.white, fontWeight: '700' },
+  dayText: { fontSize: 13, fontWeight: '500', color: RecordColors.dayText },
+  dayTextOnSelected: { color: RecordColors.white, fontWeight: '700' },
+  dayTextPerformed: { color: RecordColors.completedText, fontWeight: '600' },
   dayTextMissed: { color: RecordColors.missedText },
   dayTextPlanned: { color: RecordColors.textSecondary },
   dayTextFuture: { color: RecordColors.dayTextFuture },

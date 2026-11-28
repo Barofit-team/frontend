@@ -10,20 +10,27 @@ import { PrepColors } from '@/components/workout-preparation/palette';
 export const RESULT_SCREEN_PADDING = 16;
 
 export const resultStyles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: PrepColors.white },
+  screen: { flex: 1, backgroundColor: '#F3F6FC' },
   pageTitle: {
-    fontSize: 20,
-    lineHeight: 28,
+    fontSize: 22,
+    lineHeight: 30,
     fontWeight: '800',
-    color: PrepColors.text,
+    color: '#111827',
     letterSpacing: -0.4,
   },
-  /** ui/Card 위에 덮어쓰는 시안 값 (모서리 8, 연회색) */
+  /** 시안 기준 흰색 둥근 카드 (모서리 16, 연한 블루그레이 테두리 + 그림자) */
   card: {
-    borderRadius: 8,
-    paddingHorizontal: 14,
-    paddingVertical: 16,
-    backgroundColor: PrepColors.surface,
+    borderRadius: 16,
+    paddingHorizontal: 18,
+    paddingVertical: 18,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#DCE4F2',
+    shadowColor: '#0F172A',
+    shadowOpacity: 0.04,
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 8,
+    elevation: 1,
   },
   cardTitle: {
     fontSize: 15,

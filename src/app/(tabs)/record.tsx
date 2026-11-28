@@ -31,6 +31,7 @@ import {
   addMonths,
   buildMonthOptions,
   defaultSelectedDateOf,
+  formatMonthDay,
   formatYearMonth,
   yearMonthOf,
   type YearMonth,
@@ -182,7 +183,7 @@ export default function MonthlyWorkoutRecordsScreen() {
       </View>
 
       <Text style={styles.sectionTitle} accessibilityRole="header">
-        일일 운동일지
+        {formatMonthDay(selectedDate)} 운동 기록
       </Text>
     </>
   );
@@ -217,12 +218,6 @@ export default function MonthlyWorkoutRecordsScreen() {
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
       <StatusBar style="dark" />
-
-      <View style={styles.topBar}>
-        <Text style={styles.title} accessibilityRole="header">
-          월간 운동기록
-        </Text>
-      </View>
 
       <FlatList
         ref={listRef}
@@ -267,50 +262,41 @@ function tabBarClearance(bottomInset: number) {
 
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: RecordColors.background },
-  topBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    paddingHorizontal: SCREEN_PADDING,
-    height: 48,
-  },
-  title: { fontSize: 14, fontWeight: '600', color: RecordColors.text },
   list: { flex: 1, backgroundColor: RecordColors.section },
   listContent: { flexGrow: 1, backgroundColor: RecordColors.section },
   calendarSection: {
     backgroundColor: RecordColors.background,
     paddingHorizontal: SCREEN_PADDING,
-    paddingTop: 4,
-    paddingBottom: 14,
+    paddingTop: 12,
+    paddingBottom: 16,
   },
   monthRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 22,
-    marginBottom: 14,
+    gap: 24,
+    marginBottom: 16,
   },
   monthArrow: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: RecordColors.control,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: RecordColors.accentSoft,
     alignItems: 'center',
     justifyContent: 'center',
   },
   flip: { transform: [{ rotate: '180deg' }] },
   monthLabel: {
-    fontSize: 17,
+    fontSize: 19,
     fontWeight: '700',
     color: RecordColors.text,
-    textDecorationLine: 'underline',
   },
   sectionTitle: {
-    fontSize: 13,
+    fontSize: 16,
     fontWeight: '700',
     color: RecordColors.text,
     paddingHorizontal: SCREEN_PADDING,
-    paddingTop: 18,
+    paddingTop: 20,
     paddingBottom: 12,
   },
   itemWrap: { marginHorizontal: SCREEN_PADDING },

@@ -154,8 +154,9 @@ export function mapRoutineToWeeklyPlanDayItem(
  */
 export function mapTemplateToRecommendedRoutine(
   template: BackendRoutineDetail,
+  estimatedKcal: number | null = null,
 ): RecommendedRoutineItem {
-  const { durationMinutes, calories } = estimateRoutineMetrics(template);
+  const { durationMinutes } = estimateRoutineMetrics(template);
   const categoryLabel = template.category
     ? (CATEGORY_LABEL_MAP[template.category] ?? '전신')
     : '전신';
@@ -169,7 +170,7 @@ export function mapTemplateToRecommendedRoutine(
     title: template.name,
     exerciseCount: template.exercises?.length ?? 0,
     durationMinutes,
-    calories,
+    calories: estimatedKcal,
     exercises:
       template.exercises?.map((exercise) => ({
         id: exercise.id,
@@ -222,7 +223,9 @@ export async function fetchRecommendedRoutineItems(): Promise<
   const accessToken = await tokenStorage.getAccessToken();
   if (!accessToken) return [];
   const recommended = await getRecommendedRoutineTemplates();
-  return recommended.map(mapTemplateToRecommendedRoutine);
+  return recommended.map(({ template, estimatedKcal }) =>
+    mapTemplateToRecommendedRoutine(template, estimatedKcal),
+  );
 }
 
 /** 직접 루틴을 선택하는 목록에는 불편 부위 비율로 추천 제외된 템플릿도 노출한다. */

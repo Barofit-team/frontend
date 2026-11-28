@@ -3,6 +3,8 @@ const fs = require('node:fs');
 const ts = require('../node_modules/typescript');
 const source = fs.readFileSync(require('node:path').join(__dirname, '../src/services/offlineWorkout.ts'), 'utf8');
 const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+const kstJs = ts.transpileModule(fs.readFileSync(require('node:path').join(__dirname, '../src/services/kstDate.ts'), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+const kstDate = (() => { const m = { exports: {} }; new Function('require', 'module', 'exports', kstJs)(() => { throw Error('kstDate has no deps'); }, m, m.exports); return m.exports; })();
 const disk = new Map();
 const poseIds = { poseExerciseId: id => ({ 'push-up': 'pushup', 'pike-push-up': 'pike_pushup', 'incline-push-up': 'incline_pushup' })[id] ?? null };
 const storage = { getItem: async key => disk.get(key) ?? null, setItem: async (key, value) => { disk.set(key, value); } };
@@ -11,7 +13,7 @@ class ApiError extends Error { constructor(status) { super('error'); this.status
 const service = { syncWorkoutSession: async (id, body) => { calls.push({ id, body: JSON.parse(JSON.stringify(body)) }); if (!online) throw new ApiError(0); if (rejected) throw new ApiError(409); }, uploadPoseSetResult: async (...args) => { poseCalls.push(args.slice(0, 5)); if (!online) throw new ApiError(0); if (rejected) throw new ApiError(409); }, generateWorkoutReport: async id => { reportCalls.push(id); if (!online) throw new ApiError(0); if (rejected) throw new ApiError(409); } };
 function load() {
   const module = { exports: {} };
-  const deps = { '@react-native-async-storage/async-storage': { __esModule: true, default: storage }, '@/services/api': { ApiError }, '@/services/poseExerciseIds': poseIds, '@/services/workoutSessionService': service };
+  const deps = { '@react-native-async-storage/async-storage': { __esModule: true, default: storage }, '@/services/api': { ApiError }, '@/services/poseExerciseIds': poseIds, '@/services/workoutSessionService': service, '@/services/kstDate': kstDate };
   new Function('require', 'module', 'exports', compiled)(name => { if (!(name in deps)) throw Error(name); return deps[name]; }, module, module.exports);
   return module.exports;
 }
@@ -29,13 +31,19 @@ function load() {
   assert.equal((await offline.getLocalWorkout('alice')).draft.remainingSeconds, 4);
   assert.equal(await offline.getLocalWorkout('bob'), null);
   online = true; rejected = true;
-  await assert.rejects(offline.flushWorkoutQueue('alice', () => true), e => e.status === 409);
+  // 08-3: 409(같은 요청 재전송으로 해결되지 않는 계약 충돌)는 기록을 삭제·성공 처리하지 않고 보존하며, 이번 실행에서는 그 세션을 다시 보내지 않는다
+  await assert.rejects(offline.flushWorkoutQueue('alice', () => true), e => e.name === 'WorkoutSyncBlockedError' && e.sessionIds.includes('session'));
   assert.equal(await offline.pendingCount('alice'), 2);
+  assert.equal((await offline.blockedSessions('alice')).session.status, 409, '오류 원인 보존');
   rejected = false; calls = [];
+  await offline.flushWorkoutQueue('alice', () => true);
+  assert.equal(calls.length, 0, '같은 실행에서는 보존 세션을 다시 보내지 않음(같은 세션 후속 요청도 보내지 않음)');
+  offline = load(); // 앱 재실행: 보존한 세션을 한 번 더 보낸다(서버 수정 후 복구)
   await Promise.all([offline.flushWorkoutQueue('alice', () => true), offline.flushWorkoutQueue('alice', () => true)]);
   assert.deepEqual(calls.map(c => c.body.revision), [0, 1]);
   assert.deepEqual(calls[0].body, session);
   assert.equal(await offline.pendingCount('alice'), 0);
+  assert.deepEqual(await offline.blockedSessions('alice'), {}, '전송 성공 후 오류 기록 정리');
   assert.equal((await offline.getLocalWorkout('alice')).session.status, 'PAUSED');
   // A response lost after a server commit must replay the identical request.
   const again = { ...next, revision: 2 };
@@ -63,61 +71,5 @@ function load() {
   assert.ok(await offline.getLocalWorkout('alice'));
   await offline.clearLocalWorkout('alice', 'session');
   assert.equal(await offline.getLocalWorkout('alice'), null);
-  // A session started before local midnight expires atomically, including after a crash
-  // that left its durable status ACTIVE. Results and upload ordering remain intact.
-  const now = new Date('2026-11-27T00:00:00+09:00');
-  const old = { revision: 3, status: 'PAUSED', startedAt: '2026-11-26T23:58:00+09:00',
-    endedAt: null, routineId: 'old', routineSnapshot: { id: 'old' },
-    activeDurationSeconds: 10, restDurationSeconds: 2,
-    sets: [{ routineSetId: 'set', actualReps: 5, actualDurationSeconds: null }] };
-  const oldPosition = { sessionId: 'old-session', savedAt: '2026-11-26T23:59:00+09:00',
-    activeDurationSeconds: 30, restDurationSeconds: 5 };
-  await offline.queueSession('expiry', 'old-session', old, oldPosition);
-  await offline.cachePlan('expiry', { date: '2026-11-26', routine: old.routineSnapshot });
-  online = false;
-  const beforeMidnight = new Date('2026-11-26T23:59:59+09:00');
-  assert.ok(await offline.getResumableWorkout('expiry', beforeMidnight));
-  assert.deepEqual(await Promise.all([offline.getResumableWorkout('expiry', now), offline.getResumableWorkout('expiry', now)]), [null, null]);
-  assert.equal(await offline.getLocalWorkout('expiry'), null);
-  assert.equal(await offline.getCachedPlan('expiry'), null);
-  assert.equal(await offline.pendingCount('expiry'), 3); // original, terminal, report
-  await assert.rejects(offline.flushWorkoutQueue('expiry', () => true));
-  assert.equal(await offline.pendingCount('expiry'), 3);
-  offline = load(); // Durable expiry survives an app restart.
-  assert.equal(await offline.getResumableWorkout('expiry', now), null);
-  const fresh = { ...old, revision: 0, status: 'ACTIVE', sets: [], startedAt: now.toISOString() };
-  await offline.queueSession('expiry', 'new-session', fresh, { ...oldPosition, sessionId: 'new-session', savedAt: now.toISOString() });
-  assert.equal((await offline.getResumableWorkout('expiry', now)).sessionId, 'new-session');
-  online = true; calls = []; reportCalls = [];
-  await offline.flushWorkoutQueue('expiry', () => true);
-  assert.deepEqual(calls.map(c => [c.id, c.body.status, c.body.revision]), [
-    ['old-session', 'PAUSED', 3], ['old-session', 'ABANDONED', 4], ['new-session', 'ACTIVE', 0],
-  ]);
-  assert.deepEqual(calls[1].body.sets, old.sets);
-  assert.equal(calls[1].body.activeDurationSeconds, 30);
-  assert.equal(calls[1].body.endedAt, new Date(oldPosition.savedAt).toISOString());
-  assert.deepEqual(reportCalls, ['old-session']);
-  await offline.queueSession('crashed', 'old-active', { ...old, status: 'ACTIVE', sets: [] }, oldPosition);
-  assert.equal(await offline.getResumableWorkout('crashed', now), null);
-  assert.equal(await offline.pendingCount('crashed'), 2); // No fabricated report without results.
-  assert.ok(await offline.getLocalWorkout('expiry')); // Other account is unaffected.
-  const switchSession = { ...old, status: 'PAUSED', startedAt: now.toISOString() };
-  await offline.queueSession('switch', 'routine-a', switchSession, oldPosition);
-  await assert.rejects(offline.abandonLocalWorkout('switch', 'wrong-session'));
-  assert.ok(await offline.getLocalWorkout('switch')); // Cancel/stale selection leaves it intact.
-  await offline.abandonLocalWorkout('switch', 'routine-a');
-  assert.equal(await offline.getLocalWorkout('switch'), null);
-  await assert.rejects(offline.abandonLocalWorkout('switch', 'routine-a')); // No duplicate terminal revision.
-  await offline.queueSession('switch', 'routine-b', fresh, oldPosition);
-  calls = []; reportCalls = [];
-  await offline.flushWorkoutQueue('switch', () => true);
-  assert.deepEqual(calls.map(c => [c.id, c.body.status]), [
-    ['routine-a', 'PAUSED'], ['routine-a', 'ABANDONED'], ['routine-b', 'ACTIVE'],
-  ]);
-  assert.deepEqual(reportCalls, ['routine-a']);
-  const terminal = { ...fresh, status: 'ABANDONED', revision: 1, endedAt: now.toISOString() };
-  await offline.queueSession('switch', 'routine-b', terminal);
-  await assert.rejects(offline.queueSession('switch', 'routine-b', { ...fresh, revision: 2 }));
-  console.log('PASS: midnight expiry, concurrent recovery, offline/restart, new session, preserved results');
   console.log('PASS: offline queue, restart, account isolation, retry ordering and conflicts');
 })().catch(error => { console.error(error); process.exitCode = 1; });

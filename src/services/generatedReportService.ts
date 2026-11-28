@@ -58,6 +58,11 @@ function checkExercise(value: unknown, index: number): asserts value is ReportGe
     improvements: orNull(isString),
     nextGoal: orNull(isString),
   });
+  if (value.feedbackMessages !== undefined) {
+    if (!Array.isArray(value.feedbackMessages) || !value.feedbackMessages.every(isString)) {
+      mismatch(`${path}.feedbackMessages`);
+    }
+  }
   (value.postureItems as unknown[]).forEach((item, i) => checkPostureItem(item, `${path}.postureItems[${i}]`));
 }
 
@@ -119,7 +124,7 @@ export type GeneratedExercisePart = Pick<
   ExerciseResult,
   'exerciseId' | 'exerciseName' | 'completedSets' | 'completedReps' | 'score'
 > &
-  Partial<Pick<ExerciseResult, 'goodFeedback' | 'improvementFeedback' | 'nextGoal'>> & {
+  Partial<Pick<ExerciseResult, 'goodFeedback' | 'improvementFeedback' | 'nextGoal' | 'feedbackMessages' | 'durationSeconds'>> & {
     /** 루틴 내 종목 ID. 같은 종목이 두 번 있을 때 구분용 */
     routineExerciseId: string;
   };
@@ -151,10 +156,14 @@ export function toGeneratedReportScreenParts(report: ReportGenerated): Generated
       exerciseName: exercise.name,
       completedSets: exercise.performedSets,
       completedReps: exercise.actualReps,
+      durationSeconds: exercise.actualDurationSeconds,
       score: exercise.postureScore ?? undefined,
       ...(exercise.strengths !== null ? { goodFeedback: exercise.strengths } : {}),
       ...(exercise.improvements !== null ? { improvementFeedback: exercise.improvements } : {}),
       ...(exercise.nextGoal !== null ? { nextGoal: exercise.nextGoal } : {}),
+      ...(exercise.feedbackMessages && exercise.feedbackMessages.length > 0
+        ? { feedbackMessages: exercise.feedbackMessages }
+        : {}),
     })),
   };
 }

@@ -138,8 +138,10 @@ function formatDiscomfortSummary(
   areas: DiscomfortArea[] | undefined,
   selections: DiscomfortSelection[],
 ): string {
-  if (areas && areas.length > 0) {
-    return areas.map((area) => DISCOMFORT_LABEL_MAP[area]).join(', ');
+  if (areas !== undefined) {
+    return areas.length > 0
+      ? areas.map((area) => DISCOMFORT_LABEL_MAP[area]).join(', ')
+      : '없음';
   }
   const activeAreas = selections.filter(
     (item): item is DiscomfortArea => item !== 'NONE',
@@ -284,8 +286,10 @@ export default function ProfileScreen() {
         setDraftWeeklyDays(effectiveWeeklyDays);
         break;
       case 'discomfort': {
-        if (profile?.discomfortAreas && profile.discomfortAreas.length > 0) {
-          setDraftDiscomforts([...profile.discomfortAreas]);
+        if (profile?.discomfortAreas !== undefined) {
+          setDraftDiscomforts(
+            profile.discomfortAreas.length > 0 ? [...profile.discomfortAreas] : ['NONE'],
+          );
         } else if (onboardingDiscomforts.length > 0) {
           setDraftDiscomforts([...onboardingDiscomforts]);
         } else {
@@ -662,7 +666,9 @@ export default function ProfileScreen() {
               <Text style={styles.infoLabel}>{row.label}</Text>
 
               <View style={styles.infoRight}>
-                <Text style={styles.infoValue}>{row.value}</Text>
+                <Text style={styles.infoValue} numberOfLines={1} ellipsizeMode="tail">
+                  {row.value}
+                </Text>
                 <ChevronRightIcon color="#374151" size={13} />
               </View>
             </Pressable>
@@ -1219,12 +1225,15 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+    flexShrink: 1,
+    marginLeft: 16,
   },
   infoValue: {
     fontSize: 15.5,
     fontWeight: '600',
     color: '#111827',
     letterSpacing: -0.2,
+    flexShrink: 1,
   },
   sectionDivider: {
     height: 8,

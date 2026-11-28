@@ -15,7 +15,6 @@ export interface BackendCoachingPayload {
   audioUrl?: string;
   audioBase64?: string;
   timestamp?: string;
-  requestId?: string;
 }
 
 export interface CoachMessage {
@@ -30,8 +29,6 @@ export type SocketConnectionStatus = 'disconnected' | 'connecting' | 'connected'
 /** 세션 인증 후 모델 또는 운동 화면에서 발생한 코칭 이벤트. */
 export interface CoachingEvent {
   eventType: CoachingEventType;
-  /** Local fallback, never sent to the server. */
-  localFallbackText?: string;
   exerciseId?: string;
   feedbackCode?: string;
   actualReps?: number;

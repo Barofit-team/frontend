@@ -20,6 +20,12 @@ export interface DailyWorkoutRecord {
   date: string;
   routineName: string;
   status: WorkoutRecordStatus;
+  /** 수행 시간(초) */
+  durationSeconds?: number;
+  /** 루틴 내 종목 수 */
+  exerciseCount?: number;
+  /** 예상 소모 칼로리(Kcal) */
+  estimatedKcal?: number | null;
   /** 썸네일 이미지 (없으면 회색 이미지 영역 표시) */
   thumbnailUrl: string | null;
 }

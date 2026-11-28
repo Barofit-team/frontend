@@ -15,7 +15,7 @@
       }
     },
     "android": {
-      "package": "com.4bujak.barofit",
+      "package": "com.barofit.app",
       "adaptiveIcon": {
         "backgroundColor": "#FFFFFF",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -36,9 +36,12 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#FFFFFF",
-          "image": "./assets/images/splash-logo.png",
-          "imageWidth": 172
+          "backgroundColor": "#3677F8",
+          "android": {
+            "backgroundColor": "#3677F8",
+            "image": "./assets/images/splash-empty.png",
+            "imageWidth": 1
+          }
         }
       ],
       "expo-secure-store",

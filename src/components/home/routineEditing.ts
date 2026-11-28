@@ -83,3 +83,24 @@ export function cloneSet(
 ): RoutineSetDetail {
   return { ...last, id: `draft-${index}-${Date.now()}`, order: index + 1 };
 }
+/**
+ * "종목 간 휴식" 스테퍼는 종목 사이 휴식(interExerciseRestSeconds)만 바꾸고 세트 사이 휴식
+ * (각 세트의 restSeconds)은 그대로 둬서, 사용자가 이 하나의 컨트롤만 조정했을 때 실제 운동 중
+ * 세트 사이 휴식은 기존 기본값(60초)으로 남아 설정한 값과 달라 보이는 문제가 있었다.
+ * 이 스테퍼로 값을 바꿀 때는 모든 세트의 restSeconds도 같은 값으로 맞춰, 사용자가 본 하나의
+ * 휴식시간 설정이 세션 전체(종목 간 + 세트 간)에 일관되게 반영되게 한다. 개별 종목의 세트 간
+ * 휴식은 이후 ExerciseSetSheet에서 다시 따로 조정할 수 있다.
+ */
+export function withInterExerciseRestSeconds(
+  routine: RoutineDetail,
+  seconds: number,
+): RoutineDetail {
+  return {
+    ...routine,
+    interExerciseRestSeconds: seconds,
+    exercises: routine.exercises.map((e) => ({
+      ...e,
+      sets: e.sets.map((s) => ({ ...s, restSeconds: seconds })),
+    })),
+  };
+}

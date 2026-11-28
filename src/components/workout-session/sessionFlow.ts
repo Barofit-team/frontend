@@ -45,12 +45,6 @@ export function phaseDurationSeconds(phase: SessionPhase, routine?: readonly Rou
   }
 }
 
-/** Resolve the selected set's target; never reuse the first set's repetitions. */
-export function phaseTargetReps(phase: ActivePhase, routine: readonly RoutineItem[], fallback = 0): number {
-  const set = phase.kind === 'resting' ? phase.completedSet : phase.set;
-  return routine[phase.exerciseIndex]?.targets?.[set - 1]?.targetReps ?? fallback;
-}
-
 /** 현재 Phase가 끝났을 때의 다음 Phase */
 export function nextPhase(phase: SessionPhase, routine: readonly RoutineItem[]): SessionPhase {
   const id = phase.id + 1;

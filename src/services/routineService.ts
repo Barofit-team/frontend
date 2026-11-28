@@ -126,15 +126,21 @@ export async function getRoutineTemplateDetail(
   return apiFetch<RoutineDetail>(`/api/v1/routine-templates/${templateId}`);
 }
 
+export interface RecommendedTemplateWithEstimate {
+  template: RoutineDetail;
+  /** 서버가 이 추천에 대해 계산한 예상 소모 칼로리. 체중 정보가 없으면 null */
+  estimatedKcal: number | null;
+}
+
 /**
  * 온보딩 프로필 기반 맞춤형 추천 루틴 템플릿 목록 조회 (로그인 필요)
  *
  * 백엔드 /api/v1/routine-templates/recommendations 응답의
- * { recommendations: [{ template, reason, assessmentReady }], notice } 구조를
+ * { recommendations: [{ template, reason, assessmentReady, estimatedKcal }], notice } 구조를
  * 파싱합니다. 추천 대상의 공개 여부는 서버에서 검증합니다.
  */
 export async function getRecommendedRoutineTemplates(): Promise<
-  RoutineDetail[]
+  RecommendedTemplateWithEstimate[]
 > {
   const response = await apiFetch<
     RoutineTemplateRecommendationResponse | RoutineDetail[]
@@ -142,14 +148,17 @@ export async function getRecommendedRoutineTemplates(): Promise<
     auth: true,
   });
 
-  let rawList: RoutineDetail[] = [];
   if (Array.isArray(response)) {
-    rawList = response;
-  } else if (response && Array.isArray(response.recommendations)) {
-    rawList = response.recommendations.map((item) => item.template);
+    return response.map((template) => ({ template, estimatedKcal: null }));
+  }
+  if (response && Array.isArray(response.recommendations)) {
+    return response.recommendations.map((item) => ({
+      template: item.template,
+      estimatedKcal: item.estimatedKcal ?? null,
+    }));
   }
 
-  return rawList;
+  return [];
 }
 
 // --------------------------------------------------------------------------

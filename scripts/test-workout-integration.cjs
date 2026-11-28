@@ -25,9 +25,6 @@ function create(initializer) {
   return store;
 }
 const spoken = [];
-global.__DEV__ = false;
-const players = [];
-let audioGate = null;
 class FakeWebSocket {
   static OPEN = 1;
   static latest;
@@ -39,11 +36,9 @@ class FakeWebSocket {
 }
 global.WebSocket = FakeWebSocket;
 const store = load('src/stores/useTtsStore.ts', {
+  '@/utils/devLog': { devLog() {}, devWarn() {} },
   'zustand': { create },
-  'expo-audio': { createAudioPlayer: () => {
-    const player = { play() {}, pause() {}, remove() {}, addListener(_, fn) { this.update = fn; } };
-    players.push(player); return player;
-  }, setAudioModeAsync: async () => { if (audioGate) await audioGate; } },
+  'expo-audio': { createAudioPlayer: () => ({}), setAudioModeAsync: async () => {} },
   'expo-speech': { stop: async () => {}, speak: text => spoken.push(text) },
 }).useTtsStore;
 const calls = [];
@@ -51,17 +46,6 @@ const api = load('src/services/workoutSessionService.ts', {
   'expo-crypto': { randomUUID: () => 'test-uuid' },
   '@/services/api': { apiFetch: async (url, init) => { calls.push({ url, init }); return {}; } },
 });
-const { phaseAnnouncement } = load('src/services/sessionCoaching.ts', {});
-const exercise = { name: '플랭크', introTtsText: '몸통을 곧게 유지하세요.' };
-assert.equal(phaseAnnouncement({ id: 0, kind: 'countdown', exerciseIndex: 0, set: 1 }, exercise).type, 'EXERCISE_PREPARE');
-const restAnnouncement = phaseAnnouncement({ id: 7, kind: 'countdown', exerciseIndex: 1, set: 1 }, exercise);
-assert.equal(restAnnouncement.type, 'NEXT_EXERCISE');
-assert.match(restAnnouncement.text, /다음 운동은 플랭크/);
-assert.equal(phaseAnnouncement({ id: 8, kind: 'exercising', exerciseIndex: 1, set: 1 }, exercise).type, 'EXERCISE_START');
-assert.equal(phaseAnnouncement({ id: 9, kind: 'resting', exerciseIndex: 1, completedSet: 1 }, exercise), null);
-assert.equal(phaseAnnouncement({ id: 10, kind: 'countdown', exerciseIndex: 1, set: 2 }, exercise), null);
-assert.equal(phaseAnnouncement({ id: 11, kind: 'exercising', exerciseIndex: 1, set: 2 }, exercise), null);
-assert.equal(phaseAnnouncement({ id: 12, kind: 'completed' }, exercise), null);
 (async () => {
   store.getState().connectWebSocket('wss://example/ws', { accessToken: 'test', sessionId: 'session' });
   const socket = FakeWebSocket.latest;
@@ -71,38 +55,12 @@ assert.equal(phaseAnnouncement({ id: 12, kind: 'completed' }, exercise), null);
   assert.equal(store.getState().sendCoachEvent({ eventType: 'WORKOUT_START' }), false);
   socket.message({ type: 'AUTH_OK', text: 'connected' });
   assert.equal(store.getState().socketStatus, 'connected');
-  store.getState().setCoachContext('session:1');
   assert.equal(store.getState().sendCoachEvent({ eventType: 'EXERCISE_START', exerciseId: 'squat' }), true);
-  assert.deepEqual(socket.sent[1], { type: 'COACH_EVENT', eventType: 'EXERCISE_START', exerciseId: 'squat', requestId: socket.sent[1].requestId });
-  assert.ok(socket.sent[1].requestId);
-  socket.message({ type: 'EXERCISE_START', text: '준비 자세 안내', requestId: socket.sent[1].requestId });
+  assert.deepEqual(socket.sent[1], { type: 'COACH_EVENT', eventType: 'EXERCISE_START', exerciseId: 'squat' });
+  socket.message({ type: 'EXERCISE_START', text: '준비 자세 안내' });
   await Promise.resolve();
   assert.deepEqual(spoken, ['준비 자세 안내']);
   assert.equal(store.getState().lastMessage.text, '준비 자세 안내');
-  // A delayed response for the previous exercise or a paused phase must not speak.
-  store.getState().sendCoachEvent({ eventType: 'REP_FEEDBACK', exerciseId: 'squat' });
-  const stale = socket.sent.at(-1).requestId;
-  store.getState().setCoachContext('session:2');
-  socket.message({ type: 'REP_FEEDBACK', text: '이전 종목 피드백', requestId: stale });
-  store.getState().sendCoachEvent({ eventType: 'REP_FEEDBACK', exerciseId: 'plank' });
-  const paused = socket.sent.at(-1).requestId;
-  store.getState().setCoachContext(null);
-  socket.message({ type: 'REP_FEEDBACK', text: '정지 중 피드백', requestId: paused });
-  await Promise.resolve();
-  assert.deepEqual(spoken, ['준비 자세 안내']);
-  assert.equal(store.getState().sendCoachEvent({ eventType: 'REP_FEEDBACK' }), false);
-  // stop() invalidates an audio start still awaiting native audio mode setup.
-  let release;
-  audioGate = new Promise(resolve => { release = resolve; });
-  const oldAudio = store.getState().playAudio({ uri: 'old.mp3' }, 'old');
-  store.getState().stop(); release(); await oldAudio; audioGate = null;
-  assert.equal(players.length, 0);
-  await store.getState().playAudio({ uri: 'first.mp3' }, 'first');
-  const oldPlayer = players.at(-1);
-  await store.getState().playAudio({ uri: 'second.mp3' }, 'second');
-  oldPlayer.update({ currentTime: 1, duration: 1, didJustFinish: true });
-  assert.equal(store.getState().currentText, 'second');
-  assert.equal(store.getState().isPlaying, true);
   store.getState().disconnectWebSocket();
   assert.equal(store.getState().sendCoachEvent({ eventType: 'WORKOUT_START' }), false);
   const routine = { id: 'routine', type: 'TEMPLATE', exercises: [] };

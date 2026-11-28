@@ -22,7 +22,7 @@ export type SessionHudContent =
   | { kind: 'title-timer'; title: string; seconds: number }
   | { kind: 'title'; title: string }
   | { kind: 'reps'; reps: number | null; target: number; seconds: number }
-  /** holdSeconds: AI가 판정한 유효 자세 유지 시간(초). 없으면 표시하지 않음 */
+  /** holdSeconds: AI가 판정한 유효 자세 유지 시간(초). PD 시안에 따라 화면에는 표시하지 않음(접근성 안내에만 사용) */
   | { kind: 'duration'; seconds: number; progress: number; holdSeconds?: number | null }
   | { kind: 'check'; title: string };
 
@@ -103,9 +103,6 @@ function HudBody({ content }: { content: SessionHudContent }) {
               ]}
             />
           </View>
-          {typeof content.holdSeconds === 'number' && (
-            <Text style={styles.hold}>유효 자세 유지 {formatTime(content.holdSeconds)}</Text>
-          )}
         </View>
       );
     case 'check':
@@ -178,7 +175,6 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   barFill: { height: '100%', borderRadius: 3, backgroundColor: SessionColors.primary },
-  hold: { fontSize: 12, fontWeight: '600', color: SessionColors.timer, fontVariant: ['tabular-nums'] },
   checkTitle: {
     fontSize: 24,
     lineHeight: 32,
