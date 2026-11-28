@@ -165,6 +165,9 @@ export default function OnboardingScreen() {
   const [nicknameCheckAttempt, setNicknameCheckAttempt] = useState(0);
   const [nicknameReason, setNicknameReason] = useState<NicknameAvailabilityReason>(null);
   const [submitting, setSubmitting] = useState(false);
+  // 서버 저장(또는 로컬 완료 처리)까지는 끝났지만, 완료 게이지 애니메이션이 100%에 닿기 전까지는
+  // 대기해야 해서 submitting과 별도로 둔다 (PlanLoading의 onFinished에서만 다음 화면으로 넘어간다).
+  const [planReady, setPlanReady] = useState(false);
 
   const heightInputRef = useRef<React.ComponentRef<typeof TextInput>>(null);
   const weightInputRef = useRef<React.ComponentRef<typeof TextInput>>(null);
@@ -336,13 +339,13 @@ export default function OnboardingScreen() {
           discomfortAreas: payload.discomfortAreas,
           coachingStyle: payload.coachingStyle,
         });
-        router.replace('/onboarding-complete');
+        setPlanReady(true);
         return;
       }
 
       const meResponse = await submitOnboarding(payload);
       applyMeResponse(meResponse);
-      router.replace('/onboarding-complete');
+      setPlanReady(true);
     } catch (error) {
       if (error instanceof ApiError) {
         if (error.code === 'PROFILE_ALREADY_ONBOARDED') {
@@ -353,7 +356,7 @@ export default function OnboardingScreen() {
             Alert.alert('저장 확인 실패', '저장된 정보를 확인하지 못했어요. 잠시 후 다시 시도해주세요.');
             return;
           }
-          router.replace('/onboarding-complete');
+          setPlanReady(true);
           return;
         }
         if (error.code === 'INVALID_INPUT') {
@@ -385,10 +388,10 @@ export default function OnboardingScreen() {
     }
   };
 
-  if (submitting) {
+  if (submitting || planReady) {
     return <SafeAreaView style={styles.safeArea}>
       <StatusBar style="dark" />
-      <PlanLoading />
+      <PlanLoading done={planReady} onFinished={() => router.replace('/onboarding-complete')} />
     </SafeAreaView>;
   }
 
