@@ -24,6 +24,7 @@ import {
   editableRoutine,
   formatDuration,
   moveExercise,
+  withInterExerciseRestSeconds,
   withoutExercise,
 } from '@/components/home/routineEditing';
 import {
@@ -382,13 +383,13 @@ export default function TodayRoutineScreen() {
                       onPress={() =>
                         setDraft((value) =>
                           value
-                            ? {
-                                ...value,
-                                interExerciseRestSeconds: Math.max(
+                            ? withInterExerciseRestSeconds(
+                                value,
+                                Math.max(
                                   0,
                                   (value.interExerciseRestSeconds ?? 60) - 10,
                                 ),
-                              }
+                              )
                             : value,
                         )
                       }
@@ -411,13 +412,13 @@ export default function TodayRoutineScreen() {
                       onPress={() =>
                         setDraft((value) =>
                           value
-                            ? {
-                                ...value,
-                                interExerciseRestSeconds: Math.min(
+                            ? withInterExerciseRestSeconds(
+                                value,
+                                Math.min(
                                   600,
                                   (value.interExerciseRestSeconds ?? 60) + 10,
                                 ),
-                              }
+                              )
                             : value,
                         )
                       }
